@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "BlattamToby",
+  "version": "1.0.0",
+  "description": "BlattamToby — менеджер сохранённых вкладок",
+  "permissions": ["tabs", "storage"],
+  "background": {
+    "service_worker": "background.js"
+  }
+}
