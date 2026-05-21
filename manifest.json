@@ -9,5 +9,13 @@
   },
   "action": {
     "default_popup": "popup.html"
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Ctrl+T"
+      },
+      "description": "Открыть сохранённые вкладки (BlattamToby)"
+    }
   }
 }

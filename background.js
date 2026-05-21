@@ -97,3 +97,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 chrome.runtime.onSuspend.addListener(async () => {
   // Хранилище само сохраняет при закрытии
 });
+
+// Горячая клавиша Ctrl+T → открыть view с сохранёнными вкладками
+chrome.commands.onCommand.addListener((command) => {
+  if (command === '_execute_action') {
+    openView();
+  }
+});
