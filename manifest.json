@@ -17,5 +17,13 @@
       },
       "description": "Открыть сохранённые вкладки (BlattamToby)"
     }
-  }
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "exclude_matches": ["chrome-extension://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ]
 }

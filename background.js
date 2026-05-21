@@ -98,15 +98,7 @@ chrome.runtime.onSuspend.addListener(async () => {
   // Хранилище само сохраняет при закрытии
 });
 
-// Горячая клавиша Ctrl+T → открыть view с сохранёнными вкладками
+// Горячая клавиша Ctrl+T → открыть view с сохранёнными вкладками (через commands)
 chrome.commands.onCommand.addListener((command) => {
-  console.log('[BlattamToby] command:', command);
-  if (command === '_execute_action') {
-    openView();
-  }
-});
-
-// Debug: покажи зарегистрированные команды в консоли
-chrome.commands.getAll((cmds) => {
-  console.log('[BlattamToby] registered commands:', cmds);
+  if (command === '_execute_action') openView();
 });
