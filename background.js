@@ -60,7 +60,18 @@ async function openView() {
   const savedTabs = await loadTabs();
   if (savedTabs.length === 0) return;
 
-  chrome.tabs.create({ url: chrome.runtime.getURL('view.html') });
+  const viewUrl = chrome.runtime.getURL('view.html');
+
+  // Не создавать новую вкладку, если view уже открыт
+  chrome.tabs.query({ url: viewUrl }, (tabs) => {
+    if (tabs.length > 0) {
+      // View уже есть — переключаемся на существующую вкладку
+      chrome.tabs.update(tabs[0].id, { active: true });
+      return;
+    }
+
+    chrome.tabs.create({ url: viewUrl });
+  });
 }
 
 // Обработка сообщений от popup
