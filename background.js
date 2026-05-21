@@ -84,12 +84,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     addTab(msg.name, msg.url).then(() => sendMessageToAll({ action: 'refresh' }));
     return true;
   }
-  if (msg.action === 'get-tab-title') {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      sendResponse({ tabTitle: tabs[0]?.title ?? '' });
-    });
-    return true; // разрешаем асинхронный ответ
-  }
   if (msg.action === 'open') openTab(msg.index);
   else if (msg.action === 'delete') deleteTab(msg.index).then(() => sendMessageToAll({ action: 'refresh' }));
   return true; // разрешаем асинхронный ответ

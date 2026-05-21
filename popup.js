@@ -1,8 +1,6 @@
 const itemsEl = document.getElementById('items');
 const saveBtn = document.getElementById('save-current-tab');
 const tabNameInput = document.getElementById('tab-name');
-const openViewBtn = document.getElementById('open-view');
-const addTabBtn = document.getElementById('add-tab-btn');
 
 async function loadItems() {
   const data = await chrome.storage.local.get('blattam-tabs');
@@ -64,38 +62,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 // Загрузка при открытии
 loadItems().then(render);
 
-// Открыть view с сохранёнными вкладками
-openViewBtn.onclick = async () => {
-  await chrome.runtime.sendMessage({ action: 'open-view' });
-};
-
-// Добавить новую вкладку вручную
-addTabBtn.onclick = async () => {
-  const name = prompt('Название вкладки:') || 'Без имени';
-  const url = prompt('URL (например, https://example.com):');
-
-  if (!name && !url) return;
-
-  chrome.runtime.sendMessage(
-    { action: 'add-tab', name, url: url || '' },
-    () => loadItems().then(render)
-  );
-};
-
-// Сохранение текущей вкладки
+// Сохранение текущей вкладки — автоматически с названием и URL
 saveBtn.onclick = async () => {
-  const [response, title] = await Promise.all([
-    new Promise((resolve) => chrome.runtime.sendMessage({ action: 'get-tab-title' }, resolve)),
-    new Promise((resolve) => chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => resolve(tabs[0]?.title ?? ''))),
-  ]);
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    const tab = tabs[0];
+    if (!tab || tab.url.startsWith('chrome://')) return;
 
-  const name = tabNameInput.value.trim() || title || 'Без имени';
+    // Подставляем название из заголовка вкладки
+    tabNameInput.value = tab.title || '';
 
-  chrome.runtime.sendMessage(
-    { action: 'save-current', name },
-    () => loadItems().then(render)
-  );
-
-  if (response?.tabTitle) tabNameInput.value = response.tabTitle;
+    const name = tabNameInput.value.trim() || 'Без имени';
+    chrome.runtime.sendMessage(
+      { action: 'save-current', name },
+      () => loadItems().then(render)
+    );
+  });
 };
-
