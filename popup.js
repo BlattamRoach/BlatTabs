@@ -78,3 +78,8 @@ saveBtn.onclick = async () => {
     );
   });
 };
+
+// Открыть view с сохранёнными вкладками
+document.getElementById('open-view').onclick = async () => {
+  await chrome.runtime.sendMessage({ action: 'open-view' });
+};
