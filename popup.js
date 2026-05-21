@@ -74,7 +74,14 @@ saveBtn.onclick = async () => {
     const name = tabNameInput.value.trim() || 'Без имени';
     chrome.runtime.sendMessage(
       { action: 'save-current', name },
-      () => loadItems().then(render)
+      (response) => {
+        if (chrome.runtime.lastError) {
+          console.error('sendMessage error:', chrome.runtime.lastError.message);
+        } else {
+          console.log('Saved tab:', name, response);
+          loadItems().then(render);
+        }
+      }
     );
   });
 };

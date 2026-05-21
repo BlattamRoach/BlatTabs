@@ -84,6 +84,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     addTab(msg.name, msg.url).then(() => sendMessageToAll({ action: 'refresh' }));
     return true;
   }
+  if (msg.action === 'save-current') {
+    saveCurrentTab(msg.name).then(() => sendMessageToAll({ action: 'refresh' }));
+    return true;
+  }
   if (msg.action === 'open') openTab(msg.index);
   else if (msg.action === 'delete') deleteTab(msg.index).then(() => sendMessageToAll({ action: 'refresh' }));
   return true; // разрешаем асинхронный ответ
