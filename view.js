@@ -56,7 +56,7 @@ function renderTabs(filter = '') {
     openBtn.textContent = '↗';
     openBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      openTab(index);
+      chrome.tabs.create({ url: tab.url, active: true });
     });
 
     const deleteBtn = document.createElement('button');
@@ -66,7 +66,9 @@ function renderTabs(filter = '') {
     deleteBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       if (confirm(`Удалить вкладку "${tab.name}"?`)) {
-        deleteTab(index);
+        allTabs.splice(allTabs.indexOf(tab), 1);
+        chrome.storage.local.set({ 'blattam-tabs': allTabs });
+        renderTabs(searchInput.value);
       }
     });
 
@@ -85,7 +87,7 @@ function renderTabs(filter = '') {
     const openAllBtn = document.createElement('button');
     openAllBtn.className = 'open-btn';
     openAllBtn.textContent = 'Открыть';
-    openAllBtn.addEventListener('click', () => openTab(index));
+    openAllBtn.addEventListener('click', () => chrome.tabs.create({ url: tab.url, active: true }));
 
     card.appendChild(header);
     card.appendChild(urlEl);
@@ -93,30 +95,13 @@ function renderTabs(filter = '') {
 
     // Клик по карточке — открыть вкладку
     header.addEventListener('click', () => {
-      openTab(index);
+      chrome.tabs.create({ url: tab.url, active: true });
     });
 
     tabsList.appendChild(card);
   });
 
   noResults.style.display = visibleCount === 0 ? 'block' : 'none';
-}
-
-function openTab(index) {
-  const tab = allTabs[index];
-  if (!tab) return;
-  chrome.tabs.create({ url: tab.url, active: true });
-}
-
-async function deleteTab(index) {
-  const data = await chrome.storage.local.get(['blattam-tabs']);
-  const arr = data['blattam-tabs'] || [];
-
-  arr.splice(index, 1);
-  await chrome.storage.local.set({ 'blattam-tabs': arr });
-
-  allTabs = arr;
-  renderTabs(searchInput.value);
 }
 
 chrome.runtime.onMessage.addListener((msg) => {
