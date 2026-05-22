@@ -104,17 +104,15 @@ function renderTabs(filter = '') {
   noResults.style.display = visibleCount === 0 ? 'block' : 'none';
 }
 
-chrome.runtime.onMessage.addListener((msg) => {
-  if (msg.action === 'refresh') {
-    chrome.storage.local.get(['blattam-tabs'], (result) => {
-      allTabs = result['blattam-tabs'] || [];
-      renderTabs(searchInput.value);
-    });
-  }
-});
-
+// Поиск по вкладкам
 searchInput.addEventListener('input', (e) => {
   renderTabs(e.target.value);
 });
 
-document.getElementById('close').addEventListener('click', () => window.close());
+// Автообновление при изменении хранилища (например, из popup)
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName === 'local' && changes['blattam-tabs']) {
+    allTabs = changes['blattam-tabs'].newValue || [];
+    renderTabs(searchInput.value);
+  }
+});

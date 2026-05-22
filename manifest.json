@@ -10,20 +10,7 @@
   "action": {
     "default_popup": "popup.html"
   },
-  "commands": {
-    "_execute_action": {
-      "suggested_key": {
-        "default": "Ctrl+T"
-      },
-      "description": "Открыть сохранённые вкладки (BlattamToby)"
-    }
-  },
-  "content_scripts": [
-    {
-      "matches": ["<all_urls>"],
-      "exclude_matches": ["chrome-extension://*/*"],
-      "js": ["content.js"],
-      "run_at": "document_start"
-    }
-  ]
+  "chrome_url_overrides": {
+    "newtab": "view.html"
+  }
 }

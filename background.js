@@ -46,59 +46,17 @@ async function deleteTab(tabIndex) {
   await saveTabs(tabs);
 }
 
-// Отправить сообщение всем открытым страницам расширения
-function sendMessageToAll(msg) {
-  chrome.tabs.query({ url: chrome.runtime.getURL('view.html') }, (tabs) => {
-    for (const tab of tabs) {
-      try { chrome.tabs.sendMessage(tab.id, msg); } catch (_) {}
-    }
-  });
-}
-
-// Открыть view с сохранёнными вкладками в текущей вкладке или новом окне
-async function openView() {
-  const savedTabs = await loadTabs();
-  if (savedTabs.length === 0) return;
-
-  const viewUrl = chrome.runtime.getURL('view.html');
-
-  // Не создавать новую вкладку, если view уже открыт
-  chrome.tabs.query({ url: viewUrl }, (tabs) => {
-    if (tabs.length > 0) {
-      // View уже есть — переключаемся на существующую вкладку
-      chrome.tabs.update(tabs[0].id, { active: true });
-      return;
-    }
-
-    chrome.tabs.create({ url: viewUrl });
-  });
-}
-
 // Обработка сообщений от popup
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (msg.action === 'open-view') {
-    openView();
-    return true;
-  }
   if (msg.action === 'add-tab') {
-    addTab(msg.name, msg.url).then(() => sendMessageToAll({ action: 'refresh' }));
+    addTab(msg.name, msg.url);
     return true;
   }
   if (msg.action === 'save-current') {
-    saveCurrentTab(msg.name).then(() => sendMessageToAll({ action: 'refresh' }));
+    saveCurrentTab(msg.name);
     return true;
   }
   if (msg.action === 'open') openTab(msg.index);
-  else if (msg.action === 'delete') deleteTab(msg.index).then(() => sendMessageToAll({ action: 'refresh' }));
+  else if (msg.action === 'delete') deleteTab(msg.index);
   return true; // разрешаем асинхронный ответ
-});
-
-// Слушатель закрытия браузера
-chrome.runtime.onSuspend.addListener(async () => {
-  // Хранилище само сохраняет при закрытии
-});
-
-// Горячая клавиша Ctrl+T → открыть view с сохранёнными вкладками (через commands)
-chrome.commands.onCommand.addListener((command) => {
-  if (command === '_execute_action') openView();
 });

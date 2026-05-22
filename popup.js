@@ -5,13 +5,12 @@ document.getElementById('save-current-tab').onclick = async () => {
     if (!tab || tab.url.startsWith('chrome://')) return;
 
     chrome.runtime.sendMessage(
-      { action: 'save-current', name: tab.title || '' },
-      () => {}
+      { action: 'save-current', name: tab.title || '' }
     );
-  });
-};
 
-// Открыть view (плюсик / Ctrl+T)
-document.getElementById('open-view').onclick = async () => {
-  await chrome.runtime.sendMessage({ action: 'open-view' });
+    // Показать подтверждение
+    const msg = document.getElementById('saved-msg');
+    msg.classList.add('show');
+    setTimeout(() => msg.classList.remove('show'), 2000);
+  });
 };
