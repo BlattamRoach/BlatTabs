@@ -5,7 +5,7 @@ const noResults = document.getElementById('no-results');
 
 let allTabs = [];
 
-chrome.storage.local.get(['blattam-tabs'], (result) => {
+chrome.storage.sync.get(['blattam-tabs'], (result) => {
   const arr = result['blattam-tabs'] || [];
   allTabs = arr;
   renderTabs();
@@ -46,18 +46,9 @@ function renderTabs(filter = '') {
     nameEl.className = 'tab-name';
     nameEl.textContent = tab.name;
 
-    // Actions
+    // Actions (only delete)
     const actions = document.createElement('div');
     actions.className = 'tab-actions';
-
-    const openBtn = document.createElement('button');
-    openBtn.className = 'icon-btn';
-    openBtn.title = 'Открыть';
-    openBtn.textContent = '↗';
-    openBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      chrome.tabs.create({ url: tab.url, active: true });
-    });
 
     const deleteBtn = document.createElement('button');
     deleteBtn.className = 'icon-btn delete';
@@ -67,12 +58,11 @@ function renderTabs(filter = '') {
       e.stopPropagation();
       if (confirm(`Удалить вкладку "${tab.name}"?`)) {
         allTabs.splice(allTabs.indexOf(tab), 1);
-        chrome.storage.local.set({ 'blattam-tabs': allTabs });
+        chrome.storage.sync.set({ 'blattam-tabs': allTabs });
         renderTabs(searchInput.value);
       }
     });
 
-    actions.appendChild(openBtn);
     actions.appendChild(deleteBtn);
 
     header.appendChild(nameEl);
@@ -83,18 +73,11 @@ function renderTabs(filter = '') {
     urlEl.className = 'tab-url';
     urlEl.textContent = tab.url;
 
-    // Open button
-    const openAllBtn = document.createElement('button');
-    openAllBtn.className = 'open-btn';
-    openAllBtn.textContent = 'Открыть';
-    openAllBtn.addEventListener('click', () => chrome.tabs.create({ url: tab.url, active: true }));
-
     card.appendChild(header);
     card.appendChild(urlEl);
-    card.appendChild(openAllBtn);
 
     // Клик по карточке — открыть вкладку
-    header.addEventListener('click', () => {
+    card.addEventListener('click', () => {
       chrome.tabs.create({ url: tab.url, active: true });
     });
 
@@ -111,8 +94,80 @@ searchInput.addEventListener('input', (e) => {
 
 // Автообновление при изменении хранилища (например, из popup)
 chrome.storage.onChanged.addListener((changes, areaName) => {
-  if (areaName === 'local' && changes['blattam-tabs']) {
+  if (areaName === 'sync' && changes['blattam-tabs']) {
     allTabs = changes['blattam-tabs'].newValue || [];
     renderTabs(searchInput.value);
   }
+});
+
+// Экспорт в JSON
+document.getElementById('export-btn').addEventListener('click', () => {
+  const data = {
+    'blattam-toby': true,
+    version: chrome.runtime.getManifest().version,
+    exported: new Date().toISOString(),
+    tabs: allTabs
+  };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  const date = new Date().toISOString().slice(0, 10);
+  a.download = `blattam-toby-backup-${date}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+// Импорт из JSON
+document.getElementById('import-btn').addEventListener('click', () => {
+  document.getElementById('import-input').click();
+});
+
+document.getElementById('import-input').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = (event) => {
+    try {
+      const data = JSON.parse(event.target.result);
+
+      // Валидация структуры
+      if (!data.tabs || !Array.isArray(data.tabs)) {
+        alert('Неверный формат файла: отсутствует массив tabs');
+        return;
+      }
+
+      const importedTabs = data.tabs.filter(t => t.url && t.name);
+      if (importedTabs.length === 0) {
+        alert('В файле нет вкладок с URL');
+        return;
+      }
+
+      // Считаем дубли по URL
+      let newCount = 0;
+      const duplicates = importedTabs.filter(t => allTabs.some(existing => existing.url === t.url)).length;
+      newCount = importedTabs.length - duplicates;
+
+      if (!confirm(`В файле ${importedTabs.length} вкладок.\nНовых: ${newCount}, дубликатов: ${duplicates}\n\nИмпортировать новые?`)) {
+        return;
+      }
+
+      // Объединяем с детектом дублей
+      importedTabs.forEach(t => {
+        if (!allTabs.some(existing => existing.url === t.url)) {
+          allTabs.push(t);
+        }
+      });
+
+      chrome.storage.sync.set({ 'blattam-tabs': allTabs });
+      renderTabs(searchInput.value);
+    } catch (err) {
+      alert('Ошибка чтения файла: невалидный JSON');
+    }
+  };
+  reader.readAsText(file);
+
+  // Сбрасываем input чтобы можно было загрузить тот же файл повторно
+  e.target.value = '';
 });
