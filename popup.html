@@ -3,18 +3,79 @@
 <head>
   <meta charset="UTF-8">
   <style>
-    body { width: 240px; font-family: system-ui, sans-serif; padding: 14px; }
+    body { width: 260px; font-family: system-ui, sans-serif; padding: 14px; }
+
+    label { display: block; font-size: 11px; color: #555; margin-bottom: 4px; }
+
+    select { 
+      width: 100%; padding: 6px 8px; border: 1px solid #ddd; border-radius: 4px; 
+      font-size: 12px; background: white; cursor: pointer; margin-bottom: 8px; outline: none;
+    }
+    select:focus { border-color: #3498db; box-shadow: 0 0 0 2px rgba(52,152,219,0.1); }
 
     .save-btn { width: 100%; padding: 10px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; background: #3498db; color: white; margin-bottom: 8px; }
     .save-btn:hover { background: #2980b9; }
 
     .saved-msg { width: 100%; text-align: center; font-size: 12px; color: #27ae60; min-height: 18px; opacity: 0; transition: opacity 0.3s; }
     .saved-msg.show { opacity: 1; }
+
+    .add-folder-btn { 
+      width: 100%; padding: 6px; border: 1px dashed #ccc; background: #fafafa; 
+      border-radius: 4px; cursor: pointer; font-size: 11px; color: #888; margin-bottom: 8px;
+    }
+    .add-folder-btn:hover { background: #f0f0f0; border-color: #999; }
+
+    /* Модалка */
+    .modal-overlay { 
+      display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; 
+      background: rgba(0,0,0,0.3); z-index: 1000; align-items: center; justify-content: center;
+    }
+    .modal-overlay.open { display: flex; }
+    
+    .modal { 
+      background: white; border-radius: 8px; padding: 16px; min-width: 240px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+    }
+    .modal h3 { font-size: 13px; margin-bottom: 10px; color: #333; }
+    .modal input[type="text"] { 
+      width: 100%; padding: 6px 8px; border: 1px solid #ddd; border-radius: 4px; 
+      font-size: 12px; outline: none; margin-bottom: 10px;
+    }
+    .modal input[type="text"]:focus { border-color: #3498db; box-shadow: 0 0 0 2px rgba(52,152,219,0.1); }
+    .modal-actions { display: flex; gap: 6px; justify-content: flex-end; }
+    .modal-btn { 
+      padding: 5px 12px; border-radius: 4px; font-size: 11px; cursor: pointer; 
+      border: 1px solid #ddd; background: white; color: #555;
+    }
+    .modal-btn:hover { background: #f5f7fa; }
+    .modal-btn.primary { background: #3498db; color: white; border-color: #2980b9; }
+    .modal-btn.primary:hover { background: #2980b9; }
+
   </style>
 </head>
 <body>
-  <button class="save-btn" id="save-current-tab">💾 Сохранить текущую вкладку</button>
+  <button class="save-btn" id="save-current-tab">💾 Сохранить вкладку</button>
+  
+  <label for="folder-select">📁 Папка:</label>
+  <select id="folder-select">
+    <option value="">Все (без папки)</option>
+  </select>
+
+  <button class="add-folder-btn" id="popup-add-folder">+ Новая папка</button>
+  
   <div class="saved-msg" id="saved-msg">✓ Вкладка сохранена!</div>
+
+  <!-- Модалка: создать папку -->
+  <div class="modal-overlay" id="folder-modal">
+    <div class="modal">
+      <h3>Новая папка</h3>
+      <input type="text" id="folder-name-input" placeholder="Название..." autocomplete="off">
+      <div class="modal-actions">
+        <button class="modal-btn" id="modal-cancel">Отмена</button>
+        <button class="modal-btn primary" id="modal-confirm">OK</button>
+      </div>
+    </div>
+  </div>
 
   <script src="popup.js"></script>
 </body>

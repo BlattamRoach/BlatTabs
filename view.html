@@ -8,12 +8,48 @@
 
     .header { display: flex; align-items: center; justify-content: space-between; padding: 8px 16px; background: white; border-bottom: 1px solid #e8e8e8; flex-shrink: 0; }
     .header h1 { font-size: 14px; color: #333; }
+
     .close-btn { width: 24px; height: 24px; border: none; background: #f0f0f0; border-radius: 50%; cursor: pointer; font-size: 12px; display: flex; align-items: center; justify-content: center; }
     .close-btn:hover { background: #e0e0e0; }
 
     .container { flex: 1; overflow-y: auto; padding: 8px; }
 
+    /* Папки */
+    .folders-bar { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; min-height: 32px; }
+    
+    .folder-chip { 
+      padding: 4px 10px; border-radius: 16px; font-size: 11px; cursor: pointer; 
+      background: #e8ecf1; color: #555; user-select: none; transition: all 0.15s;
+      display: flex; align-items: center; gap: 4px; border: none; font-family: inherit;
+    }
+    .folder-chip:hover { background: #d5dbe3; }
+    .folder-chip.active { background: #3498db; color: white; }
+    .folder-chip.active:hover { background: #2980b9; }
+
+    .folder-chip .chip-actions { display: flex; gap: 1px; opacity: 0; transition: opacity 0.15s; }
+    .folder-chip:hover .chip-actions { opacity: 1; }
+    
+    .chip-icon-btn { 
+      width: 14px; height: 14px; border: none; background: rgba(0,0,0,0.1); 
+      border-radius: 50%; cursor: pointer; font-size: 8px; display: flex; 
+      align-items: center; justify-content: center; color: inherit; line-height: 1;
+    }
+    .chip-icon-btn:hover { background: rgba(0,0,0,0.2); }
+
+    .add-folder-btn { 
+      padding: 4px 10px; border-radius: 16px; font-size: 11px; cursor: pointer; 
+      background: #e8ecf1; color: #555; border: 1px dashed #bbb; transition: all 0.15s;
+      font-family: inherit; display: flex; align-items: center; gap: 4px; white-space: nowrap;
+    }
+    .add-folder-btn:hover { background: #d5dbe3; border-color: #999; }
+
+    /* Поиск */
+    .search-box { margin-bottom: 8px; padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 12px; width: 100%; outline: none; }
+    .search-box:focus { border-color: #3498db; box-shadow: 0 0 0 2px rgba(52,152,219,0.1); }
+
+    /* Карточки */
     .empty-state { text-align: center; padding: 60px 20px; color: #888; font-size: 13px; }
+    .no-results { text-align: center; padding: 30px; color: #aaa; font-size: 12px; display: none; }
 
     .tabs-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; max-width: none; width: 100%; }
 
@@ -23,8 +59,31 @@
     .tab-header { padding: 8px 10px; display: flex; align-items: center; user-select: none; gap: 4px; min-height: 32px; }
     .tab-name { font-size: 11px; font-weight: 500; color: #333; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.3; }
 
-    .tab-actions { display: flex; gap: 2px; opacity: 0; transition: opacity 0.15s; }
+    .tab-actions { display: flex; gap: 2px; opacity: 0; transition: opacity 0.15s; align-items: center; }
     .tab-card:hover .tab-actions { opacity: 1; }
+
+    /* Селектор папки на карточке */
+    .folder-select-btn { 
+      width: 18px; height: 18px; border: none; background: #f5f5f5; border-radius: 3px; 
+      cursor: pointer; font-size: 9px; display: flex; align-items: center; justify-content: center;
+      color: #888; position: relative;
+    }
+    .folder-select-btn:hover { background: #e0e0e0; }
+
+    /* Дропдаун папок */
+    .folder-dropdown { 
+      display: none; position: absolute; top: 100%; right: 0; z-index: 100; 
+      background: white; border: 1px solid #ddd; border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+      min-width: 140px; max-height: 200px; overflow-y: auto; padding: 2px 0;
+    }
+    .folder-dropdown.open { display: block; }
+    
+    .folder-dd-item { 
+      padding: 6px 10px; font-size: 11px; cursor: pointer; color: #333; 
+      display: flex; align-items: center; gap: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .folder-dd-item:hover { background: #f5f7fa; }
+    .folder-dd-item.all-folder { color: #888; font-style: italic; }
 
     .icon-btn { width: 18px; height: 18px; border: none; background: #f5f5f5; border-radius: 3px; cursor: pointer; font-size: 10px; display: flex; align-items: center; justify-content: center; }
     .icon-btn:hover { background: #e0e0e0; }
@@ -32,14 +91,37 @@
 
     .tab-url { padding: 0 10px; font-size: 9px; color: #aaa; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 0; min-height: 12px; height: 14px; }
 
+    /* Хедер действия */
     .header-actions { display: flex; gap: 6px; }
     .action-btn { padding: 4px 10px; border: 1px solid #ddd; background: white; border-radius: 4px; cursor: pointer; font-size: 11px; color: #555; transition: background 0.15s, border-color 0.15s; }
     .action-btn:hover { background: #f5f7fa; border-color: #bbb; }
 
-    .search-box { margin-bottom: 6px; padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 12px; width: 100%; outline: none; }
-    .search-box:focus { border-color: #3498db; box-shadow: 0 0 0 2px rgba(52,152,219,0.1); }
+    /* Модальное окно для создания папки */
+    .modal-overlay { 
+      display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; 
+      background: rgba(0,0,0,0.3); z-index: 1000; align-items: center; justify-content: center;
+    }
+    .modal-overlay.open { display: flex; }
+    
+    .modal { 
+      background: white; border-radius: 8px; padding: 20px; min-width: 280px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+    }
+    .modal h3 { font-size: 14px; margin-bottom: 12px; color: #333; }
+    .modal input[type="text"] { 
+      width: 100%; padding: 8px 10px; border: 1px solid #ddd; border-radius: 4px; 
+      font-size: 12px; outline: none; margin-bottom: 12px;
+    }
+    .modal input[type="text"]:focus { border-color: #3498db; box-shadow: 0 0 0 2px rgba(52,152,219,0.1); }
+    .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+    .modal-btn { 
+      padding: 6px 14px; border-radius: 4px; font-size: 12px; cursor: pointer; 
+      border: 1px solid #ddd; background: white; color: #555;
+    }
+    .modal-btn:hover { background: #f5f7fa; }
+    .modal-btn.primary { background: #3498db; color: white; border-color: #2980b9; }
+    .modal-btn.primary:hover { background: #2980b9; }
 
-    .no-results { text-align: center; padding: 30px; color: #aaa; font-size: 12px; display: none; }
   </style>
 </head>
 <body>
@@ -53,12 +135,33 @@
   </div>
 
   <div class="container">
+    <!-- Папки -->
+    <div class="folders-bar" id="folders-bar">
+      <button class="folder-chip active" data-folder-id="">Все</button>
+      <button class="add-folder-btn" id="add-folder-btn">+ Папка</button>
+    </div>
+
+    <!-- Поиск -->
     <input type="text" class="search-box" placeholder="Поиск по вкладкам..." id="search">
 
+    <!-- Состояния -->
     <div id="empty-state" class="empty-state" style="display:none;">Нет сохранённых вкладок</div>
     <div id="no-results" class="no-results">Ничего не найдено</div>
 
+    <!-- Карточки -->
     <div id="tabs-list" class="tabs-list"></div>
+  </div>
+
+  <!-- Модалка: создать/переименовать папку -->
+  <div class="modal-overlay" id="folder-modal">
+    <div class="modal">
+      <h3 id="modal-title">Новая папка</h3>
+      <input type="text" id="folder-name-input" placeholder="Название..." autocomplete="off">
+      <div class="modal-actions">
+        <button class="modal-btn" id="modal-cancel">Отмена</button>
+        <button class="modal-btn primary" id="modal-confirm">OK</button>
+      </div>
+    </div>
   </div>
 
   <script src="view.js"></script>
