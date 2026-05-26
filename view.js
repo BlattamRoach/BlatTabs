@@ -31,8 +31,8 @@ function loadData() {
 // === Папки ===
 
 function renderFolders() {
-  // Удаляем старые чипы (кроме "Все" и "+ Папка")
-  foldersBar.querySelectorAll('.folder-chip[data-folder-id]').forEach(el => el.remove());
+  // Удаляем старые чипы (только user folders, не "Все")
+  foldersBar.querySelectorAll('.folder-chip[data-folder-id]:not([data-folder-id=""])').forEach(el => el.remove());
   
   allFolders.forEach(folder => {
     const chip = document.createElement('button');
