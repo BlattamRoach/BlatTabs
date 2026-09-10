@@ -52,7 +52,35 @@ var chrome = {
   runtime: {
     messagesSent: [],
     onMessage: { _listeners: [] },
-    sendMessage: function(msg) { this.messagesSent.push(msg); window.lastMessage = msg; return Promise.resolve(); },
+    sendMessage: function(msg) {
+      this.messagesSent.push(msg);
+      window.lastMessage = msg;
+      // rename-tab: применяем к storage и шлём onChanged (как делает background в реальности)
+      if (msg.action === 'rename-tab') {
+        var tabs = chrome.storage._data['blattam-tabs'] || [];
+        if (tabs[msg.index] && (msg.name || '').trim()) {
+          tabs[msg.index].name = String(msg.name).trim();
+          var oldVal = chrome.storage._data['blattam-tabs'];
+          chrome.storage._data['blattam-tabs'] = tabs;
+          if (window.__storageListeners && window.__storageListeners.length) {
+            for (var fn of window.__storageListeners) fn({'blattam-tabs': {newValue: tabs, oldValue: oldVal}}, 'sync');
+          }
+        }
+      }
+      // move-tab: применяем folderId и шлём onChanged
+      if (msg.action === 'move-tab') {
+        var tabs2 = chrome.storage._data['blattam-tabs'] || [];
+        if (tabs2[msg.index]) {
+          tabs2[msg.index].folderId = msg.folderId;
+          var oldVal2 = chrome.storage._data['blattam-tabs'];
+          chrome.storage._data['blattam-tabs'] = tabs2;
+          if (window.__storageListeners && window.__storageListeners.length) {
+            for (var fn of window.__storageListeners) fn({'blattam-tabs': {newValue: tabs2, oldValue: oldVal2}}, 'sync');
+          }
+        }
+      }
+      return Promise.resolve();
+    },
     getManifest: function() { return { version: '1.0.0' }; }
   }
 };
@@ -283,6 +311,13 @@ class TestBackground:
         movable_after = next(t for t in tabs if t["name"] == "MovableTab")
         assert movable_after.get("folderId") == fid
 
+    def test_rename_tab(self):
+        send_msg(self.page, "add-tab", name="Before", url="https://rename.me")
+        send_msg(self.page, "rename-tab", index=0, name="After")
+        tabs = read_storage_raw(self.page, "blattam-tabs")
+        found = [t for t in tabs if t["url"] == "https://rename.me"]
+        assert len(found) == 1 and found[0]["name"] == "After"
+
     def test_migration_adds_folder_id_null(self):
         """Старые вкладки без folderId получают null."""
         # Ставим 'старую' вкладку напрямую
@@ -304,15 +339,24 @@ class TestBackground:
 #  VIEW.JS TESTS
 # ==========================================
 
-VIEW_DOM = """<div class="header"><h1>BlattamToby</h1></div><div class="container">
+VIEW_DOM = """<div class="header"><h1>BlattamToby</h1>
+<div class="header-actions"><button class="action-btn" id="select-btn">☑ Выбрать</button></div></div>
+<div class="container">
 <div class="folders-bar" id="folders-bar">
   <button class="folder-chip active" data-folder-id="">Все</button>
   <button class="add-folder-btn" id="add-folder-btn">+ Папка</button>
 </div>
-<input type="text" class="search-box" placeholder="Поиск..." id="search">
+<div class="search-row"><input type="text" class="search-box" placeholder="Поиск..." id="search"></div>
 <div id="empty-state" style="display:none;">Нет сохранённых вкладок</div>
 <div id="no-results" class="no-results" style="display:none;">Ничего не найдено</div>
 <div id="tabs-list"></div></div>
+
+<!-- Панель выбора -->
+<div id="selection-bar" class="selection-bar hidden">
+  <span id="selection-count" class="selection-count">0 выбрано</span>
+  <button id="open-selected-btn" class="action-btn">Открыть</button>
+  <button id="clear-selection-btn" class="action-btn">Сбросить</button>
+</div>
 
 <!-- Модалка -->
 <div class="modal-overlay" id="folder-modal">
@@ -438,6 +482,264 @@ class TestView:
         self.page.locator("#add-folder-btn").click()
         modal_open = self.page.evaluate("document.getElementById('folder-modal').classList.contains('open')")
         assert modal_open
+
+    def test_dblclick_name_opens_inline_input(self):
+        """Двойной клик по имени → инлайн input."""
+        self._load_view(tabs=[{"name": "Original", "url": "https://orig.com"}])
+        self.page.evaluate("""(() => {
+          const el = document.querySelector('.tab-name');
+          el.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+          el.dispatchEvent(new MouseEvent('dblclick', {bubbles: true}));
+        })()""")
+        has_input = self.page.evaluate("!!document.querySelector('.tab-name-input')")
+        assert has_input
+
+    def test_rename_saves_on_enter(self):
+        """Enter сохраняет новое имя."""
+        self._load_view(tabs=[{"name": "OldName", "url": "https://old.com"}])
+        self.page.evaluate("""(() => {
+          const el = document.querySelector('.tab-name');
+          el.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+          el.dispatchEvent(new MouseEvent('dblclick', {bubbles: true}));
+        })()""")
+        self.page.evaluate("""(() => {
+          const inp = document.querySelector('.tab-name-input');
+          inp.value = 'NewName';
+          inp.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}));
+        })()""")
+        msg = json.loads(self.page.evaluate("JSON.stringify(window.lastMessage)"))
+        assert msg.get("action") == "rename-tab"
+        assert msg.get("name") == "NewName"
+        name = self.page.evaluate("document.querySelector('.tab-name').textContent")
+        assert name == "NewName"
+
+    def test_rename_cancel_on_escape(self):
+        """Escape отменяет переименование."""
+        self._load_view(tabs=[{"name": "KeepMe", "url": "https://keep.com"}])
+        self.page.evaluate("""(() => {
+          const el = document.querySelector('.tab-name');
+          el.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+          el.dispatchEvent(new MouseEvent('dblclick', {bubbles: true}));
+        })()""")
+        self.page.evaluate("""(() => {
+          const inp = document.querySelector('.tab-name-input');
+          inp.value = 'Changed';
+          inp.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}));
+        })()""")
+        name = self.page.evaluate("document.querySelector('.tab-name').textContent")
+        assert name == "KeepMe"
+
+    def test_single_click_opens_tab(self):
+        """Одиночный клик по имени открывает вкладку (после 300мс)."""
+        self._load_view(tabs=[{"name": "OpenTab", "url": "https://opentab.com"}])
+        self.page.evaluate("""(() => {
+          const el = document.querySelector('.tab-name');
+          el.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+        })()""")
+        self.page.wait_for_timeout(400)
+        created = self.page.evaluate("chrome.tabs.createdTabs.length")
+        assert created == 1
+        last_url = self.page.evaluate("chrome.tabs.createdTabs[chrome.tabs.createdTabs.length-1].url")
+        assert last_url == "https://opentab.com"
+
+    def test_drag_card_to_folder_chip(self):
+        """DnD: карточку на чип папки → move-tab + folderId обновился."""
+        self._load_view(
+            tabs=[{"name": "DragMe", "url": "https://drag.com", "folderId": None}],
+            folders=[{"id": "f1", "name": "Work"}]
+        )
+        self.page.evaluate("""(() => {
+          const card = document.querySelector('.tab-card');
+          const dt = new DataTransfer();
+          card.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true}));
+          const chip = document.querySelector('.folder-chip[data-folder-id="f1"]');
+          chip.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true}));
+          chip.dispatchEvent(new DragEvent('drop', {dataTransfer: dt, bubbles: true, cancelable: true}));
+          card.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        })()""")
+        msg = json.loads(self.page.evaluate("JSON.stringify(window.lastMessage)"))
+        assert msg.get("action") == "move-tab"
+        assert msg.get("folderId") == "f1"
+        # После onChanged вкладка в папке
+        fids = json.loads(self.page.evaluate("""(async () => {
+          var d = await chrome.storage.get('blattam-tabs');
+          return JSON.stringify((d['blattam-tabs'] || []).map(t => t.folderId));
+        })()"""))
+        assert fids == ["f1"]
+
+    def test_drag_card_to_all_chip(self):
+        """DnD: карточку на чип «Все» → folderId = null."""
+        self._load_view(
+            tabs=[{"name": "DragToAll", "url": "https://dragall.com", "folderId": "f1"}],
+            folders=[{"id": "f1", "name": "Work"}]
+        )
+        self.page.evaluate("""(() => {
+          const card = document.querySelector('.tab-card');
+          const dt = new DataTransfer();
+          card.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true}));
+          const chip = document.querySelector('.folder-chip[data-folder-id=""]');
+          chip.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true}));
+          chip.dispatchEvent(new DragEvent('drop', {dataTransfer: dt, bubbles: true, cancelable: true}));
+          card.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        })()""")
+        msg = json.loads(self.page.evaluate("JSON.stringify(window.lastMessage)"))
+        assert msg.get("action") == "move-tab"
+        assert msg.get("folderId") is None
+        fids = json.loads(self.page.evaluate("""(async () => {
+          var d = await chrome.storage.get('blattam-tabs');
+          return JSON.stringify((d['blattam-tabs'] || []).map(t => t.folderId));
+        })()"""))
+        assert fids == [None]
+
+    def test_dragstart_sets_payload(self):
+        """dragstart кладёт индекс карточки в dataTransfer."""
+        self._load_view(tabs=[
+            {"name": "First", "url": "https://first.com"},
+            {"name": "Second", "url": "https://second.com"},
+        ])
+        result = self.page.evaluate("""(() => {
+          const cards = document.querySelectorAll('.tab-card');
+          const dt = new DataTransfer();
+          cards[1].dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true}));
+          return JSON.stringify({
+            payload: dt.getData('text/plain'),
+            dragging: cards[1].classList.contains('dragging')
+          });
+        })()""")
+        data = json.loads(result)
+        assert data["payload"] == "1"
+        assert data["dragging"] is True
+
+    # --- Массовое открытие ---
+
+    def test_checkboxes_rendered_on_cards(self):
+        self._load_view(tabs=[
+            {"name": "First", "url": "https://first.com"},
+            {"name": "Second", "url": "https://second.com"},
+        ])
+        boxes = self.page.evaluate("document.querySelectorAll('.tab-select').length")
+        assert boxes == 2
+
+    def test_select_bar_hidden_when_nothing_selected(self):
+        self._load_view(tabs=[{"name": "A", "url": "https://a.com"}])
+        hidden = self.page.evaluate("document.getElementById('selection-bar').classList.contains('hidden')")
+        assert hidden
+
+    def test_checkbox_selects_tab_and_shows_bar(self):
+        self._load_view(tabs=[
+            {"name": "First", "url": "https://first.com"},
+            {"name": "Second", "url": "https://second.com"},
+        ])
+        self.page.evaluate("document.querySelectorAll('.tab-select')[0].click()")
+        hidden = self.page.evaluate("document.getElementById('selection-bar').classList.contains('hidden')")
+        count = self.page.evaluate("document.getElementById('selection-count').textContent")
+        card_selected = self.page.evaluate("document.querySelectorAll('.tab-card')[0].classList.contains('selected')")
+        assert not hidden
+        assert "1" in count
+        assert card_selected
+
+    def test_open_selected_opens_all_and_clears(self):
+        self._load_view(tabs=[
+            {"name": "First", "url": "https://first.com"},
+            {"name": "Second", "url": "https://second.com"},
+            {"name": "Third", "url": "https://third.com"},
+        ])
+        # Выбираем первые две
+        self.page.evaluate("document.querySelectorAll('.tab-select')[0].click()")
+        self.page.evaluate("document.querySelectorAll('.tab-select')[1].click()")
+        self.page.evaluate("document.getElementById('open-selected-btn').click()")
+        created = self.page.evaluate("JSON.stringify(chrome.tabs.createdTabs.map(t => t.url))")
+        urls = json.loads(created)
+        assert "https://first.com" in urls
+        assert "https://second.com" in urls
+        assert "https://third.com" not in urls
+        # Выбор сброшен
+        hidden = self.page.evaluate("document.getElementById('selection-bar').classList.contains('hidden')")
+        checked = self.page.evaluate("document.querySelectorAll('.tab-select:checked').length")
+        assert hidden
+        assert checked == 0
+
+    def test_select_btn_selects_all_visible(self):
+        self._load_view(tabs=[
+            {"name": "First", "url": "https://first.com"},
+            {"name": "Second", "url": "https://second.com"},
+            {"name": "Third", "url": "https://third.com"},
+        ])
+        self.page.evaluate("document.getElementById('select-btn').click()")
+        checked = self.page.evaluate("document.querySelectorAll('.tab-select:checked').length")
+        assert checked == 3
+        count = self.page.evaluate("document.getElementById('selection-count').textContent")
+        assert "3" in count
+
+    def test_select_btn_unselects_all_visible(self):
+        self._load_view(tabs=[
+            {"name": "First", "url": "https://first.com"},
+            {"name": "Second", "url": "https://second.com"},
+        ])
+        self.page.evaluate("document.getElementById('select-btn').click()")
+        self.page.evaluate("document.getElementById('select-btn').click()")
+        checked = self.page.evaluate("document.querySelectorAll('.tab-select:checked').length")
+        hidden = self.page.evaluate("document.getElementById('selection-bar').classList.contains('hidden')")
+        assert checked == 0
+        assert hidden
+
+    def test_select_btn_only_affects_visible(self):
+        """Под фильтр папки — «Выбрать» трогает только видимые."""
+        fid = "f1"
+        self._load_view(
+            tabs=[
+                {"name": "InFolder", "url": "https://infolder.com", "folderId": fid},
+                {"name": "FreeTab", "url": "https://free.com", "folderId": None},
+            ],
+            folders=[{"id": fid, "name": "Work"}]
+        )
+        # Активируем папку
+        self.page.evaluate("document.querySelector('.folder-chip[data-folder-id=\"f1\"]').click()")
+        self.page.evaluate("document.getElementById('select-btn').click()")
+        checked = self.page.evaluate("document.querySelectorAll('.tab-select:checked').length")
+        assert checked == 1
+
+    def test_open_selected_opens_in_background(self):
+        """Массовое открытие — вкладки создаются неактивными."""
+        self._load_view(tabs=[
+            {"name": "First", "url": "https://first.com"},
+            {"name": "Second", "url": "https://second.com"},
+        ])
+        self.page.evaluate("document.getElementById('select-btn').click()")
+        self.page.evaluate("document.getElementById('open-selected-btn').click()")
+        active = self.page.evaluate("chrome.tabs.createdTabs.filter(t => t.active).length")
+        total = self.page.evaluate("chrome.tabs.createdTabs.length")
+        assert total == 2
+        assert active == 0
+
+    def test_single_click_open_clears_selection(self):
+        """Одиночный клик по имени открывает вкладку и снимает выбор."""
+        self._load_view(tabs=[{"name": "OpenTab", "url": "https://opentab.com"}])
+        self.page.evaluate("document.getElementById('select-btn').click()")
+        self.page.evaluate("document.querySelector('.tab-name').click()")
+        self.page.wait_for_timeout(400)
+        created = self.page.evaluate("chrome.tabs.createdTabs.length")
+        hidden = self.page.evaluate("document.getElementById('selection-bar').classList.contains('hidden')")
+        assert created == 1
+        assert hidden
+
+    def test_storage_change_resets_selection(self):
+        """Изменение storage (onChanged) сбрасывает выбор."""
+        self._load_view(tabs=[
+            {"name": "First", "url": "https://first.com"},
+            {"name": "Second", "url": "https://second.com"},
+        ])
+        self.page.evaluate("document.getElementById('select-btn').click()")
+        hidden_before = self.page.evaluate("document.getElementById('selection-bar').classList.contains('hidden')")
+        assert not hidden_before
+        # Симулируем внешнее изменение (как background.js)
+        self.page.evaluate("chrome.storage._data['blattam-tabs'].push({name: 'Third', url: 'https://third.com'})")
+        self.page.evaluate("""(() => {
+          var tabs = chrome.storage._data['blattam-tabs'];
+          for (var fn of window.__storageListeners) fn({'blattam-tabs': {newValue: tabs, oldValue: []}}, 'sync');
+        })()""")
+        hidden_after = self.page.evaluate("document.getElementById('selection-bar').classList.contains('hidden')")
+        assert hidden_after
 
     def test_export_includes_folders(self):
         """Экспорт включает папки в JSON."""
@@ -588,6 +890,26 @@ class TestEdgeCases:
         tabs = read_storage_raw(self.page, "blattam-tabs")
         in_folder = [t for t in tabs if t["url"] == "https://dup.com" and t.get("folderId") == fid]
         assert len(in_folder) == 1  # дубль пропущен
+
+    def test_rename_nonexistent_tab_noop(self):
+        send_msg(self.page, "add-tab", name="Keep", url="https://keep2.com")
+        send_msg(self.page, "rename-tab", index=999, name="Hacked")
+        tabs = read_storage_raw(self.page, "blattam-tabs")
+        assert all(t["name"] != "Hacked" for t in tabs)
+
+    def test_rename_empty_name_noop(self):
+        send_msg(self.page, "add-tab", name="Keep2", url="https://keep3.com")
+        send_msg(self.page, "rename-tab", index=0, name="   ")
+        tabs = read_storage_raw(self.page, "blattam-tabs")
+        found = [t for t in tabs if t["url"] == "https://keep3.com"]
+        assert len(found) == 1 and found[0]["name"] == "Keep2"
+
+    def test_rename_trims_whitespace(self):
+        send_msg(self.page, "add-tab", name="Trim", url="https://trim.com")
+        send_msg(self.page, "rename-tab", index=0, name="  Padded  ")
+        tabs = read_storage_raw(self.page, "blattam-tabs")
+        found = [t for t in tabs if t["url"] == "https://trim.com"]
+        assert len(found) == 1 and found[0]["name"] == "Padded"
 
     def test_same_url_different_folders_allowed(self):
         """Один URL в разных папках — допустимо."""

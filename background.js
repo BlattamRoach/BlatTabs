@@ -96,6 +96,17 @@ async function moveTabToFolder(tabIndex, folderId) {
   await saveTabs(tabs);
 }
 
+// Переименовать вкладку
+async function renameTab(tabIndex, newName) {
+  const tabs = await loadTabs();
+  const tab = tabs[tabIndex];
+  if (!tab) return;
+  const name = (newName || '').trim();
+  if (!name) return;
+  tab.name = name;
+  await saveTabs(tabs);
+}
+
 // === Папки ===
 
 async function createFolder(name) {
@@ -156,6 +167,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       break;
     case 'move-tab':
       moveTabToFolder(msg.index, msg.folderId);
+      break;
+    case 'rename-tab':
+      renameTab(msg.index, msg.name);
       break;
     
     // Папки

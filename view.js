@@ -16,6 +16,7 @@ let allTabs = [];
 let allFolders = [];
 let activeFolderId = ''; // '' = "Все"
 let modalCallback = null;
+let selectedUrls = new Set(); // выбор вкладок для массового открытия
 
 // === Загрузка данных ===
 
@@ -76,6 +77,9 @@ function renderFolders() {
     actions.appendChild(renameBtn);
     actions.appendChild(deleteBtn);
     chip.appendChild(actions);
+
+    // DnD: чип принимает перетаскиваемую карточку
+    attachFolderDrop(chip, folder.id);
     
     // Клик — фильтр по папке
     chip.addEventListener('click', () => {
@@ -157,11 +161,8 @@ foldersBar.querySelector('.folder-chip[data-folder-id=""]').addEventListener('cl
 function renderTabs(filter = '') {
   tabsList.innerHTML = '';
   
-  // Фильтр по папке
-  let filtered = allTabs;
-  if (activeFolderId !== '') {
-    filtered = allTabs.filter(t => t.folderId === activeFolderId);
-  }
+  // Фильтр по папке + поиску
+  let filtered = visibleTabs(filter);
   
   if (allTabs.length === 0) {
     emptyState.style.display = 'block';
@@ -178,7 +179,7 @@ function renderTabs(filter = '') {
     visibleCount++;
 
     const card = document.createElement('div');
-    card.className = 'tab-card';
+    card.className = 'tab-card' + (selectedUrls.has(tab.url) ? ' selected' : '');
     
     // Header
     const header = document.createElement('div');
@@ -193,10 +194,52 @@ function renderTabs(filter = '') {
       header.appendChild(img);
     }
     
+    // Чекбокс массового выбора
+    const selectCb = document.createElement('input');
+    selectCb.type = 'checkbox';
+    selectCb.className = 'tab-select';
+    selectCb.checked = selectedUrls.has(tab.url);
+    selectCb.title = 'Выбрать для массового открытия';
+    selectCb.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (selectCb.checked) selectedUrls.add(tab.url);
+      else selectedUrls.delete(tab.url);
+      card.classList.toggle('selected', selectCb.checked);
+      updateSelectionBar();
+    });
+    header.appendChild(selectCb);
+    
     const nameEl = document.createElement('span');
     nameEl.className = 'tab-name';
     nameEl.textContent = tab.name;
-    
+    nameEl.title = 'Двойной клик — переименовать';
+
+    // Двойной клик по имени → инлайн-редактирование.
+    // Одиночный клик по имени открывает вкладку, но с задержкой 300мс,
+    // чтобы dblclick успел отменить его.
+    let nameClickTimer = null;
+    let nameClicks = 0;
+    nameEl.addEventListener('click', (e) => {
+      e.stopPropagation();
+      nameClicks++;
+      if (nameClicks === 1) {
+        nameClickTimer = setTimeout(() => {
+          nameClicks = 0;
+          nameClickTimer = null;
+          chrome.tabs.create({ url: tab.url, active: true });
+          selectedUrls.delete(tab.url);
+          card.classList.remove('selected');
+          updateSelectionBar();
+        }, 300);
+      }
+    });
+    nameEl.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      if (nameClickTimer) { clearTimeout(nameClickTimer); nameClickTimer = null; }
+      nameClicks = 0;
+      startRename(tab, nameEl);
+    });
+
     // Actions: переместить в папку + удалить
     const actions = document.createElement('div');
     actions.className = 'tab-actions';
@@ -270,15 +313,43 @@ function renderTabs(filter = '') {
     card.appendChild(header);
     card.appendChild(urlEl);
     
-    // Клик по карточке — открыть вкладку
+    // Клик по карточке — открыть вкладку + снять выбор
     card.addEventListener('click', () => {
       chrome.tabs.create({ url: tab.url, active: true });
+      selectedUrls.delete(tab.url);
+      card.classList.remove('selected');
+      updateSelectionBar();
+    });
+
+    // Drag & drop: карточку можно перетащить на чип папки
+    card.draggable = true;
+    card.addEventListener('dragstart', (e) => {
+      e.dataTransfer.setData('text/plain', String(allTabs.indexOf(tab)));
+      e.dataTransfer.effectAllowed = 'move';
+      card.classList.add('dragging');
+    });
+    card.addEventListener('dragend', () => {
+      card.classList.remove('dragging');
+      document.querySelectorAll('.folder-chip.drag-over').forEach(c => c.classList.remove('drag-over'));
     });
     
     tabsList.appendChild(card);
   });
   
   noResults.style.display = visibleCount === 0 ? 'block' : 'none';
+  updateSelectionBar();
+}
+
+// Текущие видимые вкладки (фильтр папки + поиск)
+function visibleTabs(filter = '') {
+  let filtered = allTabs;
+  if (activeFolderId !== '') {
+    filtered = allTabs.filter(t => t.folderId === activeFolderId);
+  }
+  if (filter) {
+    filtered = filtered.filter(t => matchFilter(t, filter));
+  }
+  return filtered;
 }
 
 function matchFilter(tab, filter) {
@@ -294,6 +365,94 @@ function moveTab(tab, folderId) {
   if (realIndex === -1) return;
   chrome.runtime.sendMessage({ action: 'move-tab', index: realIndex, folderId });
 }
+
+// === Drag & drop: перетаскивание карточки на чип папки ===
+
+// Чип папки принимает карточку
+function attachFolderDrop(chip, folderId) {
+  chip.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    chip.classList.add('drag-over');
+  });
+  chip.addEventListener('dragleave', () => chip.classList.remove('drag-over'));
+  chip.addEventListener('drop', (e) => {
+    e.preventDefault();
+    chip.classList.remove('drag-over');
+    const idx = parseInt(e.dataTransfer.getData('text/plain'), 10);
+    const tab = allTabs[idx];
+    if (tab) moveTab(tab, folderId);
+  });
+}
+
+// "Все" чип — приём в "Все" (одноразово, чип статический)
+attachFolderDrop(foldersBar.querySelector('.folder-chip[data-folder-id=""]'), null);
+
+// Двойной клик по имени → инлайн-переименование
+function startRename(tab, nameEl) {
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'tab-name-input';
+  input.value = tab.name;
+  input.autocomplete = 'off';
+  nameEl.replaceWith(input);
+  input.focus();
+  input.select();
+
+  let done = false;
+  const finish = (save) => {
+    if (done) return;
+    done = true;
+    const newName = input.value.trim();
+    if (save && newName && newName !== tab.name) {
+      chrome.runtime.sendMessage({ action: 'rename-tab', index: allTabs.indexOf(tab), name: newName });
+    }
+    renderTabs(searchInput.value);
+  };
+
+  input.addEventListener('click', (e) => e.stopPropagation());
+  input.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') finish(true);
+    if (e.key === 'Escape') finish(false);
+  });
+  input.addEventListener('blur', () => finish(true));
+}
+
+// === Массовое открытие ===
+
+const selectionBar = document.getElementById('selection-bar');
+const selectionCount = document.getElementById('selection-count');
+const selectBtn = document.getElementById('select-btn');
+const openSelectedBtn = document.getElementById('open-selected-btn');
+const clearSelectionBtn = document.getElementById('clear-selection-btn');
+
+function updateSelectionBar() {
+  const n = selectedUrls.size;
+  selectionBar.classList.toggle('hidden', n === 0);
+  selectionCount.textContent = `${n} выбрано`;
+}
+
+// "Выбрать" — toggle: выбрать все видимые / снять выбор с видимых
+selectBtn.addEventListener('click', () => {
+  const visible = visibleTabs(searchInput.value);
+  const allSelected = visible.length > 0 && visible.every(t => selectedUrls.has(t.url));
+  visible.forEach(t => allSelected ? selectedUrls.delete(t.url) : selectedUrls.add(t.url));
+  renderTabs(searchInput.value);
+});
+
+openSelectedBtn.addEventListener('click', () => {
+  allTabs.filter(t => selectedUrls.has(t.url)).forEach(t => {
+    chrome.tabs.create({ url: t.url, active: false });
+  });
+  selectedUrls.clear();
+  renderTabs(searchInput.value);
+});
+
+clearSelectionBtn.addEventListener('click', () => {
+  selectedUrls.clear();
+  renderTabs(searchInput.value);
+});
 
 // Поиск
 searchInput.addEventListener('input', (e) => {
@@ -314,6 +473,7 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   
   if (changes['blattam-tabs']) {
     allTabs = changes['blattam-tabs'].newValue || [];
+    selectedUrls.clear(); // индексы/набор вкладок изменились — сброс выбора
     renderTabs(searchInput.value);
   }
   if (changes['blattam-folders']) {
