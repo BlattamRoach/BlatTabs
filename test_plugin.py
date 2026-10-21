@@ -41,7 +41,8 @@ var chrome = {
       if (callback) callback();
       return Promise.resolve();
     },
-    sync: { _data: {} }
+    sync: { _data: {} },
+    local: { _data: {} }
   },
   tabs: {
     createdTabs: [],
@@ -89,6 +90,30 @@ var chrome = {
 Object.defineProperty(chrome.storage, 'sync', { value: { _data: chrome.storage._data } });
 chrome.storage.sync.get = function(keys, cb) { return chrome.storage.get(keys, cb); };
 chrome.storage.sync.set = function(data, cb) { return chrome.storage.set(data, cb); };
+
+// Patch chrome.storage.local — отдельное хранилище (ключи: 'blattam-theme' и т.п.)
+chrome.storage.local.get = function(keys, cb) {
+  var result = {};
+  if (typeof keys === 'string') {
+    result[keys] = this._data[keys];
+  } else if (Array.isArray(keys)) {
+    for (var k of keys) result[k] = this._data[k];
+  } else {
+    Object.assign(result, this._data);
+  }
+  if (cb) cb(result);
+  return Promise.resolve(result);
+};
+chrome.storage.local.set = function(data, cb) {
+  var changeInfo = {};
+  for (var k in data) changeInfo[k] = { newValue: data[k], oldValue: this._data[k] };
+  Object.assign(this._data, data);
+  if (window.__storageListeners && window.__storageListeners.length) {
+    for (var fn of window.__storageListeners) fn(changeInfo, 'local');
+  }
+  if (cb) cb();
+  return Promise.resolve();
+};
 
 // Patch listeners
 window.__storageListeners = [];
@@ -340,7 +365,7 @@ class TestBackground:
 # ==========================================
 
 VIEW_DOM = """<div class="header"><h1>BlattamToby</h1>
-<div class="header-actions"><button class="action-btn" id="select-btn">☑ Выбрать</button></div></div>
+<div class="header-actions"><button class="action-btn" id="theme-btn" title="Переключить тёмную/светлую тему">🌙</button><button class="action-btn" id="select-btn">☑ Выбрать</button></div></div>
 <div class="container">
 <div class="folders-bar" id="folders-bar">
   <button class="folder-chip active" data-folder-id="">Все</button>
@@ -760,6 +785,159 @@ class TestView:
 
 
 # ==========================================
+#  KEYBOARD NAVIGATION (view.js)
+# ==========================================
+
+class TestKeyboardNav:
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    def _load_view(self, tabs=None, folders=None):
+        pg = self.page
+        init_data = ""
+        if tabs is not None:
+            init_data += f"chrome.storage._data['blattam-tabs'] = {json.dumps(tabs)};\n"
+        if folders is not None:
+            init_data += f"chrome.storage._data['blattam-folders'] = {json.dumps(folders)};\n"
+        pg.goto("about:blank")
+        pg.evaluate(MOCK_CHROME + init_data)
+        pg.evaluate("window.confirm = () => true;")
+        pg.evaluate(f"document.body.innerHTML = `{VIEW_DOM}`")
+        view_js = load_file("view.js")
+        try:
+            pg.evaluate(view_js + "; 'loaded'")
+        except Exception as e:
+            pytest.fail(f"View.js error: {e}")
+
+    def press(self, key):
+        self.page.evaluate(f"document.dispatchEvent(new KeyboardEvent('keydown', {{key: '{key}', bubbles: true, cancelable: true}}))")
+
+    def test_arrow_down_activates_first_card(self):
+        self._load_view(tabs=[
+            {"name": "First", "url": "https://first.com"},
+            {"name": "Second", "url": "https://second.com"},
+        ])
+        self.press("ArrowDown")
+        active = self.page.evaluate("document.querySelectorAll('.tab-card.kbd-active').length")
+        assert active == 1
+        name = self.page.evaluate("document.querySelector('.tab-card.kbd-active .tab-name').textContent")
+        assert name == "First"
+
+    def test_arrow_moves_between_cards(self):
+        self._load_view(tabs=[
+            {"name": "First", "url": "https://first.com"},
+            {"name": "Second", "url": "https://second.com"},
+            {"name": "Third", "url": "https://third.com"},
+        ])
+        self.press("ArrowDown")
+        self.press("ArrowDown")
+        name = self.page.evaluate("document.querySelector('.tab-card.kbd-active .tab-name').textContent")
+        assert name == "Second"
+        self.press("ArrowUp")
+        name = self.page.evaluate("document.querySelector('.tab-card.kbd-active .tab-name').textContent")
+        assert name == "First"
+
+    def test_arrow_wraps_around(self):
+        self._load_view(tabs=[
+            {"name": "First", "url": "https://first.com"},
+            {"name": "Second", "url": "https://second.com"},
+        ])
+        self.press("ArrowDown")
+        self.press("ArrowDown")
+        self.press("ArrowDown")  # Second → обёртка на First
+        name = self.page.evaluate("document.querySelector('.tab-card.kbd-active .tab-name').textContent")
+        assert name == "First"  # зациклено
+
+    def test_enter_opens_active_tab(self):
+        self._load_view(tabs=[
+            {"name": "First", "url": "https://first.com"},
+            {"name": "Second", "url": "https://second.com"},
+        ])
+        self.press("ArrowDown")
+        self.press("ArrowDown")
+        self.press("Enter")
+        created = json.loads(self.page.evaluate("JSON.stringify(chrome.tabs.createdTabs)"))
+        assert len(created) == 1
+        assert created[0]["url"] == "https://second.com"
+        assert created[0].get("active") is True
+
+    def test_enter_without_selection_opens_first(self):
+        self._load_view(tabs=[
+            {"name": "First", "url": "https://first.com"},
+        ])
+        self.press("Enter")
+        created = json.loads(self.page.evaluate("JSON.stringify(chrome.tabs.createdTabs)"))
+        assert len(created) == 1
+        assert created[0]["url"] == "https://first.com"
+
+    def test_delete_removes_active_tab(self):
+        self._load_view(tabs=[
+            {"name": "First", "url": "https://first.com"},
+            {"name": "Second", "url": "https://second.com"},
+        ])
+        self.press("ArrowDown")  # First
+        self.press("ArrowDown")  # Second
+        self.press("Delete")
+        tabs = read_storage_raw(self.page, "blattam-tabs")
+        assert [t["name"] for t in tabs] == ["First"]
+        # Удалённая карточка не остаётся активной
+        active = self.page.evaluate("document.querySelectorAll('.tab-card.kbd-active').length")
+        assert active == 0
+
+    def test_escape_resets_search_and_active(self):
+        self._load_view(tabs=[
+            {"name": "First", "url": "https://first.com"},
+            {"name": "Second", "url": "https://second.com"},
+        ])
+        self.page.locator("#search").fill("first")
+        self.press("Escape")  # Esc прямо из поля поиска
+        assert self.page.evaluate("document.getElementById('search').value") == ""
+        cards = self.page.evaluate("document.querySelectorAll('.tab-card').length")
+        active = self.page.evaluate("document.querySelectorAll('.tab-card.kbd-active').length")
+        assert cards == 2
+        assert active == 0
+
+    def test_arrows_ignored_while_typing(self):
+        self._load_view(tabs=[
+            {"name": "First", "url": "https://first.com"},
+        ])
+        self.page.locator("#search").click()  # фокус в поле
+        self.page.evaluate("document.activeElement.dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowDown', bubbles: true, cancelable: true}))")
+        active = self.page.evaluate("document.querySelectorAll('.tab-card.kbd-active').length")
+        assert active == 0
+
+    def test_nav_respects_folder_filter(self):
+        fid = "f1"
+        self._load_view(
+            tabs=[
+                {"name": "InFolder", "url": "https://infolder.com", "folderId": fid},
+                {"name": "FreeTab", "url": "https://free.com", "folderId": None},
+            ],
+            folders=[{"id": fid, "name": "Work"}]
+        )
+        self.page.evaluate(f"document.querySelector('.folder-chip[data-folder-id=\"{fid}\"]').click()")
+        self.press("ArrowDown")
+        name = self.page.evaluate("document.querySelector('.tab-card.kbd-active .tab-name').textContent")
+        assert name == "InFolder"
+        self.press("ArrowDown")  # зацикл — остаётся в фильтре
+        name = self.page.evaluate("document.querySelector('.tab-card.kbd-active .tab-name').textContent")
+        assert name == "InFolder"
+
+    def test_nav_respects_search_filter(self):
+        self._load_view(tabs=[
+            {"name": "Alpha", "url": "https://alpha.com"},
+            {"name": "Beta", "url": "https://beta.com"},
+            {"name": "Gamma", "url": "https://gamma.com"},
+        ])
+        self.page.locator("#search").fill("beta")
+        self.page.evaluate("document.getElementById('search').blur()")  # навигация — когда фокус вне поля
+        self.press("ArrowDown")
+        name = self.page.evaluate("document.querySelector('.tab-card.kbd-active .tab-name').textContent")
+        assert name == "Beta"
+
+
+# ==========================================
 #  POPUP.JS TESTS
 # ==========================================
 
@@ -931,6 +1109,83 @@ class TestEdgeCases:
         in_f1 = [t for t in tabs if t["url"] == "https://same.com" and t.get("folderId") == f1]
         in_f2 = [t for t in tabs if t["url"] == "https://same.com" and t.get("folderId") == f2]
         assert len(in_f1) == 1 and len(in_f2) == 1
+
+
+# ==========================================
+#  DARK THEME (view.js + theme.css)
+# ==========================================
+
+class TestDarkTheme:
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    def _load_view(self, theme=None, tabs=None):
+        pg = self.page
+        init_data = ""
+        if theme is not None:
+            init_data += f"chrome.storage.local._data['blattam-theme'] = {json.dumps(theme)};\n"
+        if tabs is not None:
+            init_data += f"chrome.storage._data['blattam-tabs'] = {json.dumps(tabs)};\n"
+        pg.goto("about:blank")
+        pg.evaluate(MOCK_CHROME + init_data)
+        pg.evaluate(f"document.body.innerHTML = `{VIEW_DOM}`")
+        view_js = load_file("view.js")
+        try:
+            pg.evaluate(view_js + "; 'loaded'")
+        except Exception as e:
+            pytest.fail(f"View.js error: {e}")
+
+    def test_theme_button_exists(self):
+        """Кнопка переключателя темы есть в шапке."""
+        self._load_view()
+        exists = self.page.evaluate("!!document.getElementById('theme-btn')")
+        assert exists
+
+    def test_default_theme_is_light(self):
+        """По умолчанию (без сохранённого значения) — светлая тема."""
+        self._load_view()
+        theme = self.page.evaluate("document.documentElement.dataset.theme")
+        assert theme == "light"
+        icon = self.page.evaluate("document.getElementById('theme-btn').textContent")
+        assert icon == "🌙"
+
+    def test_click_switches_to_dark(self):
+        """Клик переключает data-theme на dark."""
+        self._load_view()
+        self.page.evaluate("document.getElementById('theme-btn').click()")
+        theme = self.page.evaluate("document.documentElement.dataset.theme")
+        assert theme == "dark"
+        icon = self.page.evaluate("document.getElementById('theme-btn').textContent")
+        assert icon == "☀️"
+
+    def test_theme_saved_to_local_storage(self):
+        """После клика значение пишется в chrome.storage.local под ключом 'blattam-theme'."""
+        self._load_view()
+        self.page.evaluate("document.getElementById('theme-btn').click()")
+        saved = self.page.evaluate("chrome.storage.local._data['blattam-theme']")
+        assert saved == "dark"
+
+    def test_saved_theme_applied_on_load(self):
+        """При загрузке с сохранённой темой data-theme применяется (до рендера)."""
+        self._load_view(theme="dark", tabs=[{"name": "A", "url": "https://a.com"}])
+        theme = self.page.evaluate("document.documentElement.dataset.theme")
+        assert theme == "dark"
+        icon = self.page.evaluate("document.getElementById('theme-btn').textContent")
+        assert icon == "☀️"
+        # Рендер при этом работает
+        cards = self.page.evaluate("document.querySelectorAll('.tab-card').length")
+        assert cards == 1
+
+    def test_second_click_returns_to_light(self):
+        """Повторный клик возвращает светлую тему и пишет её в storage."""
+        self._load_view()
+        self.page.evaluate("document.getElementById('theme-btn').click()")
+        self.page.evaluate("document.getElementById('theme-btn').click()")
+        theme = self.page.evaluate("document.documentElement.dataset.theme")
+        assert theme == "light"
+        saved = self.page.evaluate("chrome.storage.local._data['blattam-theme']")
+        assert saved == "light"
 
 
 if __name__ == "__main__":

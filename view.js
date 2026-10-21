@@ -5,6 +5,28 @@ const noResults = document.getElementById('no-results');
 const foldersBar = document.getElementById('folders-bar');
 const addFolderBtn = document.getElementById('add-folder-btn');
 
+// === Тема (тёмная/светлая) ===
+// Состояние — в chrome.storage.local, ключ 'blattam-theme' ('dark'/'light'),
+// по умолчанию светлая. Применяем сохранённую тему ДО первого рендера
+// (loadData() вызывается в конце файла) — чтобы страница не мигала.
+
+const themeBtn = document.getElementById('theme-btn');
+
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  themeBtn.textContent = theme === 'dark' ? '☀️' : '🌙';
+}
+
+chrome.storage.local.get(['blattam-theme'], (result) => {
+  applyTheme(result['blattam-theme'] === 'dark' ? 'dark' : 'light');
+});
+
+themeBtn.addEventListener('click', () => {
+  const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  applyTheme(next);
+  chrome.storage.local.set({ 'blattam-theme': next });
+});
+
 // Модалка
 const folderModal = document.getElementById('folder-modal');
 const modalTitle = document.getElementById('modal-title');
@@ -17,6 +39,7 @@ let allFolders = [];
 let activeFolderId = ''; // '' = "Все"
 let modalCallback = null;
 let selectedUrls = new Set(); // выбор вкладок для массового открытия
+let activeUrl = null; // карточка, выбранная клавиатурой (по URL — переживает перерисовку)
 
 // === Загрузка данных ===
 
@@ -163,6 +186,8 @@ function renderTabs(filter = '') {
   
   // Фильтр по папке + поиску
   let filtered = visibleTabs(filter);
+  // Если активная (клавиатурная) карточка не в видимом списке — сбрасываем
+  if (activeUrl && !filtered.some(t => t.url === activeUrl)) activeUrl = null;
   
   if (allTabs.length === 0) {
     emptyState.style.display = 'block';
@@ -179,7 +204,9 @@ function renderTabs(filter = '') {
     visibleCount++;
 
     const card = document.createElement('div');
-    card.className = 'tab-card' + (selectedUrls.has(tab.url) ? ' selected' : '');
+    card.className = 'tab-card'
+      + (selectedUrls.has(tab.url) ? ' selected' : '')
+      + (activeUrl === tab.url ? ' kbd-active' : '');
     
     // Header
     const header = document.createElement('div');
@@ -338,6 +365,11 @@ function renderTabs(filter = '') {
   
   noResults.style.display = visibleCount === 0 ? 'block' : 'none';
   updateSelectionBar();
+  // Активная карточка видна на экране
+  if (activeUrl) {
+    const activeCard = tabsList.querySelector('.tab-card.kbd-active');
+    if (activeCard) activeCard.scrollIntoView({ block: 'nearest' });
+  }
 }
 
 // Текущие видимые вкладки (фильтр папки + поиск)
@@ -463,6 +495,88 @@ searchInput.addEventListener('input', (e) => {
 document.addEventListener('click', (e) => {
   if (!e.target.closest('.folder-select-btn')) {
     document.querySelectorAll('.folder-dropdown.open').forEach(dd => dd.classList.remove('open'));
+  }
+});
+
+// === Клавиатурная навигация ===
+// Стрелки — по карточкам, Enter — открыть, Delete — удалить, Esc — сброс.
+// Не перехватывает, пока набран текст или открыта модалка.
+
+function isEditable(el) {
+  if (!el) return false;
+  const tag = (el.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
+  return el.isContentEditable === true;
+}
+
+// Движение по видимым карточкам: +1 / -1 шаг
+function moveActive(delta) {
+  const f = visibleTabs(searchInput.value);
+  if (!f.length) return;
+  let i = activeUrl ? f.findIndex(t => t.url === activeUrl) : -1;
+  if (i === -1) i = 0; // нет активной → первая
+  else i = (i + delta + f.length) % f.length; // зациклено
+  activeUrl = f[i].url;
+  renderTabs(searchInput.value);
+}
+
+function openActiveTab() {
+  const f = visibleTabs(searchInput.value);
+  const t = f.find(t => t.url === activeUrl) || f[0];
+  if (t) chrome.tabs.create({ url: t.url, active: true });
+}
+
+function deleteActiveTab() {
+  const f = visibleTabs(searchInput.value);
+  const t = f.find(t => t.url === activeUrl);
+  if (!t) return;
+  if (!confirm(`Удалить вкладку "${t.name}"?`)) return;
+  allTabs.splice(allTabs.indexOf(t), 1);
+  chrome.storage.sync.set({ 'blattam-tabs': allTabs });
+  renderTabs(searchInput.value); // onChanged-обработчик обнулит activeUrl, если карточки не осталось
+}
+
+document.addEventListener('keydown', (e) => {
+  // Модалка работает сама — не перехватываем
+  if (folderModal.classList.contains('open')) return;
+
+  // Esc — сброс: сброс выбора, фильтра папки, поиска и активной карточки.
+  // Работает и из поля (например, из поиска) — очищает его и снимает фокус.
+  if (e.key === 'Escape') {
+    if (searchInput.value) searchInput.value = '';
+    const ae = document.activeElement;
+    if (ae && ae !== document.body) ae.blur();
+    if (activeFolderId !== '') { activeFolderId = ''; renderFolders(); }
+    activeUrl = null;
+    selectedUrls.clear();
+    renderTabs('');
+    e.preventDefault();
+    return;
+  }
+
+  // Остальные клавиши не перехватываем, пока набирается текст
+  if (isEditable(document.activeElement)) return;
+
+  switch (e.key) {
+    case 'ArrowDown':
+    case 'ArrowRight':
+      e.preventDefault();
+      moveActive(1);
+      break;
+    case 'ArrowUp':
+    case 'ArrowLeft':
+      e.preventDefault();
+      moveActive(-1);
+      break;
+    case 'Enter':
+      e.preventDefault();
+      openActiveTab();
+      break;
+    case 'Delete':
+    case 'Backspace':
+      e.preventDefault();
+      deleteActiveTab();
+      break;
   }
 });
 

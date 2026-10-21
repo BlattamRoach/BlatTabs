@@ -1,0 +1,93 @@
+/* BlattamToby — дизайн-токены
+   Единая палитра для view.html и popup.html.
+   Светлая тема — значения :root (по умолчанию).
+   Тёмная тема — переопределение тех же переменных в [data-theme="dark"]
+   (вешается на document.documentElement, переключается кнопкой в шапке view.html).
+   rgba(0,0,0,*) в разметке (иконки на чипах) — темонезависимые, токеном не покрыты. */
+:root {
+  /* Фоны */
+  --bg: #f5f7fa;            /* фон страницы */
+  --surface: #ffffff;       /* карточки, хедер, модалки, дропдауны, поля */
+  --surface-alt: #f5f5f5;   /* мелкие кнопки на карточке (view) */
+  --surface-soft: #fafafa;  /* пунктирная кнопка в popup */
+  --btn-soft: #f0f0f0;      /* мягкий hover */
+  --chip: #e8ecf1;          /* чипы папок */
+  --chip-hover: #d5dbe3;
+  --btn-hover: #e0e0e0;     /* hover мелких кнопок */
+  --accent-soft: #f0f7ff;   /* фон поля инлайн-ренейма */
+
+  /* Текст */
+  --text: #333333;
+  --text-soft: #555555;
+  --text-muted: #888888;
+  --text-faint: #aaaaaa;
+  --on-accent: #ffffff;     /* текст/иконки на акценте */
+
+  /* Границы */
+  --border: #dddddd;
+  --border-soft: #e8e8e8;   /* линия хедера */
+  --dashed: #bbbbbb;        /* пунктир (view) */
+  --dashed-soft: #cccccc;   /* пунктир (popup) */
+  --dashed-hover: #999999;
+
+  /* Акцент */
+  --accent: #3498db;
+  --accent-hover: #2980b9;
+  --accent-ring: rgba(52, 152, 219, 0.1);
+  --kbd: #e67e22;           /* контур клавиатурного фокуса */
+
+  /* Функциональные */
+  --success: #27ae60;
+  --danger: #c0392b;
+  --drop-over: #2ecc71;
+
+  /* Тени и оверлей */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.1);
+  --shadow-pop: 0 2px 8px rgba(0, 0, 0, 0.15);  /* дропдауны */
+  --shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.15);  /* плавающая панель */
+  --shadow-xl: 0 4px 16px rgba(0, 0, 0, 0.2);   /* модалки */
+  --overlay: rgba(0, 0, 0, 0.3);
+}
+
+/* Тёмная тема: переопределяем все токены, у которых тёмный смысл.
+   Акцент, --on-accent и функциональные цвета (--success/--danger/--drop-over)
+   читаемы на тёмном фоне — не трогаем. */
+[data-theme="dark"] {
+  /* Фоны */
+  --bg: #12141a;             /* фон страницы */
+  --surface: #1c1f27;        /* карточки, хедер, модалки, дропдауны, поля */
+  --surface-alt: #262a35;    /* мелкие кнопки на карточке (view) */
+  --surface-soft: #232630;   /* пунктирная кнопка в popup */
+  --btn-soft: #2b2f3a;       /* мягкий hover */
+  --chip: #2b3140;           /* чипы папок */
+  --chip-hover: #353c4e;
+  --btn-hover: #333947;      /* hover мелких кнопок */
+  --accent-soft: #1b2838;    /* фон поля инлайн-ренейма */
+
+  /* Текст */
+  --text: #e8eaf0;
+  --text-soft: #c2c6d1;
+  --text-muted: #8a90a0;
+  --text-faint: #5f6473;
+
+  /* Границы */
+  --border: #3a3f4d;
+  --border-soft: #2b2f3a;    /* линия хедера */
+  --dashed: #565d70;         /* пунктир (view) */
+  --dashed-soft: #4a5060;    /* пунктир (popup) */
+  --dashed-hover: #7a8296;
+
+  /* Акцент */
+  --accent: #4aa3e8;
+  --accent-hover: #63b3f0;
+  --accent-ring: rgba(74, 163, 232, 0.25);
+
+  /* Тени и оверлей (на тёмном — глубже и плотнее) */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.5);
+  --shadow-pop: 0 2px 8px rgba(0, 0, 0, 0.55);  /* дропдауны */
+  --shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.55);  /* плавающая панель */
+  --shadow-xl: 0 4px 16px rgba(0, 0, 0, 0.6);   /* модалки */
+  --overlay: rgba(0, 0, 0, 0.6);
+}
