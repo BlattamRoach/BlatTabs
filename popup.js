@@ -26,12 +26,15 @@ function renderFolders() {
   
   folderSelect.innerHTML = '<option value="">Все (без папки)</option>';
   
-  folders.forEach(folder => {
+  // Иерархия: вложенные папки — с «↳»
+  const appendFolderOption = (folder, depth) => {
     const opt = document.createElement('option');
     opt.value = folder.id;
-    opt.textContent = folder.name;
+    opt.textContent = (depth > 0 ? '↳ ' : '') + folder.name;
     folderSelect.appendChild(opt);
-  });
+    folders.filter(f => f.parentId === folder.id).forEach(child => appendFolderOption(child, depth + 1));
+  };
+  folders.filter(f => f.parentId == null).forEach(f => appendFolderOption(f, 0));
   
   // Восстанавливаем выбор или используем последнюю
   if (folders.some(f => f.id === currentVal)) {

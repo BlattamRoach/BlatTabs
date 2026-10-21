@@ -44,6 +44,92 @@
     }
     .add-folder-btn:hover { background: var(--chip-hover); border-color: var(--dashed-hover); }
 
+    /* Вложенные папки — отступ */
+    .folder-chip.nested { margin-left: 10px; }
+    .folder-dd-item.nested { padding-left: 26px; }
+
+    /* Теги */
+    .tags-bar { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; min-height: 20px; }
+
+    .tag-chip {
+      padding: 3px 10px; border-radius: 16px; font-size: 11px; cursor: pointer;
+      background: var(--chip); color: var(--text-soft); user-select: none; transition: all 0.15s;
+      display: flex; align-items: center; gap: 5px; border: none; font-family: inherit;
+    }
+    .tag-chip:hover { background: var(--chip-hover); }
+    .tag-chip.active { background: var(--accent); color: var(--on-accent); }
+    .tag-chip.active:hover { background: var(--accent-hover); }
+    .tag-chip .chip-actions { display: flex; gap: 1px; opacity: 0; transition: opacity 0.15s; }
+    .tag-chip:hover .chip-actions { opacity: 1; }
+
+    .add-tag-btn {
+      padding: 3px 10px; border-radius: 16px; font-size: 11px; cursor: pointer;
+      background: var(--chip); color: var(--text-soft); border: 1px dashed var(--dashed); transition: all 0.15s;
+      font-family: inherit; display: flex; align-items: center; gap: 4px; white-space: nowrap;
+    }
+    .add-tag-btn:hover { background: var(--chip-hover); border-color: var(--dashed-hover); }
+
+    /* Цветные точки тегов (data-color="1..6" → --tag-N) */
+    .tag-dot, .card-tag-dot {
+      display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+      background: var(--tag-1);
+    }
+    .tag-dot[data-color="2"], .card-tag-dot[data-color="2"] { background: var(--tag-2); }
+    .tag-dot[data-color="3"], .card-tag-dot[data-color="3"] { background: var(--tag-3); }
+    .tag-dot[data-color="4"], .card-tag-dot[data-color="4"] { background: var(--tag-4); }
+    .tag-dot[data-color="5"], .card-tag-dot[data-color="5"] { background: var(--tag-5); }
+    .tag-dot[data-color="6"], .card-tag-dot[data-color="6"] { background: var(--tag-6); }
+    .card-tags { display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0; }
+
+    /* Сессии */
+    .sessions-bar { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; min-height: 20px; }
+
+    .session-chip {
+      padding: 3px 10px; border-radius: 16px; font-size: 11px; cursor: pointer;
+      background: var(--chip); color: var(--text-soft); user-select: none; transition: all 0.15s;
+      display: flex; align-items: center; gap: 5px; border: none; font-family: inherit;
+    }
+    .session-chip:hover { background: var(--chip-hover); }
+    .session-chip.active { background: var(--accent); color: var(--on-accent); }
+    .session-chip.active:hover { background: var(--accent-hover); }
+    .session-chip .chip-actions { display: flex; gap: 1px; opacity: 0; transition: opacity 0.15s; }
+    .session-chip:hover .chip-actions { opacity: 1; }
+    .session-chip.active .chip-actions { color: var(--on-accent); }
+
+    .add-session-btn {
+      padding: 3px 10px; border-radius: 16px; font-size: 11px; cursor: pointer;
+      background: var(--chip); color: var(--text-soft); border: 1px dashed var(--dashed); transition: all 0.15s;
+      font-family: inherit; display: flex; align-items: center; gap: 4px; white-space: nowrap;
+    }
+    .add-session-btn:hover { background: var(--chip-hover); border-color: var(--dashed-hover); }
+
+    /* Архив закрытых: приглушённая карточка */
+    .tab-card.archived { opacity: var(--archived-opacity); }
+    .tab-card.archived:hover { opacity: 1; }
+    .icon-btn.unarchive { color: var(--accent); }
+
+    /* Палитра в модалке тегов */
+    .tag-color-palette { display: flex; gap: 8px; margin-bottom: 12px; }
+    .tag-swatch {
+      width: 20px; height: 20px; border-radius: 50%; cursor: pointer;
+      border: 2px solid var(--border); padding: 0;
+      background: var(--tag-1);
+    }
+    .tag-swatch[data-color="2"] { background: var(--tag-2); }
+    .tag-swatch[data-color="3"] { background: var(--tag-3); }
+    .tag-swatch[data-color="4"] { background: var(--tag-4); }
+    .tag-swatch[data-color="5"] { background: var(--tag-5); }
+    .tag-swatch[data-color="6"] { background: var(--tag-6); }
+    .tag-swatch.selected { border-color: var(--text); transform: scale(1.1); }
+
+    /* Дропдаун тегов (чекбоксы) */
+    .tag-dd-item {
+      padding: 6px 10px; font-size: 11px; cursor: pointer; color: var(--text);
+      display: flex; align-items: center; gap: 6px; white-space: nowrap; overflow: hidden;
+    }
+    .tag-dd-item:hover { background: var(--bg); }
+    .tag-dd-item input[type="checkbox"] { width: 12px; height: 12px; accent-color: var(--accent); cursor: pointer; }
+
     /* Поиск */
     .search-box { margin-bottom: 8px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 4px; font-size: 12px; width: 100%; outline: none; background: var(--surface); }
     .search-box:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-ring); }
@@ -52,7 +138,7 @@
     .empty-state { text-align: center; padding: 60px 20px; color: var(--text-muted); font-size: 13px; }
     .no-results { text-align: center; padding: 30px; color: var(--text-faint); font-size: 12px; display: none; }
 
-    .tabs-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; max-width: none; width: 100%; }
+    .tabs-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--card-min), 1fr)); gap: var(--card-gap); max-width: none; width: 100%; }
 
     .tab-card { background: var(--surface); border-radius: 4px; box-shadow: var(--shadow-sm); overflow: hidden; transition: transform 0.15s, box-shadow 0.15s; display: flex; flex-direction: column; cursor: pointer; }
     .tab-card:hover { box-shadow: var(--shadow-md); transform: translateY(-1px); }
@@ -70,9 +156,9 @@
     .selection-bar.hidden { display: none; }
     .selection-count { color: var(--text-soft); }
 
-    .tab-header { padding: 8px 10px; display: flex; align-items: center; user-select: none; gap: 4px; min-height: 32px; }
-    .tab-name { font-size: 11px; font-weight: 500; color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.3; }
-    .tab-name-input { flex: 1; min-width: 0; font-size: 11px; font-weight: 500; color: var(--text); font-family: inherit; padding: 1px 4px; border: 1px solid var(--accent); border-radius: 3px; outline: none; background: var(--accent-soft); }
+    .tab-header { padding: var(--card-header-padding); display: flex; align-items: center; user-select: none; gap: 4px; min-height: 32px; }
+    .tab-name { font-size: var(--card-name-size); font-weight: 500; color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.3; }
+    .tab-name-input { flex: 1; min-width: 0; font-size: var(--card-name-size); font-weight: 500; color: var(--text); font-family: inherit; padding: 1px 4px; border: 1px solid var(--accent); border-radius: 3px; outline: none; background: var(--accent-soft); }
 
     .tab-actions { display: flex; gap: 2px; opacity: 0; transition: opacity 0.15s; align-items: center; }
     .tab-card:hover .tab-actions { opacity: 1; }
@@ -104,7 +190,10 @@
     .icon-btn:hover { background: var(--btn-hover); }
     .icon-btn.delete { color: var(--danger); }
 
-    .tab-url { padding: 0 10px; font-size: 9px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 0; min-height: 12px; height: 14px; }
+    .tab-url { padding: var(--card-url-padding); font-size: var(--card-url-size); color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 0; min-height: 12px; height: 14px; }
+
+    /* Скриншот-миниатюра на карточке (top, over the name) */
+    .tab-screenshot { width: 100%; height: var(--card-thumb-height); object-fit: cover; border-bottom: 1px solid var(--border-soft); display: block; flex-shrink: 0; }
 
     /* Хедер действия */
     .header-actions { display: flex; gap: 6px; }
@@ -137,12 +226,24 @@
     .modal-btn.primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent-hover); }
     .modal-btn.primary:hover { background: var(--accent-hover); }
 
+    /* Компактный режим карточек: переопределение токенов размеров (theme.css) */
+    body.compact-cards {
+      --card-min: 84px;
+      --card-gap: 6px;
+      --card-header-padding: 5px 7px;
+      --card-url-padding: 0 7px;
+      --card-name-size: 10px;
+      --card-url-size: 8px;
+      --card-thumb-height: 52px;
+    }
+
   </style>
 </head>
 <body>
   <div class="header">
     <h1>BlattamToby — Ctrl+T или + для новой вкладки</h1>
     <div class="header-actions">
+      <button class="action-btn" id="size-btn" title="Компактные карточки">▦ Крупные</button>
       <button class="action-btn" id="theme-btn" title="Переключить тёмную/светлую тему">🌙</button>
       <button class="action-btn" id="select-btn" title="Выбрать все видимые">☑ Выбрать</button>
       <button class="action-btn" id="export-btn">↓ Экспорт</button>
@@ -152,10 +253,23 @@
   </div>
 
   <div class="container">
-    <!-- Папки -->
+    <!-- Папки (+ архив и рекомендации) -->
     <div class="folders-bar" id="folders-bar">
       <button class="folder-chip active" data-folder-id="">Все</button>
+      <button class="folder-chip special" id="archive-chip" title="Показать только архив закрытых вкладок">🗄 Архив</button>
+      <button class="folder-chip special" id="frequent-chip" title="Часто открываемые (top-20 по числу открытий, минимум 2)">⭐ Частые</button>
+      <button class="folder-chip special" id="favorites-chip" title="Избранные (самые недавно открываемые за 7 дней, top-10)">🕘 Избранные</button>
       <button class="add-folder-btn" id="add-folder-btn">+ Папка</button>
+    </div>
+
+    <!-- Теги -->
+    <div class="tags-bar" id="tags-bar">
+      <button class="add-tag-btn" id="add-tag-btn">+ Тег</button>
+    </div>
+
+    <!-- Сессии -->
+    <div class="sessions-bar" id="sessions-bar">
+      <button class="add-session-btn" id="add-session-btn">📋 + Сессия</button>
     </div>
 
     <!-- Поиск -->
@@ -186,6 +300,31 @@
       <div class="modal-actions">
         <button class="modal-btn" id="modal-cancel">Отмена</button>
         <button class="modal-btn primary" id="modal-confirm">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Модалка: создать тег -->
+  <div class="modal-overlay" id="tag-modal">
+    <div class="modal">
+      <h3>Новый тег</h3>
+      <input type="text" id="tag-name-input" placeholder="Название..." autocomplete="off">
+      <div class="tag-color-palette" id="tag-color-palette"></div>
+      <div class="modal-actions">
+        <button class="modal-btn" id="tag-modal-cancel">Отмена</button>
+        <button class="modal-btn primary" id="tag-modal-confirm">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Модалка: создать сессию -->
+  <div class="modal-overlay" id="session-modal">
+    <div class="modal">
+      <h3>Новая сессия</h3>
+      <input type="text" id="session-name-input" placeholder="Название (или оставьте пустым)..." autocomplete="off">
+      <div class="modal-actions">
+        <button class="modal-btn" id="session-modal-cancel">Отмена</button>
+        <button class="modal-btn primary" id="session-modal-confirm">OK</button>
       </div>
     </div>
   </div>

@@ -7,6 +7,10 @@ yarn-error.log*
 # Python (Chrome запрещает папки с "_" — не создавать в корне расширения)
 __pycache__/
 *.pyc
+.pytest_cache/
+
+# Сборка (dist — артефакт build_zip.py; zip собирается заново)
+dist/
 
 # IDE
 .vscode/

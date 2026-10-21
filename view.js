@@ -27,6 +27,61 @@ themeBtn.addEventListener('click', () => {
   chrome.storage.local.set({ 'blattam-theme': next });
 });
 
+// === Размер карточек (крупный/компактный) ===
+// Состояние — в chrome.storage.local, ключ 'blattam-card-size' ('large'/'compact'),
+// по умолчанию 'large'. Применяем сохранённый размер ДО первого рендера
+// (тот же паттерн, что тема — без мигания). Esc НЕ сбрасывает размер —
+// это постоянная настройка, а не фильтры.
+
+const sizeBtn = document.getElementById('size-btn');
+
+function applyCardSize(size) {
+  const compact = size === 'compact';
+  document.body.classList.toggle('compact-cards', compact);
+  sizeBtn.textContent = compact ? '▤ Компактные' : '▦ Крупные';
+  sizeBtn.title = compact ? 'Крупные карточки' : 'Компактные карточки';
+}
+
+chrome.storage.local.get(['blattam-card-size'], (result) => {
+  applyCardSize(result['blattam-card-size'] === 'compact' ? 'compact' : 'large');
+});
+
+sizeBtn.addEventListener('click', () => {
+  const next = document.body.classList.contains('compact-cards') ? 'large' : 'compact';
+  applyCardSize(next);
+  chrome.storage.local.set({ 'blattam-card-size': next });
+});
+
+// === Скриншоты вкладок ===
+// Миниатюры живут в chrome.storage.local под ключом 'blattam-screenshots'
+// ({ tabId: dataUrl }); вкладки хранят только hasScreenshot. Загружаем
+// лениво после первого рендера и перерисовываем карточки.
+
+const SCREENSHOTS_KEY = 'blattam-screenshots';
+let screenshots = {}; // { tabId: dataUrl }
+
+function loadScreenshots() {
+  chrome.storage.local.get([SCREENSHOTS_KEY], (result) => {
+    screenshots = result[SCREENSHOTS_KEY] || {};
+    renderTabs(searchInput.value);
+  });
+}
+
+// Чистим скриншот удалённой вкладки (view удаляет вкладки напрямую в
+// storage.sync, поэтому и скриншот чистим здесь — single source в view-путях)
+function removeTabScreenshot(tab) {
+  const id = tab && tab.id;
+  if (id == null) return;
+  delete screenshots[id];
+  chrome.storage.local.get([SCREENSHOTS_KEY], (result) => {
+    const shots = result[SCREENSHOTS_KEY] || {};
+    if (id in shots) {
+      delete shots[id];
+      chrome.storage.local.set({ [SCREENSHOTS_KEY]: shots });
+    }
+  });
+}
+
 // Модалка
 const folderModal = document.getElementById('folder-modal');
 const modalTitle = document.getElementById('modal-title');
@@ -36,36 +91,64 @@ const modalConfirm = document.getElementById('modal-confirm');
 
 let allTabs = [];
 let allFolders = [];
+let allTags = [];
+let allSessions = [];        // сессии: { id, name, createdAt, tabUrls }
+let openStats = {};          // статистика открытий: { url: { opens, lastOpened } } (local)
 let activeFolderId = ''; // '' = "Все"
+let activeTagId = '';   // '' = без фильтра по тегу
+let activeSessionId = ''; // '' = без фильтра по сессии
+let archiveOnly = false;  // фильтр «Архив» — только архив закрытых вкладок
+let activeSpecial = '';   // '' | 'frequent' | 'favorites' — активный фильтр рекомендаций
 let modalCallback = null;
 let selectedUrls = new Set(); // выбор вкладок для массового открытия
 let activeUrl = null; // карточка, выбранная клавиатурой (по URL — переживает перерисовку)
+let openTagDropdownUrl = null; // чья карточка держит открытый дропдаун тегов (по URL — переживает перерисовку)
+let openModalId = null; // id открытой модалки — чтобы глобальный keydown её не перехватывал
+
+// Отмечаем открытую/закрытую модалку (для global keydown-гарда)
+function setModalOpen(id) {
+  openModalId = id || null;
+}
+
+function isAnyModalOpen() {
+  return openModalId !== null;
+}
 
 // === Загрузка данных ===
 
 function loadData() {
-  chrome.storage.sync.get(['blattam-tabs', 'blattam-folders'], (result) => {
+  chrome.storage.sync.get(['blattam-tabs', 'blattam-folders', 'blattam-tags', 'blattam-sessions'], (result) => {
     allTabs = result['blattam-tabs'] || [];
     allFolders = result['blattam-folders'] || [];
+    allTags = result['blattam-tags'] || [];
+    allSessions = result['blattam-sessions'] || [];
+    // Статистика открытий — в local (per-device, не sync)
+    chrome.storage.local.get(['blattam-stats'], (local) => {
+      openStats = local['blattam-stats'] || {};
+    });
     renderFolders();
+    renderTags();
+    renderSessions();
     renderTabs();
+    loadScreenshots(); // скриншоты (local) — после первого рендера, потом перерисовка
   });
 }
 
 // === Папки ===
 
 function renderFolders() {
-  // Удаляем старые чипы (только user folders, не "Все")
+  // Удаляем старые чипы (только user folders, не "Все" и не спец-фильтры)
   foldersBar.querySelectorAll('.folder-chip[data-folder-id]:not([data-folder-id=""])').forEach(el => el.remove());
   
   allFolders.forEach(folder => {
+    const isNested = folder.parentId != null;
     const chip = document.createElement('button');
-    chip.className = 'folder-chip' + (activeFolderId === folder.id ? ' active' : '');
+    chip.className = 'folder-chip' + (activeFolderId === folder.id ? ' active' : '') + (isNested ? ' nested' : '');
     chip.dataset.folderId = folder.id;
     
-    // Иконка папки + имя
+    // Иконка папки + имя (вложенные — с «↳»)
     const icon = document.createElement('span');
-    icon.textContent = '📁';
+    icon.textContent = isNested ? '↳' : '📁';
     chip.appendChild(icon);
     
     const name = document.createElement('span');
@@ -114,14 +197,15 @@ function renderFolders() {
     foldersBar.insertBefore(chip, addFolderBtn);
   });
   
-  // Обновляем "Все" чип
+  // Обновляем "Все" и спец-фильтры (архив/рекомендации)
   const allChip = foldersBar.querySelector('.folder-chip[data-folder-id=""]');
   if (allChip) {
-    allChip.className = 'folder-chip' + (activeFolderId === '' ? ' active' : '');
+    allChip.className = 'folder-chip' + (activeFolderId === '' && !archiveOnly && activeSpecial === '' ? ' active' : '');
   }
+  markSpecialChipActive();
 }
 
-// "+" — создать папку
+// "+ " — создать папку
 addFolderBtn.addEventListener('click', () => openCreateModal());
 
 // Модалка: создать папку
@@ -147,6 +231,7 @@ function openRenameModal(folderId, currentName) {
 function showFolderModal(onConfirm) {
   modalCallback = onConfirm;
   folderModal.classList.add('open');
+  setModalOpen('folder');
   setTimeout(() => folderNameInput.focus(), 50);
 }
 
@@ -158,6 +243,7 @@ folderModal.addEventListener('click', (e) => {
 function closeFolderModal() {
   folderModal.classList.remove('open');
   modalCallback = null;
+  setModalOpen(null);
 }
 
 modalConfirm.addEventListener('click', () => {
@@ -172,12 +258,356 @@ folderNameInput.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') modalCancel.click();
 });
 
-// "Все" чип — клик сбрасывает фильтр
+// "Все" чип — клик сбрасывает фильтр (возврат к обычному виду)
 foldersBar.querySelector('.folder-chip[data-folder-id=""]').addEventListener('click', () => {
   activeFolderId = '';
   renderFolders();
   renderTabs(searchInput.value);
 });
+
+// === Теги (цветовые метки) ===
+
+const TAGS_PALETTE = 6; // количество цветов (токены --tag-1..6 в theme.css)
+const tagsBar = document.getElementById('tags-bar');
+const addTagBtn = document.getElementById('add-tag-btn');
+const tagModal = document.getElementById('tag-modal');
+const tagNameInput = document.getElementById('tag-name-input');
+const tagColorPalette = document.getElementById('tag-color-palette');
+const tagModalCancel = document.getElementById('tag-modal-cancel');
+const tagModalConfirm = document.getElementById('tag-modal-confirm');
+let selectedTagColor = 1;
+
+// Палитра цветов в модалке (кружки с токенами --tag-N)
+function buildTagPalette() {
+  tagColorPalette.innerHTML = '';
+  for (let i = 1; i <= TAGS_PALETTE; i++) {
+    const swatch = document.createElement('button');
+    swatch.type = 'button';
+    swatch.className = 'tag-swatch' + (i === selectedTagColor ? ' selected' : '');
+    swatch.dataset.color = i;
+    swatch.title = 'Цвет ' + i;
+    swatch.addEventListener('click', () => {
+      selectedTagColor = i;
+      tagColorPalette.querySelectorAll('.tag-swatch').forEach(s => s.classList.toggle('selected', s === swatch));
+    });
+    tagColorPalette.appendChild(swatch);
+  }
+}
+
+function openTagCreateModal() {
+  tagNameInput.value = '';
+  selectedTagColor = 1;
+  buildTagPalette();
+  tagModal.classList.add('open');
+  setModalOpen('tag');
+  setTimeout(() => tagNameInput.focus(), 50);
+}
+
+addTagBtn.addEventListener('click', openTagCreateModal);
+tagModalCancel.addEventListener('click', closeTagModal);
+tagModal.addEventListener('click', (e) => {
+  if (e.target === tagModal) closeTagModal();
+});
+
+function closeTagModal() {
+  tagModal.classList.remove('open');
+  setModalOpen(null);
+}
+
+tagModalConfirm.addEventListener('click', () => {
+  const name = tagNameInput.value.trim();
+  if (!name) return;
+  chrome.runtime.sendMessage({ action: 'create-tag', name, color: selectedTagColor });
+  closeTagModal();
+});
+
+tagNameInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') tagModalConfirm.click();
+  if (e.key === 'Escape') tagModalCancel.click();
+});
+
+// Ряд чипов тегов (клик — фильтр, ✕ — удалить)
+function renderTags() {
+  tagsBar.querySelectorAll('.tag-chip').forEach(el => el.remove());
+  
+  allTags.forEach(tag => {
+    const chip = document.createElement('button');
+    chip.className = 'tag-chip' + (activeTagId === tag.id ? ' active' : '');
+    chip.dataset.tagId = tag.id;
+    
+    const dot = document.createElement('span');
+    dot.className = 'tag-dot';
+    dot.dataset.color = tag.color;
+    chip.appendChild(dot);
+    
+    const name = document.createElement('span');
+    name.className = 'chip-name';
+    name.textContent = tag.name;
+    chip.appendChild(name);
+    
+    // ✕ — удалить тег (с confirm; tagIds у вкладок очищает background.js)
+    const actions = document.createElement('div');
+    actions.className = 'chip-actions';
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'chip-icon-btn';
+    deleteBtn.textContent = '✕';
+    deleteBtn.title = 'Удалить тег';
+    deleteBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (confirm(`Удалить тег "${tag.name}"?`)) {
+        if (activeTagId === tag.id) activeTagId = '';
+        chrome.runtime.sendMessage({ action: 'delete-tag', id: tag.id });
+      }
+    });
+    actions.appendChild(deleteBtn);
+    chip.appendChild(actions);
+    
+    // Клик — фильтр по тегу (повторный клик снимает)
+    chip.addEventListener('click', () => {
+      activeTagId = activeTagId === tag.id ? '' : tag.id;
+      renderTags();
+      renderTabs(searchInput.value);
+    });
+    
+    tagsBar.insertBefore(chip, addTagBtn);
+  });
+}
+
+// Цветная точка тега (data-color → --tag-N в CSS)
+function makeTagDot(tag) {
+  const dot = document.createElement('span');
+  dot.className = 'card-tag-dot';
+  dot.dataset.color = tag.color;
+  dot.title = tag.name;
+  return dot;
+}
+
+// === Открытие вкладок (единый путь: background создаёт browser-tab и
+// считает статистику 'blattam-stats' — view сам не делает chrome.tabs.create) ===
+
+// Открыть одну вкладку: background создаёт browser-tab и инкрементит 'blattam-stats'
+function openUrl(url) {
+  chrome.runtime.sendMessage({ action: 'open-one', url });
+  selectedUrls.delete(url);
+  renderTabs(searchInput.value);
+}
+
+// Массовое открытие: background открывает каждую вкладку (неактивно) + статистика
+function openMany(urls) {
+  chrome.runtime.sendMessage({ action: 'open-many', urls: urls });
+  selectedUrls.clear();
+  renderTabs(searchInput.value);
+}
+
+// === Архив закрытых + Рекомендации (спец-фильтры) ===
+// Три чипа в ряд папок: «Архив» (только archivedAt), «⭐ Частые» (top-20 by
+// opens, opens >= 2), «🕘 Избранные» (top-10 by lastOpened за 7 дней).
+// Они взаимоисключающие; «Все» возвращает обычный вид.
+
+const archiveChip = document.getElementById('archive-chip');
+const frequentChip = document.getElementById('frequent-chip');
+const favoritesChip = document.getElementById('favorites-chip');
+
+function clearSpecials() {
+  archiveOnly = false;
+  activeSpecial = '';
+}
+
+function markSpecialChipActive() {
+  if (archiveChip) archiveChip.classList.toggle('active', archiveOnly);
+  if (frequentChip) frequentChip.classList.toggle('active', activeSpecial === 'frequent');
+  if (favoritesChip) favoritesChip.classList.toggle('active', activeSpecial === 'favorites');
+}
+
+// Считаем рекомендации по свежей статистике (local может измениться
+// фоном между рендерами): перечитываем 'blattam-stats' перед переключением
+function withFreshStats(cb) {
+  chrome.storage.local.get(['blattam-stats'], (local) => {
+    openStats = local['blattam-stats'] || {};
+    cb();
+  });
+}
+
+if (archiveChip) {
+  archiveChip.addEventListener('click', () => {
+    archiveOnly = !archiveOnly;
+    if (archiveOnly) activeSpecial = '';
+    renderFolders();
+    renderTabs(searchInput.value);
+  });
+}
+if (frequentChip) {
+  frequentChip.addEventListener('click', () => {
+    withFreshStats(() => {
+      activeSpecial = activeSpecial === 'frequent' ? '' : 'frequent';
+      if (activeSpecial) archiveOnly = false;
+      renderFolders();
+      renderTabs(searchInput.value);
+    });
+  });
+}
+if (favoritesChip) {
+  favoritesChip.addEventListener('click', () => {
+    withFreshStats(() => {
+      activeSpecial = activeSpecial === 'favorites' ? '' : 'favorites';
+      if (activeSpecial) archiveOnly = false;
+      renderFolders();
+      renderTabs(searchInput.value);
+    });
+  });
+}
+
+// Наборы URL для рекомендаций (из openStats)
+function frequentUrlSet() {
+  const entries = Object.entries(openStats)
+    .filter(([, v]) => (v.opens || 0) >= 2)
+    .sort((a, b) => b[1].opens - a[1].opens);
+  return new Set(entries.slice(0, 20).map(([url]) => url));
+}
+
+function favoritesUrlSet() {
+  const now = Date.now();
+  const week = 7 * 24 * 60 * 60 * 1000;
+  const entries = Object.entries(openStats)
+    .filter(([, v]) => (v.lastOpened || 0) >= now - week)
+    .sort((a, b) => b[1].lastOpened - a[1].lastOpened);
+  return new Set(entries.slice(0, 10).map(([url]) => url));
+}
+
+// === Сессии ===
+
+const sessionsBar = document.getElementById('sessions-bar');
+const addSessionBtn = document.getElementById('add-session-btn');
+const sessionModal = document.getElementById('session-modal');
+const sessionNameInput = document.getElementById('session-name-input');
+const sessionModalCancel = document.getElementById('session-modal-cancel');
+const sessionModalConfirm = document.getElementById('session-modal-confirm');
+
+// Сессия — именованная группа сохранённых вкладок: { id, name, createdAt, tabUrls }.
+// Хранится в chrome.storage.sync под ключом 'blattam-sessions'.
+
+function saveSessions(sessions) {
+  allSessions = sessions;
+  chrome.storage.sync.set({ 'blattam-sessions': sessions });
+  renderSessions();
+}
+
+function renderSessions() {
+  if (!sessionsBar) return;
+  sessionsBar.querySelectorAll('.session-chip').forEach(el => el.remove());
+  allSessions.forEach(session => {
+    const chip = document.createElement('button');
+    chip.className = 'session-chip' + (activeSessionId === session.id ? ' active' : '');
+    chip.dataset.sessionId = session.id;
+    
+    const icon = document.createElement('span');
+    icon.textContent = '📋';
+    chip.appendChild(icon);
+    
+    const name = document.createElement('span');
+    name.className = 'chip-name';
+    name.textContent = session.name;
+    chip.appendChild(name);
+    
+    // Действия: + (добавить видимые) и ✕ (удалить сессию)
+    const actions = document.createElement('div');
+    actions.className = 'chip-actions';
+    
+    const addBtn = document.createElement('button');
+    addBtn.className = 'chip-icon-btn';
+    addBtn.textContent = '+';
+    addBtn.title = 'Добавить видимые вкладки в сессию';
+    addBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      addVisibleToSession(session.id);
+    });
+    
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'chip-icon-btn';
+    deleteBtn.textContent = '✕';
+    deleteBtn.title = 'Удалить сессию';
+    deleteBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (confirm(`Удалить сессию "${session.name}"?`)) {
+        if (activeSessionId === session.id) activeSessionId = '';
+        saveSessions(allSessions.filter(s => s.id !== session.id));
+        renderTabs(searchInput.value);
+      }
+    });
+    
+    actions.appendChild(addBtn);
+    actions.appendChild(deleteBtn);
+    chip.appendChild(actions);
+    
+    // Клик — фильтр по сессии (повторный клик снимает)
+    chip.addEventListener('click', () => {
+      activeSessionId = activeSessionId === session.id ? '' : session.id;
+      renderSessions();
+      renderTabs(searchInput.value);
+    });
+    
+    sessionsBar.insertBefore(chip, addSessionBtn);
+  });
+}
+
+// Подпись по умолчанию: «Сессия 21.10» (дата в формате ДД.ММ)
+function defaultSessionName() {
+  const d = new Date();
+  const day = String(d.getDate()).padStart(2, '0');
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  return `Сессия ${day}.${month}`;
+}
+
+// Модалка: создать сессию (захватывает ВСЕ сейчас видимые вкладки)
+function openSessionCreateModal() {
+  if (!sessionModal) return;
+  sessionNameInput.value = '';
+  sessionModal.classList.add('open');
+  setModalOpen('session');
+  setTimeout(() => sessionNameInput.focus(), 50);
+}
+
+addSessionBtn.addEventListener('click', openSessionCreateModal);
+sessionModalCancel.addEventListener('click', closeSessionModal);
+sessionModal.addEventListener('click', (e) => {
+  if (e.target === sessionModal) closeSessionModal();
+});
+
+function closeSessionModal() {
+  sessionModal.classList.remove('open');
+  setModalOpen(null);
+}
+
+sessionModalConfirm.addEventListener('click', () => {
+  const name = sessionNameInput.value.trim() || defaultSessionName();
+  const visible = visibleTabs(searchInput.value);
+  const session = {
+    id: 's' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+    name,
+    createdAt: Date.now(),
+    tabUrls: visible.map(t => t.url)
+  };
+  saveSessions(allSessions.concat(session));
+  closeSessionModal();
+});
+
+sessionNameInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') sessionModalConfirm.click();
+  if (e.key === 'Escape') sessionModalCancel.click();
+});
+
+// Добавить сейчас видимые вкладки в сессию (без дублей)
+function addVisibleToSession(sessionId) {
+  const session = allSessions.find(s => s.id === sessionId);
+  if (!session) return;
+  const visible = visibleTabs(searchInput.value);
+  const urls = session.tabUrls.slice();
+  visible.forEach(t => {
+    if (!urls.includes(t.url)) urls.push(t.url);
+  });
+  const updated = allSessions.map(s => s.id === sessionId ? Object.assign({}, s, { tabUrls: urls }) : s);
+  saveSessions(updated);
+}
 
 // === Карточки вкладок ===
 
@@ -192,6 +622,7 @@ function renderTabs(filter = '') {
   if (allTabs.length === 0) {
     emptyState.style.display = 'block';
     noResults.style.display = 'none';
+    renderSessions();
     return;
   }
   emptyState.style.display = 'none';
@@ -203,10 +634,12 @@ function renderTabs(filter = '') {
     if (filter && !matchFilter(tab, filter)) return;
     visibleCount++;
 
+    const isArchived = tab.archivedAt != null;
     const card = document.createElement('div');
     card.className = 'tab-card'
       + (selectedUrls.has(tab.url) ? ' selected' : '')
-      + (activeUrl === tab.url ? ' kbd-active' : '');
+      + (activeUrl === tab.url ? ' kbd-active' : '')
+      + (isArchived ? ' archived' : '');
     
     // Header
     const header = document.createElement('div');
@@ -236,10 +669,21 @@ function renderTabs(filter = '') {
     });
     header.appendChild(selectCb);
     
+    // Цветные точки тегов вкладки
+    const tagsWrap = document.createElement('span');
+    tagsWrap.className = 'card-tags';
+    (tab.tagIds || []).forEach(tagId => {
+      const tag = allTags.find(t => t.id === tagId);
+      if (tag) tagsWrap.appendChild(makeTagDot(tag));
+    });
+    header.appendChild(tagsWrap);
+    
     const nameEl = document.createElement('span');
     nameEl.className = 'tab-name';
     nameEl.textContent = tab.name;
-    nameEl.title = 'Двойной клик — переименовать';
+    nameEl.title = isArchived
+      ? 'Двойной клик — переименовать (вкладка в архиве закрытых)'
+      : 'Двойной клик — переименовать';
 
     // Двойной клик по имени → инлайн-редактирование.
     // Одиночный клик по имени открывает вкладку, но с задержкой 300мс,
@@ -253,10 +697,7 @@ function renderTabs(filter = '') {
         nameClickTimer = setTimeout(() => {
           nameClicks = 0;
           nameClickTimer = null;
-          chrome.tabs.create({ url: tab.url, active: true });
-          selectedUrls.delete(tab.url);
-          card.classList.remove('selected');
-          updateSelectionBar();
+          openUrl(tab.url);
         }, 300);
       }
     });
@@ -267,7 +708,7 @@ function renderTabs(filter = '') {
       startRename(tab, nameEl);
     });
 
-    // Actions: переместить в папку + удалить
+    // Actions: переместить в папку + (архив) + теги + удалить
     const actions = document.createElement('div');
     actions.className = 'tab-actions';
     
@@ -291,11 +732,11 @@ function renderTabs(filter = '') {
     });
     dropdown.appendChild(allItem);
     
-    // Папки
-    allFolders.forEach(folder => {
+    // Папки (иерархия: вложенные — с отступом и «↳»)
+    const appendFolderItem = (folder, depth) => {
       const item = document.createElement('div');
-      item.className = 'folder-dd-item';
-      item.textContent = `→ ${folder.name}`;
+      item.className = 'folder-dd-item' + (depth > 0 ? ' nested' : '');
+      item.textContent = `→ ${depth > 0 ? '↳ ' : ''}${folder.name}`;
       if (tab.folderId === folder.id) item.style.fontWeight = 'bold';
       item.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -303,16 +744,97 @@ function renderTabs(filter = '') {
         dropdown.classList.remove('open');
       });
       dropdown.appendChild(item);
-    });
+      allFolders.filter(f => f.parentId === folder.id).forEach(child => appendFolderItem(child, depth + 1));
+    };
+    allFolders.filter(f => f.parentId == null).forEach(f => appendFolderItem(f, 0));
     
     folderBtn.appendChild(dropdown);
     folderBtn.addEventListener('click', (e) => {
       e.stopPropagation();
+      const wasOpen = dropdown.classList.contains('open');
       document.querySelectorAll('.folder-dropdown.open').forEach(dd => dd.classList.remove('open'));
-      dropdown.classList.toggle('open');
+      openTagDropdownUrl = null; // открываем дропдаун папок — закрываем дропдаун тегов
+      if (!wasOpen) dropdown.classList.add('open');
     });
     
     actions.appendChild(folderBtn);
+    
+    // Кнопка тегов (🎨) — дропдаун-чекбоксы (мультиселект тегов вкладки)
+    const tagsBtn = document.createElement('button');
+    tagsBtn.className = 'folder-select-btn';
+    tagsBtn.textContent = '🎨';
+    tagsBtn.title = 'Теги вкладки';
+    
+    const tagDropdown = document.createElement('div');
+    tagDropdown.className = 'folder-dropdown tag-dropdown';
+    
+    if (allTags.length === 0) {
+      const emptyItem = document.createElement('div');
+      emptyItem.className = 'folder-dd-item all-folder';
+      emptyItem.textContent = 'Нет тегов — создайте в «+ Тег»';
+      tagDropdown.appendChild(emptyItem);
+    } else {
+      const tagIds = tab.tagIds || [];
+      allTags.forEach(tag => {
+        const item = document.createElement('label');
+        item.className = 'tag-dd-item';
+        
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = tagIds.includes(tag.id);
+        cb.addEventListener('click', (e) => e.stopPropagation());
+        cb.addEventListener('change', (e) => {
+          e.stopPropagation();
+          const next = tagIds.slice();
+          if (cb.checked) next.push(tag.id);
+          else {
+            const i = next.indexOf(tag.id);
+            if (i !== -1) next.splice(i, 1);
+          }
+          // Сохраняем без закрытия дропдауна (можно отметить несколько тегов сразу)
+          chrome.runtime.sendMessage({ action: 'set-tab-tags', index: allTabs.indexOf(tab), tagIds: next });
+        });
+        
+        const dot = document.createElement('span');
+        dot.className = 'card-tag-dot';
+        dot.dataset.color = tag.color;
+        dot.style.flexShrink = '0';
+        
+        const labelSpan = document.createElement('span');
+        labelSpan.textContent = tag.name;
+        
+        item.appendChild(cb);
+        item.appendChild(dot);
+        item.appendChild(labelSpan);
+        item.addEventListener('click', (e) => e.stopPropagation());
+        tagDropdown.appendChild(item);
+      });
+    }
+    
+    tagsBtn.appendChild(tagDropdown);
+    if (openTagDropdownUrl === tab.url) tagDropdown.classList.add('open'); // переживает перерисовку
+    tagsBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const wasOpen = tagDropdown.classList.contains('open');
+      document.querySelectorAll('.folder-dropdown.open').forEach(dd => dd.classList.remove('open'));
+      openTagDropdownUrl = wasOpen ? null : tab.url;
+      if (!wasOpen) tagDropdown.classList.add('open');
+    });
+    
+    actions.appendChild(tagsBtn);
+    
+    // Кнопка возврата из архива (↩) — только для archivedAt
+    if (isArchived) {
+      const unarchiveBtn = document.createElement('button');
+      unarchiveBtn.className = 'icon-btn unarchive';
+      unarchiveBtn.textContent = '↩';
+      unarchiveBtn.title = 'Вернуть из архива закрытых';
+      unarchiveBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        chrome.runtime.sendMessage({ action: 'unarchive-tab', index: allTabs.indexOf(tab) });
+      });
+      actions.appendChild(unarchiveBtn);
+    }
     
     const deleteBtn = document.createElement('button');
     deleteBtn.className = 'icon-btn delete';
@@ -321,6 +843,7 @@ function renderTabs(filter = '') {
     deleteBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       if (confirm(`Удалить вкладку "${tab.name}"?`)) {
+        removeTabScreenshot(tab);
         allTabs.splice(allTabs.indexOf(tab), 1);
         chrome.storage.sync.set({ 'blattam-tabs': allTabs });
         renderTabs(searchInput.value);
@@ -340,12 +863,17 @@ function renderTabs(filter = '') {
     card.appendChild(header);
     card.appendChild(urlEl);
     
+    // Скриншот-миниатюра сверху карточки (если для вкладки он есть)
+    if (tab.id != null && screenshots[tab.id]) {
+      const shotImg = document.createElement('img');
+      shotImg.className = 'tab-screenshot';
+      shotImg.src = screenshots[tab.id];
+      shotImg.alt = '';
+      card.insertBefore(shotImg, card.firstChild);
+    }
     // Клик по карточке — открыть вкладку + снять выбор
     card.addEventListener('click', () => {
-      chrome.tabs.create({ url: tab.url, active: true });
-      selectedUrls.delete(tab.url);
-      card.classList.remove('selected');
-      updateSelectionBar();
+      openUrl(tab.url);
     });
 
     // Drag & drop: карточку можно перетащить на чип папки
@@ -365,6 +893,7 @@ function renderTabs(filter = '') {
   
   noResults.style.display = visibleCount === 0 ? 'block' : 'none';
   updateSelectionBar();
+  renderSessions(); // сессии перерисовываем вместе с карточками (state не теряется)
   // Активная карточка видна на экране
   if (activeUrl) {
     const activeCard = tabsList.querySelector('.tab-card.kbd-active');
@@ -372,11 +901,42 @@ function renderTabs(filter = '') {
   }
 }
 
-// Текущие видимые вкладки (фильтр папки + поиск)
+// Текущие видимые вкладки (фильтр папки + тега + сессии + спец-фильтры + поиск)
 function visibleTabs(filter = '') {
   let filtered = allTabs;
   if (activeFolderId !== '') {
-    filtered = allTabs.filter(t => t.folderId === activeFolderId);
+    // Фильтр папки включает вложенные папки (рекурсивно)
+    const folderIds = [activeFolderId];
+    let grew = true;
+    while (grew) {
+      grew = false;
+      allFolders.forEach(f => {
+        if (f.parentId && folderIds.includes(f.parentId) && !folderIds.includes(f.id)) {
+          folderIds.push(f.id);
+          grew = true;
+        }
+      });
+    }
+    filtered = filtered.filter(t => folderIds.includes(t.folderId));
+  }
+  if (activeTagId !== '') {
+    filtered = filtered.filter(t => (t.tagIds || []).includes(activeTagId));
+  }
+  if (activeSessionId !== '') {
+    const session = allSessions.find(s => s.id === activeSessionId);
+    if (session) {
+      const urls = session.tabUrls || [];
+      filtered = filtered.filter(t => urls.includes(t.url));
+    }
+  }
+  if (archiveOnly) {
+    filtered = filtered.filter(t => t.archivedAt != null);
+  } else if (activeSpecial === 'frequent') {
+    const set = frequentUrlSet();
+    filtered = filtered.filter(t => set.has(t.url));
+  } else if (activeSpecial === 'favorites') {
+    const set = favoritesUrlSet();
+    filtered = filtered.filter(t => set.has(t.url));
   }
   if (filter) {
     filtered = filtered.filter(t => matchFilter(t, filter));
@@ -387,7 +947,7 @@ function visibleTabs(filter = '') {
 function matchFilter(tab, filter) {
   const f = filter.toLowerCase();
   return (tab.name || '').toLowerCase().includes(f) || 
-         (tab.title || '').toLowerCase().includes(f) || 
+         (tab.title || '').toLowerCase().includes(f) ||
          (tab.url || '').toLowerCase().includes(f);
 }
 
@@ -474,11 +1034,8 @@ selectBtn.addEventListener('click', () => {
 });
 
 openSelectedBtn.addEventListener('click', () => {
-  allTabs.filter(t => selectedUrls.has(t.url)).forEach(t => {
-    chrome.tabs.create({ url: t.url, active: false });
-  });
-  selectedUrls.clear();
-  renderTabs(searchInput.value);
+  const urls = allTabs.filter(t => selectedUrls.has(t.url)).map(t => t.url);
+  openMany(urls);
 });
 
 clearSelectionBtn.addEventListener('click', () => {
@@ -495,6 +1052,7 @@ searchInput.addEventListener('input', (e) => {
 document.addEventListener('click', (e) => {
   if (!e.target.closest('.folder-select-btn')) {
     document.querySelectorAll('.folder-dropdown.open').forEach(dd => dd.classList.remove('open'));
+    openTagDropdownUrl = null;
   }
 });
 
@@ -523,7 +1081,7 @@ function moveActive(delta) {
 function openActiveTab() {
   const f = visibleTabs(searchInput.value);
   const t = f.find(t => t.url === activeUrl) || f[0];
-  if (t) chrome.tabs.create({ url: t.url, active: true });
+  if (t) openUrl(t.url);
 }
 
 function deleteActiveTab() {
@@ -531,6 +1089,7 @@ function deleteActiveTab() {
   const t = f.find(t => t.url === activeUrl);
   if (!t) return;
   if (!confirm(`Удалить вкладку "${t.name}"?`)) return;
+  removeTabScreenshot(t);
   allTabs.splice(allTabs.indexOf(t), 1);
   chrome.storage.sync.set({ 'blattam-tabs': allTabs });
   renderTabs(searchInput.value); // onChanged-обработчик обнулит activeUrl, если карточки не осталось
@@ -539,14 +1098,20 @@ function deleteActiveTab() {
 document.addEventListener('keydown', (e) => {
   // Модалка работает сама — не перехватываем
   if (folderModal.classList.contains('open')) return;
+  if (sessionModal && sessionModal.classList.contains('open')) return;
+  if (isAnyModalOpen()) return;
 
-  // Esc — сброс: сброс выбора, фильтра папки, поиска и активной карточки.
-  // Работает и из поля (например, из поиска) — очищает его и снимает фокус.
+  // Esc — сброс: сброс выбора, фильтра папки/тега/сессии, архива/рекомендаций,
+  // поиска и активной карточки. Работает и из поля (например, из поиска) —
+  // очищает его и снимает фокус.
   if (e.key === 'Escape') {
     if (searchInput.value) searchInput.value = '';
     const ae = document.activeElement;
     if (ae && ae !== document.body) ae.blur();
     if (activeFolderId !== '') { activeFolderId = ''; renderFolders(); }
+    if (activeTagId !== '') { activeTagId = ''; renderTags(); }
+    if (activeSessionId !== '') { activeSessionId = ''; renderSessions(); }
+    if (archiveOnly || activeSpecial !== '') { clearSpecials(); renderFolders(); }
     activeUrl = null;
     selectedUrls.clear();
     renderTabs('');
@@ -583,6 +1148,13 @@ document.addEventListener('keydown', (e) => {
 // === Автообновление ===
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName === 'local') {
+    if (changes['blattam-stats']) {
+      openStats = changes['blattam-stats'].newValue || {};
+      if (activeSpecial !== '') renderTabs(searchInput.value);
+    }
+    return;
+  }
   if (areaName !== 'sync') return;
   
   if (changes['blattam-tabs']) {
@@ -594,9 +1166,25 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     allFolders = changes['blattam-folders'].newValue || [];
     renderFolders();
   }
+  if (changes['blattam-tags']) {
+    allTags = changes['blattam-tags'].newValue || [];
+    // Удаление активного тега сбрасывает фильтр
+    if (activeTagId !== '' && !allTags.some(t => t.id === activeTagId)) activeTagId = '';
+    renderTags();
+    renderTabs(searchInput.value); // точки на карточках изменились
+  }
+  if (changes['blattam-sessions']) {
+    // Новый sync-ключ — fired на всю sync-область, но существующие обработчики
+    // выше читают свои ключи, так что они продолжают работать.
+    allSessions = changes['blattam-sessions'].newValue || [];
+    // Удаление активной сессии сбрасывает фильтр
+    if (activeSessionId !== '' && !allSessions.some(s => s.id === activeSessionId)) activeSessionId = '';
+    renderSessions();
+    renderTabs(searchInput.value); // набор видимых под фильтр сессии изменился
+  }
 });
 
-// === Экспорт / Импорт (с папками) ===
+// === Экспорт / Импорт (с папками, тегами, сессиями) ===
 
 document.getElementById('export-btn').addEventListener('click', () => {
   const data = {
@@ -604,6 +1192,8 @@ document.getElementById('export-btn').addEventListener('click', () => {
     version: chrome.runtime.getManifest().version,
     exported: new Date().toISOString(),
     folders: allFolders,
+    tags: allTags,
+    sessions: allSessions,
     tabs: allTabs
   };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -634,14 +1224,53 @@ document.getElementById('import-input').addEventListener('change', (e) => {
         return;
       }
       
-      // Импорт папок
+      // Импорт папок (с parentId, максимум 1 уровень)
       let importedFoldersCount = 0;
       if (data.folders && Array.isArray(data.folders)) {
         const existingNames = allFolders.map(f => f.name.toLowerCase());
         data.folders.forEach(folder => {
           if (!existingNames.includes(folder.name.toLowerCase())) {
-            allFolders.push({ id: folder.id, name: folder.name });
+            // Вложенность: родитель должен существовать и не иметь parent сам
+            let parentId = folder.parentId || null;
+            if (parentId != null && !allFolders.some(f => f.id === parentId && f.parentId == null)) {
+              parentId = null;
+            }
+            allFolders.push({ id: folder.id, name: folder.name, parentId });
             importedFoldersCount++;
+          }
+        });
+      }
+      
+      // Импорт тегов
+      let importedTagsCount = 0;
+      if (data.tags && Array.isArray(data.tags)) {
+        const existingTagNames = allTags.map(t => t.name.toLowerCase());
+        data.tags.forEach(tag => {
+          if (tag && tag.id && tag.name && !existingTagNames.includes(String(tag.name).toLowerCase())) {
+            const c = parseInt(tag.color, 10);
+            allTags.push({
+              id: tag.id,
+              name: String(tag.name),
+              color: Number.isInteger(c) && c >= 1 && c <= 6 ? c : 1
+            });
+            importedTagsCount++;
+          }
+        });
+      }
+      
+      // Импорт сессий (по имени — дедупликация)
+      let importedSessionsCount = 0;
+      if (data.sessions && Array.isArray(data.sessions)) {
+        const existingSessionNames = allSessions.map(s => s.name.toLowerCase());
+        data.sessions.forEach(session => {
+          if (session && session.name && !existingSessionNames.includes(String(session.name).toLowerCase())) {
+            allSessions.push({
+              id: session.id || ('s' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7)),
+              name: String(session.name),
+              createdAt: session.createdAt || Date.now(),
+              tabUrls: Array.isArray(session.tabUrls) ? session.tabUrls.slice() : []
+            });
+            importedSessionsCount++;
           }
         });
       }
@@ -651,7 +1280,7 @@ document.getElementById('import-input').addEventListener('change', (e) => {
       const duplicates = importedTabs.filter(t => allTabs.some(existing => existing.url === t.url)).length;
       newCount = importedTabs.length - duplicates;
       
-      if (!confirm(`В файле ${importedFoldersCount + (data.folders ? 1 : 0)} папок (+${importedFoldersCount} новых), ${importedTabs.length} вкладок.\nНовых: ${newCount}, дубликатов: ${duplicates}\n\nИмпортировать?`)) {
+      if (!confirm(`В файле ${importedFoldersCount + (data.folders ? 1 : 0)} папок (+${importedFoldersCount} новых), ${importedTagsCount} тегов (+${importedTagsCount} новых), ${importedTabs.length} вкладок.\nНовых: ${newCount}, дубликатов: ${duplicates}\n\nИмпортировать?`)) {
         return;
       }
       
@@ -661,13 +1290,22 @@ document.getElementById('import-input').addEventListener('change', (e) => {
           if (t.folderId && !allFolders.some(f => f.id === t.folderId)) {
             t.folderId = null;
           }
+          // Проверяем что tagIds существуют
+          if (Array.isArray(t.tagIds)) {
+            t.tagIds = t.tagIds.filter(id => allTags.some(tag => tag.id === id));
+          } else {
+            t.tagIds = [];
+          }
+          // archivedAt (архив закрытых) переезжает вместе с вкладкой
           allTabs.push(t);
         }
       });
       
       chrome.storage.sync.set({ 
         'blattam-tabs': allTabs,
-        'blattam-folders': allFolders
+        'blattam-folders': allFolders,
+        'blattam-tags': allTags,
+        'blattam-sessions': allSessions
       });
     } catch (err) {
       alert('Ошибка чтения файла: невалидный JSON');
