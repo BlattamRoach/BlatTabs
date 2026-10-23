@@ -2,329 +2,323 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Toby — вкладки</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="theme.css">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: system-ui, sans-serif; background: var(--bg); min-height: 100vh; display: flex; flex-direction: column; }
-
-    .header { display: flex; align-items: center; justify-content: space-between; padding: 8px 16px; background: var(--surface); border-bottom: 1px solid var(--border-soft); flex-shrink: 0; }
-    .header h1 { font-size: 14px; color: var(--text); }
-
-    .close-btn { width: 24px; height: 24px; border: none; background: var(--btn-soft); border-radius: 50%; cursor: pointer; font-size: 12px; display: flex; align-items: center; justify-content: center; }
-    .close-btn:hover { background: var(--btn-hover); }
-
-    .container { flex: 1; overflow-y: auto; padding: 8px; }
-
-    /* Папки */
-    .folders-bar { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; min-height: 32px; }
-    
-    .folder-chip { 
-      padding: 4px 10px; border-radius: 16px; font-size: 11px; cursor: pointer; 
-      background: var(--chip); color: var(--text-soft); user-select: none; transition: all 0.15s;
-      display: flex; align-items: center; gap: 4px; border: none; font-family: inherit;
+    html { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+    body {
+      font-family: var(--font-ui);
+      font-feature-settings: 'liga';
+      background: var(--bg); color: var(--text);
+      font-size: 14px; line-height: 1.5;
+      min-height: 100vh; display: flex; flex-direction: column;
     }
-    .folder-chip:hover { background: var(--chip-hover); }
-    .folder-chip.active { background: var(--accent); color: var(--on-accent); }
-    .folder-chip.active:hover { background: var(--accent-hover); }
+    ::selection { background: var(--ink); color: var(--on-ink); }
+    button { font-family: inherit; cursor: pointer; }
 
-    .folder-chip .chip-actions { display: flex; gap: 1px; opacity: 0; transition: opacity 0.15s; }
-    .folder-chip:hover .chip-actions { opacity: 1; }
-    
-    .chip-icon-btn { 
-      width: 14px; height: 14px; border: none; background: rgba(0,0,0,0.1); 
-      border-radius: 50%; cursor: pointer; font-size: 8px; display: flex; 
+    /* ---------- top bar ---------- */
+    .header {
+      position: sticky; top: 0; z-index: 50;
+      background: var(--bg);
+      box-shadow: 0 1px 0 var(--line2);
+      display: flex; align-items: center; justify-content: space-between;
+      height: 52px; padding: 0 20px; flex-shrink: 0;
+    }
+    .wordmark { font-size: 17px; font-weight: 700; letter-spacing: -.06em; user-select: none; }
+
+    .searchbox { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 440px; max-width: 46vw; }
+    .searchbox svg { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text-faint); pointer-events: none; }
+    .search-box {
+      width: 100%; height: 32px; border: 0; border-radius: 6px; background: var(--bg);
+      box-shadow: 0 0 0 1px var(--line);
+      padding: 0 32px; font: 400 13px/1 var(--font-ui); color: var(--text);
+      outline: none; transition: box-shadow .12s;
+    }
+    .search-box::placeholder { color: var(--text-faint); }
+    .search-box:focus { box-shadow: 0 0 0 1.5px var(--ink); }
+    .searchbox kbd {
+      position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+      min-width: 18px; height: 18px; padding: 0 4px; display: grid; place-items: center;
+      font: 500 10.5px/1 var(--font-mono); color: var(--text-faint);
+      border-radius: 4px; box-shadow: 0 0 0 1px var(--line2);
+    }
+
+    .top-actions { display: flex; gap: 6px; }
+    .action-btn {
+      height: 28px; padding: 0 10px; display: inline-flex; align-items: center; gap: 6px;
+      border: 0; border-radius: 6px; background: var(--bg); box-shadow: 0 0 0 1px var(--line);
+      font: 500 12.5px/1 var(--font-ui); color: var(--text-muted); letter-spacing: -.1px;
+      transition: background .1s, color .1s, box-shadow .1s;
+    }
+    .action-btn:hover { background: var(--hover); }
+    .action-btn.on { background: var(--ink); color: var(--on-ink); box-shadow: none; }
+    .action-btn .glyph { font-size: 12px; line-height: 1; }
+
+    /* ---------- chips ---------- */
+    .chip-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 14px 20px 2px; }
+    .chip-row .sep { width: 1px; height: 16px; background: var(--line2); margin: 0 6px; flex: none; }
+    .chip {
+      height: 26px; padding: 0 11px; border: 0; border-radius: 9999px;
+      display: inline-flex; align-items: center; gap: 5px;
+      background: var(--bg); box-shadow: 0 0 0 1px var(--line);
+      font: 500 12.5px/1 var(--font-ui); color: var(--text-muted); letter-spacing: -.1px;
+      transition: background .1s, color .1s, box-shadow .1s;
+      user-select: none;
+    }
+    .chip:hover { background: var(--hover); }
+    .chip.active { background: var(--ink); color: var(--on-ink); box-shadow: none; }
+    .chip.nested { margin-left: 4px; padding-left: 9px; }
+    .chip .em { font-size: 11px; line-height: 1; }
+    .chip.drag-over { background: var(--drop-over); color: var(--on-drop); box-shadow: none; }
+    .chip-add {
+      height: 26px; padding: 0 11px; border: 1px dashed var(--dashed); border-radius: 9999px;
+      display: inline-flex; align-items: center; gap: 5px;
+      background: transparent; font: 500 12.5px/1 var(--font-ui); color: var(--text-muted); letter-spacing: -.1px;
+      transition: background .1s, border-color .1s; white-space: nowrap;
+    }
+    .chip-add:hover { background: var(--hover); border-color: var(--dashed-hover); }
+    .chip-actions { display: flex; gap: 1px; opacity: 0; transition: opacity 0.15s; }
+    .chip:hover .chip-actions { opacity: 1; }
+    .chip-icon-btn {
+      width: 14px; height: 14px; border: none; background: rgba(127, 127, 127, 0.15);
+      border-radius: 50%; cursor: pointer; font-size: 8px; display: flex;
       align-items: center; justify-content: center; color: inherit; line-height: 1;
     }
-    .chip-icon-btn:hover { background: rgba(0,0,0,0.2); }
+    .chip-icon-btn:hover { background: rgba(127, 127, 127, 0.3); }
 
-    .add-folder-btn { 
-      padding: 4px 10px; border-radius: 16px; font-size: 11px; cursor: pointer; 
-      background: var(--chip); color: var(--text-soft); border: 1px dashed var(--dashed); transition: all 0.15s;
-      font-family: inherit; display: flex; align-items: center; gap: 4px; white-space: nowrap;
+    /* ---------- meta row ---------- */
+    .main { padding: 0 20px; flex: 1; overflow-y: auto; }
+    .metarow { display: flex; align-items: baseline; justify-content: space-between; padding: 16px 0 12px; }
+    .metatitle { font-size: 15px; font-weight: 600; letter-spacing: -.2px; display: flex; align-items: baseline; gap: 8px; }
+    .metatitle .n { font: 500 11px/1 var(--font-mono); color: var(--text-faint); letter-spacing: 0; }
+
+    /* ---------- grid ---------- */
+    .tabs-list {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--card-min), 1fr));
+      gap: var(--card-gap); max-width: none; width: 100%; padding-bottom: 110px;
     }
-    .add-folder-btn:hover { background: var(--chip-hover); border-color: var(--dashed-hover); }
-
-    /* Вложенные папки — отступ */
-    .folder-chip.nested { margin-left: 10px; }
-    .folder-dd-item.nested { padding-left: 26px; }
-
-    /* Теги */
-    .tags-bar { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; min-height: 20px; }
-
-    .tag-chip {
-      padding: 3px 10px; border-radius: 16px; font-size: 11px; cursor: pointer;
-      background: var(--chip); color: var(--text-soft); user-select: none; transition: all 0.15s;
-      display: flex; align-items: center; gap: 5px; border: none; font-family: inherit;
+    .tab-card {
+      position: relative; border-radius: var(--card-radius); background: var(--surface);
+      box-shadow: 0 0 0 1px var(--line);
+      transition: box-shadow .12s, transform .12s;
+      cursor: pointer; display: flex; flex-direction: column; overflow: hidden;
     }
-    .tag-chip:hover { background: var(--chip-hover); }
-    .tag-chip.active { background: var(--accent); color: var(--on-accent); }
-    .tag-chip.active:hover { background: var(--accent-hover); }
-    .tag-chip .chip-actions { display: flex; gap: 1px; opacity: 0; transition: opacity 0.15s; }
-    .tag-chip:hover .chip-actions { opacity: 1; }
-
-    .add-tag-btn {
-      padding: 3px 10px; border-radius: 16px; font-size: 11px; cursor: pointer;
-      background: var(--chip); color: var(--text-soft); border: 1px dashed var(--dashed); transition: all 0.15s;
-      font-family: inherit; display: flex; align-items: center; gap: 4px; white-space: nowrap;
-    }
-    .add-tag-btn:hover { background: var(--chip-hover); border-color: var(--dashed-hover); }
-
-    /* Цветные точки тегов (data-color="1..6" → --tag-N) */
-    .tag-dot, .card-tag-dot {
-      display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
-      background: var(--tag-1);
-    }
-    .tag-dot[data-color="2"], .card-tag-dot[data-color="2"] { background: var(--tag-2); }
-    .tag-dot[data-color="3"], .card-tag-dot[data-color="3"] { background: var(--tag-3); }
-    .tag-dot[data-color="4"], .card-tag-dot[data-color="4"] { background: var(--tag-4); }
-    .tag-dot[data-color="5"], .card-tag-dot[data-color="5"] { background: var(--tag-5); }
-    .tag-dot[data-color="6"], .card-tag-dot[data-color="6"] { background: var(--tag-6); }
-    .card-tags { display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0; }
-
-    /* Сессии */
-    .sessions-bar { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; min-height: 20px; }
-
-    .session-chip {
-      padding: 3px 10px; border-radius: 16px; font-size: 11px; cursor: pointer;
-      background: var(--chip); color: var(--text-soft); user-select: none; transition: all 0.15s;
-      display: flex; align-items: center; gap: 5px; border: none; font-family: inherit;
-    }
-    .session-chip:hover { background: var(--chip-hover); }
-    .session-chip.active { background: var(--accent); color: var(--on-accent); }
-    .session-chip.active:hover { background: var(--accent-hover); }
-    .session-chip .chip-actions { display: flex; gap: 1px; opacity: 0; transition: opacity 0.15s; }
-    .session-chip:hover .chip-actions { opacity: 1; }
-    .session-chip.active .chip-actions { color: var(--on-accent); }
-
-    .add-session-btn {
-      padding: 3px 10px; border-radius: 16px; font-size: 11px; cursor: pointer;
-      background: var(--chip); color: var(--text-soft); border: 1px dashed var(--dashed); transition: all 0.15s;
-      font-family: inherit; display: flex; align-items: center; gap: 4px; white-space: nowrap;
-    }
-    .add-session-btn:hover { background: var(--chip-hover); border-color: var(--dashed-hover); }
-
-    /* Архив закрытых: приглушённая карточка */
-    .tab-card.archived { opacity: var(--archived-opacity); }
-    .tab-card.archived:hover { opacity: 1; }
-    .icon-btn.unarchive { color: var(--accent); }
-
-    /* Палитра в модалке тегов */
-    .tag-color-palette { display: flex; gap: 8px; margin-bottom: 12px; }
-    .tag-swatch {
-      width: 20px; height: 20px; border-radius: 50%; cursor: pointer;
-      border: 2px solid var(--border); padding: 0;
-      background: var(--tag-1);
-    }
-    .tag-swatch[data-color="2"] { background: var(--tag-2); }
-    .tag-swatch[data-color="3"] { background: var(--tag-3); }
-    .tag-swatch[data-color="4"] { background: var(--tag-4); }
-    .tag-swatch[data-color="5"] { background: var(--tag-5); }
-    .tag-swatch[data-color="6"] { background: var(--tag-6); }
-    .tag-swatch.selected { border-color: var(--text); transform: scale(1.1); }
-
-    /* Дропдаун тегов (чекбоксы) */
-    .tag-dd-item {
-      padding: 6px 10px; font-size: 11px; cursor: pointer; color: var(--text);
-      display: flex; align-items: center; gap: 6px; white-space: nowrap; overflow: hidden;
-    }
-    .tag-dd-item:hover { background: var(--bg); }
-    .tag-dd-item input[type="checkbox"] { width: 12px; height: 12px; accent-color: var(--accent); cursor: pointer; }
-
-    /* Поиск */
-    .search-box { margin-bottom: 8px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 4px; font-size: 12px; width: 100%; outline: none; background: var(--surface); }
-    .search-box:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-ring); }
-
-    /* Карточки */
-    .empty-state { text-align: center; padding: 60px 20px; color: var(--text-muted); font-size: 13px; }
-    .no-results { text-align: center; padding: 30px; color: var(--text-faint); font-size: 12px; display: none; }
-
-    .tabs-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--card-min), 1fr)); gap: var(--card-gap); max-width: none; width: 100%; }
-
-    .tab-card { background: var(--surface); border-radius: 4px; box-shadow: var(--shadow-sm); overflow: hidden; transition: transform 0.15s, box-shadow 0.15s; display: flex; flex-direction: column; cursor: pointer; }
-    .tab-card:hover { box-shadow: var(--shadow-md); transform: translateY(-1px); }
+    .tab-card:hover { box-shadow: 0 0 0 1px var(--line), var(--shadow-hover); transform: translateY(-1px); }
     .tab-card.dragging { opacity: 0.4; }
-    .folder-chip.drag-over { background: var(--drop-over); color: var(--on-accent); }
-    .tab-card.selected { outline: 2px solid var(--accent); outline-offset: -1px; }
-    .tab-card.kbd-active { outline: 2px solid var(--kbd); outline-offset: -1px; }
-    .tab-card.kbd-active.selected { outline: 2px solid var(--kbd); outline-offset: -1px; box-shadow: inset 0 0 0 2px var(--accent); }
-
-    /* Выбор вкладок */
-    .tab-select { width: 14px; height: 14px; flex-shrink: 0; cursor: pointer; accent-color: var(--accent); }
-    .search-row { display: flex; gap: 6px; margin-bottom: 8px; }
-    .search-row .search-box { margin-bottom: 0; }
-    .selection-bar { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; box-shadow: var(--shadow-lg); padding: 8px 12px; display: flex; align-items: center; gap: 8px; z-index: 500; font-size: 12px; }
-    .selection-bar.hidden { display: none; }
-    .selection-count { color: var(--text-soft); }
-
-    .tab-header { padding: var(--card-header-padding); display: flex; align-items: center; user-select: none; gap: 4px; min-height: 32px; }
-    .tab-name { font-size: var(--card-name-size); font-weight: 500; color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.3; }
-    .tab-name-input { flex: 1; min-width: 0; font-size: var(--card-name-size); font-weight: 500; color: var(--text); font-family: inherit; padding: 1px 4px; border: 1px solid var(--accent); border-radius: 3px; outline: none; background: var(--accent-soft); }
-
-    .tab-actions { display: flex; gap: 2px; opacity: 0; transition: opacity 0.15s; align-items: center; }
-    .tab-card:hover .tab-actions { opacity: 1; }
-
-    /* Селектор папки на карточке */
-    .folder-select-btn { 
-      width: 18px; height: 18px; border: none; background: var(--surface-alt); border-radius: 3px; 
-      cursor: pointer; font-size: 9px; display: flex; align-items: center; justify-content: center;
-      color: var(--text-muted); position: relative;
+    /* Индикатор reorder: 2px линия на верхней/нижней кромке целевой карточки */
+    .tab-card.drop-before::before, .tab-card.drop-after::after {
+      content: ''; position: absolute; left: 0; right: 0; height: 2px; background: var(--ink); z-index: 2;
     }
-    .folder-select-btn:hover { background: var(--btn-hover); }
+    .tab-card.drop-before::before { top: 0; }
+    .tab-card.drop-after::after { bottom: 0; }
+    .tab-card.selected { box-shadow: 0 0 0 1.5px var(--ink); }
+    .tab-card.kbd-active { box-shadow: 0 0 0 1px var(--ink), 0 0 0 5px var(--kbd-ring); }
+    .tab-card.kbd-active.selected { box-shadow: 0 0 0 1.5px var(--ink), 0 0 0 5px var(--kbd-ring); }
+
+    /* Hover-контролы: чекбокс (слева) + ✕ (справа) — появляются на hover */
+    .tab-select, .tab-remove {
+      position: absolute; display: grid; place-items: center;
+      background: var(--surface); box-shadow: 0 0 0 1px var(--line);
+      opacity: 0; transition: opacity .12s, background .1s; z-index: 2;
+    }
+    .tab-select {
+      top: 6px; left: 6px; width: 16px; height: 16px; border-radius: 4px; border: 0; padding: 0; cursor: pointer;
+      appearance: none; -webkit-appearance: none; margin: 0;
+    }
+    .tab-select::after {
+      content: ''; width: 8px; height: 4px; border-left: 1.5px solid var(--on-ink); border-bottom: 1.5px solid var(--on-ink);
+      transform: rotate(-45deg) translateY(-1px); opacity: 0;
+    }
+    .tab-remove {
+      top: 5px; right: 5px; width: 19px; height: 19px; border-radius: 50%; border: 0; padding: 0;
+      font: 400 12px/1 var(--font-ui); color: var(--text-muted);
+    }
+    .tab-remove:hover { background: var(--hover); color: var(--text); }
+    .tab-card:hover .tab-select, .tab-card:hover .tab-remove,
+    .tab-card.selected .tab-select { opacity: 1; }
+    .tab-card.selected .tab-select { background: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
+    .tab-card.selected .tab-select::after { opacity: 1; }
+
+    .cbody { padding: 8px 10px 9px; }
+    .cname { display: flex; align-items: center; gap: 5px; }
+    .cname img { width: 13px; height: 13px; border-radius: 3px; flex: none; }
+    /* Фавикон вкладки — перед именем */
+    .tab-favicon {
+      width: 15px; height: 15px; flex: none; object-fit: contain;
+      border-radius: 3px; box-shadow: 0 0 0 1px var(--line); background: var(--surface);
+    }
+    /* Буквенный fallback (нет фавикона / он не загрузился) — монохромная плитка */
+    .tab-favicon-fallback {
+      width: 15px; height: 15px; flex: none; display: grid; place-items: center;
+      font: 500 9px/1 var(--font-mono); color: var(--text-muted);
+      background: var(--hover); border-radius: 3px; box-shadow: 0 0 0 1px var(--line);
+      user-select: none;
+    }
+    .tab-name {
+      font-size: var(--card-name-size); font-weight: 500; letter-spacing: -.1px;
+      color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0;
+    }
+    .tab-name-input {
+      flex: 1; min-width: 0; font-size: var(--card-name-size); font-weight: 500; color: var(--text);
+      font-family: var(--font-ui); padding: 1px 4px; border: 0; border-radius: 4px;
+      box-shadow: 0 0 0 1.5px var(--ink); outline: none; background: var(--surface-soft);
+    }
+    .tab-url {
+      margin-top: 3px; padding: 0 2px;
+      font: 400 var(--card-url-size)/1.4 var(--font-mono); color: var(--text-faint);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    /* Кнопка-дропдаун папки на карточке (видна на hover) */
+    .folder-select-btn {
+      position: absolute; bottom: 6px; right: 6px; z-index: 2;
+      width: 22px; height: 22px; border: 0; border-radius: 5px; padding: 0;
+      background: var(--surface); box-shadow: 0 0 0 1px var(--line);
+      font-size: 11px; display: flex; align-items: center; justify-content: center;
+      color: var(--text-muted); opacity: 0; transition: opacity .12s, background .1s;
+    }
+    .tab-card:hover .folder-select-btn { opacity: 1; }
+    .folder-select-btn:hover { background: var(--hover); }
 
     /* Дропдаун папок */
-    .folder-dropdown { 
-      display: none; position: absolute; top: 100%; right: 0; z-index: 100; 
-      background: var(--surface); border: 1px solid var(--border); border-radius: 4px; box-shadow: var(--shadow-pop);
-      min-width: 140px; max-height: 200px; overflow-y: auto; padding: 2px 0;
+    .folder-dropdown {
+      display: none; position: absolute; top: 100%; right: 0; z-index: 100;
+      background: var(--surface); border-radius: 6px; box-shadow: 0 0 0 1px var(--line), var(--shadow-pop);
+      min-width: 150px; max-height: 220px; overflow-y: auto; padding: 2px 0;
     }
     .folder-dropdown.open { display: block; }
-    
-    .folder-dd-item { 
-      padding: 6px 10px; font-size: 11px; cursor: pointer; color: var(--text); 
+    .folder-dd-item {
+      padding: 6px 10px; font-size: 12px; cursor: pointer; color: var(--text);
       display: flex; align-items: center; gap: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
-    .folder-dd-item:hover { background: var(--bg); }
+    .folder-dd-item:hover { background: var(--hover); }
     .folder-dd-item.all-folder { color: var(--text-muted); font-style: italic; }
+    .folder-dd-item.nested { padding-left: 24px; }
 
-    .icon-btn { width: 18px; height: 18px; border: none; background: var(--surface-alt); border-radius: 3px; cursor: pointer; font-size: 10px; display: flex; align-items: center; justify-content: center; }
-    .icon-btn:hover { background: var(--btn-hover); }
-    .icon-btn.delete { color: var(--danger); }
+    /* ---------- states ---------- */
+    .empty-state { padding: 60px 0; text-align: center; color: var(--text-muted); font-size: 14px; }
+    .empty-state span { display: block; margin-top: 6px; font-size: 12.5px; color: var(--text-faint); }
+    .no-results { display: none; padding: 60px 0; text-align: center; color: var(--text-muted); font-size: 14px; }
+    .no-results span { display: block; margin-top: 6px; font-size: 12.5px; color: var(--text-faint); }
+    .no-results button, .empty-state button {
+      margin-top: 14px; height: 28px; padding: 0 12px; border: 0; border-radius: 6px;
+      background: var(--ink); color: var(--on-ink); font: 500 12.5px/1 var(--font-ui);
+    }
+    .no-results button:hover, .empty-state button:hover { opacity: .88; }
 
-    .tab-url { padding: var(--card-url-padding); font-size: var(--card-url-size); color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 0; min-height: 12px; height: 14px; }
+    /* ---------- selection bar ---------- */
+    .selection-bar {
+      position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 60;
+      display: flex; align-items: center; gap: 10px;
+      background: var(--surface); border-radius: 8px; padding: 8px 10px;
+      box-shadow: 0 0 0 1px var(--line), var(--shadow-lg);
+      transition: opacity .16s, transform .16s; font-size: 13px;
+    }
+    .selection-bar.hidden { opacity: 0; transform: translateX(-50%) translateY(14px); pointer-events: none; }
+    .selection-count { font-weight: 500; letter-spacing: -.1px; padding: 0 2px 0 4px; white-space: nowrap; }
+    .seldiv { width: 1px; height: 18px; background: var(--line2); }
+    .btn { height: 28px; padding: 0 12px; border: 0; border-radius: 6px; font: 500 12.5px/1 var(--font-ui); letter-spacing: -.1px; transition: background .1s, opacity .1s; }
+    .btn-ink { background: var(--ink); color: var(--on-ink); }
+    .btn-ink:hover { background: var(--ink); opacity: .88; }
+    .btn-ghost { background: var(--bg); color: var(--text-muted); box-shadow: 0 0 0 1px var(--line); }
+    .btn-ghost:hover { background: var(--hover); }
 
-    /* Скриншот-миниатюра на карточке (top, over the name) */
-    .tab-screenshot { width: 100%; height: var(--card-thumb-height); object-fit: cover; border-bottom: 1px solid var(--border-soft); display: block; flex-shrink: 0; }
-
-    /* Хедер действия */
-    .header-actions { display: flex; gap: 6px; }
-    .action-btn { padding: 4px 10px; border: 1px solid var(--border); background: var(--surface); border-radius: 4px; cursor: pointer; font-size: 11px; color: var(--text-soft); transition: background 0.15s, border-color 0.15s; }
-    .action-btn:hover { background: var(--bg); border-color: var(--dashed); }
-
-    /* Модальное окно для создания папки */
-    .modal-overlay { 
-      display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; 
+    /* ---------- modal ---------- */
+    .modal-overlay {
+      display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
       background: var(--overlay); z-index: 1000; align-items: center; justify-content: center;
     }
     .modal-overlay.open { display: flex; }
-    
-    .modal { 
+    .modal {
       background: var(--surface); border-radius: 8px; padding: 20px; min-width: 280px;
-      box-shadow: var(--shadow-xl);
+      box-shadow: 0 0 0 1px var(--line), var(--shadow-xl);
     }
-    .modal h3 { font-size: 14px; margin-bottom: 12px; color: var(--text); }
-    .modal input[type="text"] { 
-      width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 4px; 
-      font-size: 12px; outline: none; margin-bottom: 12px; background: var(--surface);
+    .modal h3 { font-size: 14px; font-weight: 600; margin-bottom: 12px; color: var(--text); }
+    .modal input[type="text"] {
+      width: 100%; padding: 8px 10px; border: 0; border-radius: 6px;
+      box-shadow: 0 0 0 1px var(--line);
+      font: 400 13px/1.4 var(--font-ui); color: var(--text);
+      outline: none; margin-bottom: 12px; background: var(--bg);
     }
-    .modal input[type="text"]:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-ring); }
+    .modal input[type="text"]:focus { box-shadow: 0 0 0 1.5px var(--ink); }
     .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
-    .modal-btn { 
-      padding: 6px 14px; border-radius: 4px; font-size: 12px; cursor: pointer; 
-      border: 1px solid var(--border); background: var(--surface); color: var(--text-soft);
-    }
-    .modal-btn:hover { background: var(--bg); }
-    .modal-btn.primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent-hover); }
-    .modal-btn.primary:hover { background: var(--accent-hover); }
+    .modal-btn { height: 28px; padding: 0 14px; border: 0; border-radius: 6px; font: 500 12.5px/1 var(--font-ui); letter-spacing: -.1px; cursor: pointer; transition: background .1s, opacity .1s; }
+    .modal-btn.ghost { background: var(--bg); color: var(--text-muted); box-shadow: 0 0 0 1px var(--line); }
+    .modal-btn.ghost:hover { background: var(--hover); }
+    .modal-btn.primary { background: var(--ink); color: var(--on-ink); }
+    .modal-btn.primary:hover { opacity: .88; }
 
-    /* Компактный режим карточек: переопределение токенов размеров (theme.css) */
-    body.compact-cards {
-      --card-min: 84px;
-      --card-gap: 6px;
-      --card-header-padding: 5px 7px;
-      --card-url-padding: 0 7px;
-      --card-name-size: 10px;
-      --card-url-size: 8px;
-      --card-thumb-height: 52px;
+    @media (max-width: 760px) {
+      .searchbox { position: static; transform: none; width: auto; flex: 1; margin: 0 12px; max-width: none; }
+      .header { height: auto; padding: 10px 16px; flex-wrap: wrap; gap: 8px; }
+      .top-actions { width: 100%; justify-content: flex-end; }
     }
-
   </style>
 </head>
 <body>
-  <div class="header">
-    <h1>BlattamToby — Ctrl+T или + для новой вкладки</h1>
-    <div class="header-actions">
-      <button class="action-btn" id="size-btn" title="Компактные карточки">▦ Крупные</button>
-      <button class="action-btn" id="theme-btn" title="Переключить тёмную/светлую тему">🌙</button>
-      <button class="action-btn" id="select-btn" title="Выбрать все видимые">☑ Выбрать</button>
-      <button class="action-btn" id="export-btn">↓ Экспорт</button>
-      <button class="action-btn" id="import-btn">↑ Импорт</button>
+  <header class="header">
+    <div class="wordmark">Toby</div>
+    <div class="searchbox">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input type="text" class="search-box" placeholder="Поиск во вкладках…" id="search" autocomplete="off" spellcheck="false">
+      <kbd>/</kbd>
+    </div>
+    <div class="top-actions">
+      <button class="action-btn" id="select-btn" title="Выбрать все видимые"><span class="glyph">☑</span>Выбрать</button>
+      <button class="action-btn" id="theme-btn" title="Переключить тёмную/светлую тему"><span class="glyph">🌙</span></button>
+      <button class="action-btn" id="export-btn" title="Экспортировать JSON">↓ Экспорт</button>
+      <button class="action-btn" id="import-btn" title="Импортировать JSON">↑ Импорт</button>
       <input type="file" id="import-input" accept=".json" style="display:none;">
     </div>
-  </div>
+  </header>
 
-  <div class="container">
-    <!-- Папки (+ архив и рекомендации) -->
-    <div class="folders-bar" id="folders-bar">
-      <button class="folder-chip active" data-folder-id="">Все</button>
-      <button class="folder-chip special" id="archive-chip" title="Показать только архив закрытых вкладок">🗄 Архив</button>
-      <button class="folder-chip special" id="frequent-chip" title="Часто открываемые (top-20 по числу открытий, минимум 2)">⭐ Частые</button>
-      <button class="folder-chip special" id="favorites-chip" title="Избранные (самые недавно открываемые за 7 дней, top-10)">🕘 Избранные</button>
-      <button class="add-folder-btn" id="add-folder-btn">+ Папка</button>
+  <div class="main">
+    <!-- Папки -->
+    <nav class="chip-row" id="folders-bar">
+      <button class="chip folder-chip active" data-folder-id="">Все</button>
+      <button class="chip-add" id="add-folder-btn">+ Папка</button>
+    </nav>
+
+    <!-- Meta -->
+    <div class="metarow">
+      <div class="metatitle"><span id="meta-label">Все вкладки</span><span class="n" id="meta-count">0</span></div>
     </div>
 
-    <!-- Теги -->
-    <div class="tags-bar" id="tags-bar">
-      <button class="add-tag-btn" id="add-tag-btn">+ Тег</button>
+    <!-- States -->
+    <div id="empty-state" class="empty-state" style="display:none;">
+      Нет сохранённых вкладок
+      <span>Сохраните вкладку через popup или Ctrl+Shift+S</span>
+    </div>
+    <div id="no-results" class="no-results">
+      Ничего не найдено
+      <span>Попробуйте изменить запрос или сбросить фильтры</span>
+      <button id="btn-reset-filters">Сбросить фильтры</button>
     </div>
 
-    <!-- Сессии -->
-    <div class="sessions-bar" id="sessions-bar">
-      <button class="add-session-btn" id="add-session-btn">📋 + Сессия</button>
-    </div>
-
-    <!-- Поиск -->
-    <div class="search-row">
-      <input type="text" class="search-box" placeholder="Поиск по вкладкам..." id="search">
-    </div>
-
-    <!-- Состояния -->
-    <div id="empty-state" class="empty-state" style="display:none;">Нет сохранённых вкладок</div>
-    <div id="no-results" class="no-results">Ничего не найдено</div>
-
-    <!-- Карточки -->
+    <!-- Cards -->
     <div id="tabs-list" class="tabs-list"></div>
   </div>
 
-  <!-- Панель выбора -->
+  <!-- Selection bar -->
   <div id="selection-bar" class="selection-bar hidden">
     <span id="selection-count" class="selection-count">0 выбрано</span>
-    <button id="open-selected-btn" class="action-btn primary">Открыть</button>
-    <button id="clear-selection-btn" class="action-btn">Сбросить</button>
+    <i class="seldiv"></i>
+    <button id="open-selected-btn" class="btn btn-ink">Открыть</button>
+    <button id="clear-selection-btn" class="btn btn-ghost">Сбросить</button>
   </div>
 
-  <!-- Модалка: создать/переименовать папку -->
+  <!-- Modal: create/rename folder -->
   <div class="modal-overlay" id="folder-modal">
     <div class="modal">
       <h3 id="modal-title">Новая папка</h3>
       <input type="text" id="folder-name-input" placeholder="Название..." autocomplete="off">
       <div class="modal-actions">
-        <button class="modal-btn" id="modal-cancel">Отмена</button>
+        <button class="modal-btn ghost" id="modal-cancel">Отмена</button>
         <button class="modal-btn primary" id="modal-confirm">OK</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Модалка: создать тег -->
-  <div class="modal-overlay" id="tag-modal">
-    <div class="modal">
-      <h3>Новый тег</h3>
-      <input type="text" id="tag-name-input" placeholder="Название..." autocomplete="off">
-      <div class="tag-color-palette" id="tag-color-palette"></div>
-      <div class="modal-actions">
-        <button class="modal-btn" id="tag-modal-cancel">Отмена</button>
-        <button class="modal-btn primary" id="tag-modal-confirm">OK</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Модалка: создать сессию -->
-  <div class="modal-overlay" id="session-modal">
-    <div class="modal">
-      <h3>Новая сессия</h3>
-      <input type="text" id="session-name-input" placeholder="Название (или оставьте пустым)..." autocomplete="off">
-      <div class="modal-actions">
-        <button class="modal-btn" id="session-modal-cancel">Отмена</button>
-        <button class="modal-btn primary" id="session-modal-confirm">OK</button>
       </div>
     </div>
   </div>

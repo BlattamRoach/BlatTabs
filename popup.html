@@ -2,68 +2,82 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="theme.css">
   <style>
-    body { width: 260px; font-family: system-ui, sans-serif; padding: 14px; }
+    body { width: 260px; font-family: var(--font-ui); padding: 14px; background: var(--bg); color: var(--text); }
+    button { font-family: inherit; cursor: pointer; }
 
-    label { display: block; font-size: 11px; color: var(--text-soft); margin-bottom: 4px; }
-
-    select { 
-      width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; 
-      font-size: 12px; background: var(--surface); cursor: pointer; margin-bottom: 8px; outline: none;
+    .save-btn {
+      width: 100%; padding: 9px; border: 0; border-radius: 6px; cursor: pointer;
+      font: 500 13px/1 var(--font-ui); letter-spacing: -.1px;
+      background: var(--ink); color: var(--on-ink); margin-bottom: 10px;
+      transition: opacity .1s;
     }
-    select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-ring); }
+    .save-btn:hover { opacity: .88; }
 
-    .save-btn { width: 100%; padding: 10px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; background: var(--accent); color: var(--on-accent); margin-bottom: 8px; }
-    .save-btn:hover { background: var(--accent-hover); }
+    label { display: block; font-size: 11px; color: var(--text-muted); margin-bottom: 4px; }
 
-    .saved-msg { width: 100%; text-align: center; font-size: 12px; color: var(--success); min-height: 18px; opacity: 0; transition: opacity 0.3s; }
+    select {
+      width: 100%; padding: 7px 8px; border: 0; border-radius: 6px;
+      font: 400 12.5px/1.2 var(--font-ui); background: var(--bg); cursor: pointer;
+      box-shadow: 0 0 0 1px var(--line); margin-bottom: 8px; outline: none;
+      transition: box-shadow .12s;
+    }
+    select:focus { box-shadow: 0 0 0 1.5px var(--ink); }
+
+    .saved-msg { width: 100%; text-align: center; font-size: 12px; color: var(--text-muted); min-height: 18px; opacity: 0; transition: opacity 0.3s; }
     .saved-msg.show { opacity: 1; }
 
-    .add-folder-btn { 
-      width: 100%; padding: 6px; border: 1px dashed var(--dashed-soft); background: var(--surface-soft); 
-      border-radius: 4px; cursor: pointer; font-size: 11px; color: var(--text-muted); margin-bottom: 8px;
+    .add-folder-btn {
+      width: 100%; padding: 7px; border: 1px dashed var(--dashed-soft); background: transparent;
+      border-radius: 6px; cursor: pointer; font: 500 11.5px/1 var(--font-ui); color: var(--text-muted); margin-bottom: 8px;
+      transition: background .1s, border-color .1s;
     }
-    .add-folder-btn:hover { background: var(--btn-soft); border-color: var(--dashed-hover); }
+    .add-folder-btn:hover { background: var(--hover); border-color: var(--dashed-hover); }
 
     /* Модалка */
-    .modal-overlay { 
-      display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; 
+    .modal-overlay {
+      display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
       background: var(--overlay); z-index: 1000; align-items: center; justify-content: center;
     }
     .modal-overlay.open { display: flex; }
-    
-    .modal { 
-      background: var(--surface); border-radius: 8px; padding: 16px; min-width: 240px;
-      box-shadow: var(--shadow-xl);
-    }
-    .modal h3 { font-size: 13px; margin-bottom: 10px; color: var(--text); }
-    .modal input[type="text"] { 
-      width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; 
-      font-size: 12px; outline: none; margin-bottom: 10px; background: var(--surface);
-    }
-    .modal input[type="text"]:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-ring); }
-    .modal-actions { display: flex; gap: 6px; justify-content: flex-end; }
-    .modal-btn { 
-      padding: 5px 12px; border-radius: 4px; font-size: 11px; cursor: pointer; 
-      border: 1px solid var(--border); background: var(--surface); color: var(--text-soft);
-    }
-    .modal-btn:hover { background: var(--bg); }
-    .modal-btn.primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent-hover); }
-    .modal-btn.primary:hover { background: var(--accent-hover); }
 
+    .modal {
+      background: var(--surface); border-radius: 8px; padding: 16px; min-width: 240px;
+      box-shadow: 0 0 0 1px var(--line), var(--shadow-xl);
+    }
+    .modal h3 { font-size: 13px; font-weight: 600; margin-bottom: 10px; color: var(--text); }
+    .modal input[type="text"] {
+      width: 100%; padding: 8px 10px; border: 0; border-radius: 6px;
+      box-shadow: 0 0 0 1px var(--line);
+      font: 400 12.5px/1.4 var(--font-ui); color: var(--text); outline: none;
+      margin-bottom: 10px; background: var(--bg);
+    }
+    .modal input[type="text"]:focus { box-shadow: 0 0 0 1.5px var(--ink); }
+    .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+    .modal-btn {
+      height: 28px; padding: 0 14px; border-radius: 6px; font: 500 12.5px/1 var(--font-ui); cursor: pointer;
+      border: 0; box-shadow: 0 0 0 1px var(--line); background: var(--bg); color: var(--text-muted);
+      transition: background .1s, opacity .1s;
+    }
+    .modal-btn:hover { background: var(--hover); }
+    .modal-btn.primary { background: var(--ink); color: var(--on-ink); box-shadow: none; }
+    .modal-btn.primary:hover { opacity: .88; }
   </style>
 </head>
 <body>
-  <button class="save-btn" id="save-current-tab">💾 Сохранить вкладку</button>
-  
-  <label for="folder-select">📁 Папка:</label>
+  <button class="save-btn" id="save-current-tab">Сохранить вкладку</button>
+
+  <label for="folder-select">Папка:</label>
   <select id="folder-select">
     <option value="">Все (без папки)</option>
   </select>
 
   <button class="add-folder-btn" id="popup-add-folder">+ Новая папка</button>
-  
+
   <div class="saved-msg" id="saved-msg">✓ Вкладка сохранена!</div>
 
   <!-- Модалка: создать папку -->
