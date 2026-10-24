@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Toby — сохранённые вкладки</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,500;8..60,600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#f7f5f2;            /* warm paper */
+    --surface:#ffffff;
+    --border:rgba(0,0,0,.08);
+    --border-soft:rgba(0,0,0,.05);
+    --text:#37352f;
+    --muted:#9b978f;
+    --muted-2:#615d59;
+    --accent:#2383e2;
+    --accent-soft:rgba(35,131,226,.12);
+    --chip-active:#37352f;
+    --radius:10px;
+    --shadow-card:rgba(0,0,0,.04) 0 4px 18px, rgba(0,0,0,.027) 0 2px 8px, rgba(0,0,0,.02) 0 .8px 3px;
+    --shadow-lift:rgba(0,0,0,.06) 0 10px 28px, rgba(0,0,0,.035) 0 4px 12px, rgba(0,0,0,.02) 0 1px 3px;
+    --shadow-bar:rgba(0,0,0,.01) 0 1px 3px, rgba(0,0,0,.02) 0 3px 7px, rgba(0,0,0,.025) 0 8px 18px, rgba(0,0,0,.04) 0 16px 36px;
+    --sans:'Inter',-apple-system,system-ui,'Segoe UI',Roboto,sans-serif;
+    --serif:'Source Serif 4',Georgia,'Times New Roman',serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    background:var(--bg);
+    color:var(--text);
+    font-family:var(--sans);
+    font-size:14px;
+    -webkit-font-smoothing:antialiased;
+    padding-bottom:96px;
+  }
+  .wrap{max-width:1220px;margin:0 auto;padding:34px 32px 0}
+
+  /* ---------- header ---------- */
+  header{display:flex;align-items:flex-start;gap:28px}
+  .brand{flex:0 0 auto;padding-top:2px}
+  .brand h1{
+    font-family:var(--serif);
+    font-size:32px;font-weight:600;line-height:1.05;
+    letter-spacing:-.5px;color:var(--text);
+  }
+  .brand .sub{
+    margin-top:4px;font-size:12.5px;color:var(--muted);
+    letter-spacing:.2px;
+  }
+  .search{
+    flex:0 1 380px;position:relative;margin-top:12px;
+  }
+  .search input{
+    width:100%;height:38px;border-radius:9px;
+    border:1px solid var(--border);
+    background:var(--surface);
+    box-shadow:inset 0 1px 2px rgba(0,0,0,.035);
+    padding:0 14px 0 36px;font-size:13.5px;font-family:var(--sans);
+    color:var(--text);outline:none;
+    transition:border-color .15s, box-shadow .15s;
+  }
+  .search input::placeholder{color:var(--muted)}
+  .search input:focus{border-color:rgba(35,131,226,.45);box-shadow:inset 0 1px 2px rgba(0,0,0,.03), 0 0 0 3px var(--accent-soft)}
+  .search .ico{
+    position:absolute;left:12px;top:50%;transform:translateY(-50%);
+    color:var(--muted);font-size:13px;pointer-events:none;
+  }
+  .tools{margin-left:auto;display:flex;gap:6px;margin-top:10px}
+  .tool{
+    display:inline-flex;align-items:center;gap:6px;
+    height:32px;padding:0 12px;border-radius:8px;
+    border:1px solid transparent;background:transparent;
+    font-family:var(--sans);font-size:12.5px;font-weight:500;color:var(--muted-2);
+    cursor:pointer;transition:background .15s,color .15s;
+  }
+  .tool:hover{background:rgba(0,0,0,.04);color:var(--text)}
+  .tool .t-ico{font-size:13px;line-height:1}
+
+  /* ---------- chips ---------- */
+  .chips{margin-top:26px;display:flex;flex-direction:column;gap:9px}
+  .chip-row{display:flex;flex-wrap:wrap;align-items:center;gap:7px}
+  .chip{
+    display:inline-flex;align-items:center;gap:7px;
+    height:29px;padding:0 13px;border-radius:999px;
+    border:1px solid var(--border);
+    background:rgba(255,255,255,.6);
+    font-family:var(--sans);font-size:12.5px;font-weight:500;color:var(--muted-2);
+    cursor:pointer;transition:background .15s,color .15s,border-color .15s;
+    white-space:nowrap;
+  }
+  .chip:hover{background:#fff;color:var(--text)}
+  .chip.on{background:var(--chip-active);border-color:var(--chip-active);color:#f7f5f2}
+  .chip.on .dot{box-shadow:0 0 0 2px rgba(247,245,242,.35)}
+  .chip .c-ico{font-size:12px;line-height:1}
+  .sep{width:1px;height:16px;background:rgba(0,0,0,.1);margin:0 5px}
+  .dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto}
+  .t-red{background:#e03e3e}.t-blue{background:#2383e2}.t-green{background:#4ca64c}
+  .t-orange{background:#d9822b}.t-purple{background:#8a6fd1}
+
+  /* ---------- grid ---------- */
+  .grid{
+    margin-top:26px;
+    display:grid;
+    grid-template-columns:repeat(7,1fr);
+    gap:20px 18px;
+  }
+  .card{
+    position:relative;
+    background:var(--surface);
+    border:1px solid var(--border);
+    border-radius:var(--radius);
+    box-shadow:var(--shadow-card);
+    padding:8px 8px 10px;
+    cursor:pointer;
+    transition:transform .16s ease, box-shadow .16s ease, opacity .2s;
+    user-select:none;
+  }
+  .card:hover{transform:translateY(-2px);box-shadow:var(--shadow-lift)}
+  .card.hidden{display:none}
+  .card.kb-active{
+    border-color:rgba(35,131,226,.55);
+    box-shadow:0 0 0 2px var(--accent-soft), var(--shadow-lift);
+    transform:translateY(-3px);
+  }
+  .card.archived{opacity:.5;filter:saturate(.45)}
+  .card.checked{background:#fbfaf8}
+
+  /* fake screenshot — pure CSS */
+  .thumb{
+    position:relative;height:104px;border-radius:7px;overflow:hidden;
+    background:#fbfaf7;border:1px solid rgba(0,0,0,.05);
+  }
+  .thumb .tbar{height:20px;background:#e9e3d8;border-bottom:1px solid rgba(0,0,0,.05);display:flex;align-items:center;padding:0 8px;gap:4px}
+  .thumb .tbar .d{width:5px;height:5px;border-radius:50%;background:#cfc6b6}
+  .thumb .tbar .d:last-child{margin-left:auto}
+  .thumb .body{padding:9px 10px;display:flex;flex-direction:column;gap:6px}
+  .thumb .ln{height:5px;border-radius:3px;background:#d9d3c8}
+  .thumb .ln.head{height:7px;background:#c6bdb0;width:var(--w1,72%)}
+  .thumb .ln.r2{width:var(--w2,94%)}
+  .thumb .ln.r3{width:var(--w3,86%)}
+  .thumb .ln.r4{width:var(--w4,58%)}
+
+  /* hover controls */
+  .card .x,.card .chk{
+    position:absolute;top:13px;
+    width:22px;height:22px;border-radius:7px;
+    display:flex;align-items:center;justify-content:center;
+    font-size:11px;line-height:1;
+    opacity:0;transition:opacity .15s;
+    z-index:2;
+  }
+  .card .x{right:13px;background:rgba(255,255,255,.92);color:var(--muted-2);border:1px solid var(--border);box-shadow:var(--shadow-card)}
+  .card .x:hover{color:var(--text);background:#fff}
+  .card .chk{left:13px;background:rgba(255,255,255,.94);border:1px solid var(--border);box-shadow:var(--shadow-card);color:transparent;font-weight:600}
+  .card:hover .x,.card:hover .chk{opacity:1}
+  .card.checked .chk{
+    opacity:1;background:var(--accent);border-color:var(--accent);color:#fff;
+  }
+  .card.checked .x{opacity:.9}
+
+  .name{
+    margin-top:9px;font-size:13px;font-weight:500;line-height:1.32;
+    color:var(--text);
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  }
+  .url{
+    margin-top:3px;font-size:11.5px;color:var(--muted);
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  }
+  .dots{margin-top:7px;display:flex;gap:5px;align-items:center;min-height:8px}
+  .dots .dot{width:7px;height:7px}
+
+  /* ---------- floating selection bar ---------- */
+  .bar{
+    position:fixed;left:50%;bottom:26px;transform:translateX(-50%);
+    display:flex;align-items:center;gap:14px;
+    background:var(--surface);
+    border:1px solid var(--border);
+    border-radius:999px;
+    box-shadow:var(--shadow-bar);
+    padding:9px 10px 9px 20px;
+    z-index:10;
+    transition:opacity .2s, transform .2s;
+  }
+  .bar.hide{opacity:0;transform:translateX(-50%) translateY(10px);pointer-events:none}
+  .bar .count{font-size:13px;font-weight:600;color:var(--text);white-space:nowrap}
+  .bar .count em{font-style:normal;color:var(--muted);font-weight:400}
+  .bar .sep2{width:1px;height:18px;background:rgba(0,0,0,.08)}
+  .bar button{
+    border:none;background:transparent;cursor:pointer;
+    font-family:var(--sans);font-size:12.5px;font-weight:600;
+    height:32px;padding:0 13px;border-radius:999px;
+    transition:background .15s;
+  }
+  .bar .open{background:var(--text);color:#f7f5f2}
+  .bar .open:hover{background:#000}
+  .bar .reset{color:var(--muted-2)}
+  .bar .reset:hover{background:rgba(0,0,0,.05);color:var(--text)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="brand">
+      <h1>Toby</h1>
+      <div class="sub">сохранённые вкладки</div>
+    </div>
+    <div class="search">
+      <span class="ico">⌕</span>
+      <input id="q" type="text" placeholder="Поиск по вкладкам…" autocomplete="off">
+    </div>
+    <div class="tools">
+      <button class="tool"><span class="t-ico">☑</span>Выбрать</button>
+      <button class="tool"><span class="t-ico">▦</span>Размер</button>
+      <button class="tool"><span class="t-ico">🌙</span></button>
+    </div>
+  </header>
+
+  <div class="chips">
+    <div class="chip-row" id="rowFolders">
+      <button class="chip folder on" data-folder="all">Все</button>
+      <button class="chip folder" data-folder="work">Работа</button>
+      <button class="chip folder" data-folder="home">Дома</button>
+      <button class="chip folder" data-folder="projects">↳ Проекты</button>
+      <span class="sep"></span>
+      <button class="chip special" data-special="archived"><span class="c-ico">🗄</span>Архив</button>
+      <button class="chip special" data-special="frequent"><span class="c-ico">⭐</span>Частые</button>
+      <button class="chip special" data-special="favorite"><span class="c-ico">🕘</span>Избранные</button>
+    </div>
+    <div class="chip-row" id="rowTags">
+      <button class="chip tag" data-tag="docs"><span class="dot t-blue"></span>Документация</button>
+      <button class="chip tag" data-tag="work"><span class="dot t-orange"></span>Рабочее</button>
+      <button class="chip tag" data-tag="personal"><span class="dot t-green"></span>Личное</button>
+      <button class="chip tag" data-tag="design"><span class="dot t-purple"></span>Дизайн</button>
+      <button class="chip tag" data-tag="news"><span class="dot t-red"></span>Новости</button>
+      <span class="sep"></span>
+      <button class="chip session" data-session="s1"><span class="c-ico">📋</span>Сессия 21.10</button>
+      <button class="chip session" data-session="s2"><span class="c-ico">📋</span>Работа</button>
+    </div>
+  </div>
+
+  <div class="grid" id="grid"></div>
+</div>
+
+<div class="bar" id="bar">
+  <span class="count" id="barCount">3 выбрано</span>
+  <span class="sep2"></span>
+  <button class="open" id="barOpen">Открыть</button>
+  <button class="reset" id="barReset">Сбросить</button>
+</div>
+
+<script>
+const CARDS = [
+  {title:"Документация — Python", url:"docs.python.org/3", tags:["docs","work"], folder:"work", session:"s2", freq:1, fav:1, w:[74,94,88,60], checked:false},
+  {title:"GitHub — BlattamRoach/BlattamToby", url:"github.com/BlattamRoach/BlattamToby", tags:["work","design"], folder:"projects", session:"s2", freq:1, w:[68,92,84,70], checked:true},
+  {title:"MDN Web Docs", url:"developer.mozilla.org", tags:["docs","work"], folder:"work", session:"s2", fav:1, w:[80,96,88,52]},
+  {title:"Figma — наработка", url:"figma.com", tags:["design","work"], folder:"projects", session:"s1", freq:1, w:[70,88,92,56], checked:true, kb:true},
+  {title:"Хабр", url:"habr.com", tags:["news","work"], folder:"home", session:"s1", freq:1, w:[76,94,80,64]},
+  {title:"Lenta.ru", url:"lenta.ru", tags:["news"], folder:"home", session:"s1", w:[82,92,86,48], checked:true},
+  {title:"YouTube", url:"youtube.com", tags:["personal"], folder:"home", session:"s1", freq:1, w:[70,90,84,58]},
+  {title:"Notion — заметки", url:"notion.so", tags:["personal","work"], folder:"home", session:"s2", fav:1, w:[78,94,88,62]},
+  {title:"Яндекс Карты", url:"yandex.ru/maps", tags:["personal"], folder:"home", session:"s1", w:[72,92,84,50]},
+  {title:"Golang — stdlib", url:"pkg.go.dev/std", tags:["docs","work"], folder:"work", session:"s2", w:[74,96,86,66], archived:true},
+  {title:"Figma Community", url:"figma.com/community", tags:["design"], folder:"home", session:"s2", w:[70,90,82,54]},
+  {title:"VK", url:"vk.com", tags:["personal"], folder:"home", session:"s1", freq:1, w:[78,94,88,60]},
+];
+const DOT = {docs:"t-blue", work:"t-orange", personal:"t-green", design:"t-purple", news:"t-red"};
+const grid = document.getElementById('grid');
+
+CARDS.forEach((c,i)=>{
+  const el = document.createElement('div');
+  el.className = 'card' + (c.archived?' archived':'') + (c.checked?' checked':'') + (c.kb?' kb-active':'');
+  el.dataset.i = i;
+  el.innerHTML = `
+    <div class="thumb">
+      <div class="tbar"><span class="d"></span><span class="d"></span><span class="d"></span></div>
+      <div class="body" style="--w1:${c.w[0]}%;--w2:${c.w[1]}%;--w3:${c.w[2]}%;--w4:${c.w[3]}%">
+        <span class="ln head"></span><span class="ln r2"></span><span class="ln r3"></span><span class="ln r4"></span>
+      </div>
+      <span class="chk">✓</span><span class="x">✕</span>
+    </div>
+    <div class="name" title="${c.title}">${c.title}</div>
+    <div class="url">${c.url}</div>
+    <div class="dots">${c.tags.map(t=>`<span class="dot ${DOT[t]}"></span>`).join('')}</div>`;
+  grid.appendChild(el);
+});
+
+const q = document.getElementById('q');
+const bar = document.getElementById('bar');
+const barCount = document.getElementById('barCount');
+let folder = 'all';
+const activeTags = new Set(), activeSpecial = new Set(), activeSessions = new Set();
+
+function applyFilters(){
+  const s = q.value.trim().toLowerCase();
+  document.querySelectorAll('.card').forEach(el=>{
+    const c = CARDS[el.dataset.i];
+    let ok = true;
+    if (s) ok = (c.title + ' ' + c.url).toLowerCase().includes(s);
+    if (ok && folder!=='all') ok = c.folder===folder;
+    if (ok && activeSessions.size) ok = activeSessions.has(c.session);
+    if (ok && activeSpecial.size){
+      if (activeSpecial.has('archived'))  ok = !!c.archived;
+      if (ok && activeSpecial.has('frequent')) ok = !!c.freq;
+      if (ok && activeSpecial.has('favorite')) ok = !!c.fav;
+    }
+    if (ok && activeTags.size) ok = c.tags.some(t=>activeTags.has(t));
+    el.classList.toggle('hidden', !ok);
+  });
+}
+
+function updateBar(){
+  const n = document.querySelectorAll('.card.checked').length;
+  barCount.innerHTML = n ? `${n} выбрано` : `<em>ничего не выбрано</em>`;
+  bar.classList.toggle('hide', n===0);
+}
+
+grid.addEventListener('click', e=>{
+  const card = e.target.closest('.card');
+  if (!card) return;
+  if (e.target.closest('.x')){
+    card.style.transition='opacity .18s, transform .18s';
+    card.style.opacity='0'; card.style.transform='scale(.96)';
+    setTimeout(()=>card.classList.add('hidden'),180);
+    updateBar(); return;
+  }
+  card.classList.toggle('checked');
+  updateBar();
+});
+
+document.getElementById('rowFolders').addEventListener('click', e=>{
+  const chip = e.target.closest('.chip'); if(!chip) return;
+  document.querySelectorAll('#rowFolders .folder').forEach(c=>c.classList.remove('on'));
+  chip.classList.add('on');
+  folder = chip.dataset.folder;
+  applyFilters();
+});
+
+function makeToggle(rowSel, set, dataAttr){
+  document.getElementById(rowSel.replace('#','')).addEventListener('click', e=>{
+    const chip = e.target.closest('.chip'); if(!chip) return;
+    const k = chip.dataset[dataAttr==='special'?'special':dataAttr==='tag'?'tag':'session'];
+    if (set.has(k)){ set.delete(k); chip.classList.remove('on'); }
+    else { set.add(k); chip.classList.add('on'); }
+    applyFilters();
+  });
+}
+makeToggle('rowTags', activeTags, 'tag');
+// special chips live in rowFolders
+document.getElementById('rowFolders').addEventListener('click', e=>{
+  const chip = e.target.closest('.chip.special'); if(!chip) return;
+  const k = chip.dataset.special;
+  if (activeSpecial.has(k)){ activeSpecial.delete(k); chip.classList.remove('on'); }
+  else { activeSpecial.add(k); chip.classList.add('on'); }
+  applyFilters();
+});
+makeToggle('rowTags', activeSessions, 'session');
+
+document.getElementById('barReset').addEventListener('click', ()=>{
+  document.querySelectorAll('.card.checked').forEach(c=>c.classList.remove('checked'));
+  updateBar();
+});
+document.getElementById('barOpen').addEventListener('click', ()=>{
+  barCount.textContent = 'Открываю…';
+});
+
+q.addEventListener('input', applyFilters);
+document.addEventListener('keydown', e=>{
+  if (e.key === 'Escape'){
+    document.querySelectorAll('.card.checked').forEach(c=>c.classList.remove('checked'));
+    q.value=''; applyFilters(); updateBar(); q.blur();
+  }
+});
+
+updateBar();
+</script>
+</body>
+</html>

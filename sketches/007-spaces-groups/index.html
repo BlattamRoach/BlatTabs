@@ -1,0 +1,553 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Toby — вкладки</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* ---- дизайн-токены (копия theme.css, Vercel-монохром) ---- */
+:root{
+  --bg:#ffffff; --surface:#ffffff; --surface-soft:#fafafa;
+  --btn-hover:#fafafa; --hover:#fafafa;
+  --text:#171717; --text-soft:#4d4d4d; --text-muted:#666666; --text-faint:#808080;
+  --on-ink:#ffffff;
+  --line:rgba(0,0,0,.08); --line2:#ebebeb;
+  --dashed:#b0b0b0; --dashed-hover:#737373;
+  --ink:#171717; --ink-hover:rgba(23,23,23,.88);
+  --shadow-hover:0 2px 10px rgba(0,0,0,.06);
+  --shadow-pop:0 2px 8px rgba(0,0,0,.15);
+  --shadow-xl:0 4px 16px rgba(0,0,0,.2);
+  --overlay:rgba(0,0,0,.3);
+  --card-min:176px; --card-gap:12px; --card-radius:8px;
+  --card-name-size:13px; --card-url-size:10.5px;
+  --font-ui:'Geist',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  --font-mono:'Geist Mono',ui-monospace,'Cascadia Mono',Consolas,monospace;
+}
+[data-theme="dark"]{
+  --bg:#000000; --surface:#0a0a0a; --surface-soft:#111113;
+  --btn-hover:#1a1a1c; --hover:#1a1a1c;
+  --text:#ededed; --text-soft:#c4c4c4; --text-muted:#a1a1a1; --text-faint:#737373;
+  --on-ink:#000000;
+  --line:rgba(255,255,255,.12); --line2:rgba(255,255,255,.14);
+  --dashed:#5f5f5f; --dashed-hover:#a1a1a1;
+  --ink:#ededed; --ink-hover:rgba(237,237,237,.88);
+  --shadow-hover:0 2px 10px rgba(0,0,0,.5);
+  --shadow-pop:0 2px 8px rgba(0,0,0,.55);
+  --shadow-xl:0 4px 16px rgba(0,0,0,.7);
+  --overlay:rgba(0,0,0,.6);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+body{
+  font-family:var(--font-ui);font-feature-settings:'liga';
+  background:var(--bg);color:var(--text);font-size:14px;line-height:1.5;
+  min-height:100vh;display:flex;flex-direction:column;
+}
+::selection{background:var(--ink);color:var(--on-ink)}
+button{font-family:inherit;cursor:pointer}
+
+/* ---------- верхняя панель ---------- */
+.header{
+  position:sticky;top:0;z-index:50;background:var(--bg);box-shadow:0 1px 0 var(--line2);
+  display:flex;align-items:center;justify-content:space-between;
+  height:52px;padding:0 20px;flex-shrink:0;
+}
+.wordmark{font-size:17px;font-weight:700;letter-spacing:-.06em;user-select:none}
+.searchbox{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:440px;max-width:46vw}
+.searchbox svg{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text-faint);pointer-events:none}
+.search-box{
+  width:100%;height:32px;border:0;border-radius:6px;background:var(--bg);
+  box-shadow:0 0 0 1px var(--line);padding:0 32px;
+  font:400 13px/1 var(--font-ui);color:var(--text);outline:none;transition:box-shadow .12s;
+}
+.search-box::placeholder{color:var(--text-faint)}
+.search-box:focus{box-shadow:0 0 0 1.5px var(--ink)}
+.searchbox kbd{
+  position:absolute;right:8px;top:50%;transform:translateY(-50%);
+  min-width:18px;height:18px;padding:0 4px;display:grid;place-items:center;
+  font:500 10.5px/1 var(--font-mono);color:var(--text-faint);
+  border-radius:4px;box-shadow:0 0 0 1px var(--line2);
+}
+.top-actions{display:flex;gap:6px}
+.action-btn{
+  height:28px;padding:0 10px;display:inline-flex;align-items:center;gap:6px;
+  border:0;border-radius:6px;background:var(--bg);box-shadow:0 0 0 1px var(--line);
+  font:500 12.5px/1 var(--font-ui);color:var(--text-muted);letter-spacing:-.1px;
+  transition:background .1s,color .1s,box-shadow .1s;
+}
+.action-btn:hover{background:var(--hover)}
+.action-btn .glyph{font-size:12px;line-height:1}
+
+/* ---------- чипы пространств ---------- */
+.chip-row{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:14px 20px 2px}
+.chip{
+  height:26px;padding:0 11px;border:0;border-radius:9999px;
+  display:inline-flex;align-items:center;gap:5px;
+  background:var(--bg);box-shadow:0 0 0 1px var(--line);
+  font:500 12.5px/1 var(--font-ui);color:var(--text-muted);letter-spacing:-.1px;
+  transition:background .1s,color .1s,box-shadow .1s;user-select:none;
+}
+.chip:hover{background:var(--hover)}
+.chip.active{background:var(--ink);color:var(--on-ink);box-shadow:none}
+.chip-add{
+  height:26px;padding:0 11px;border:1px dashed var(--dashed);border-radius:9999px;
+  display:inline-flex;align-items:center;gap:5px;background:transparent;
+  font:500 12.5px/1 var(--font-ui);color:var(--text-muted);letter-spacing:-.1px;
+  transition:background .1s,border-color .1s;white-space:nowrap;
+}
+.chip-add:hover{background:var(--hover);border-color:var(--dashed-hover)}
+
+/* ---------- мета-строка ---------- */
+.main{padding:0 20px;flex:1;overflow-y:auto}
+.metarow{display:flex;align-items:baseline;justify-content:space-between;padding:16px 0 12px}
+.metatitle{font-size:15px;font-weight:600;letter-spacing:-.2px;display:flex;align-items:baseline;gap:8px}
+.metatitle .n{font:500 11px/1 var(--font-mono);color:var(--text-faint);letter-spacing:0}
+.metaright{font:500 10.5px/1 var(--font-mono);color:var(--text-faint);text-transform:uppercase;letter-spacing:.08em}
+
+/* ---------- сетка ---------- */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(var(--card-min),1fr));gap:var(--card-gap)}
+.content{padding-bottom:110px}
+.gsec{margin-bottom:14px}
+
+/* ---------- шапка группы ---------- */
+.gbar{
+  display:flex;align-items:center;gap:8px;height:32px;padding:0 10px;margin-bottom:8px;
+  border-radius:6px;background:var(--surface);box-shadow:0 0 0 1px var(--line);
+  cursor:pointer;user-select:none;transition:background .1s,box-shadow .1s;
+}
+.gbar:hover{background:var(--hover)}
+.gbar .chev{
+  font:400 10px/1 var(--font-mono);color:var(--text-muted);width:10px;flex:none;
+  display:inline-block;text-align:center;
+}
+.gbar .gname{font-size:13px;font-weight:500;letter-spacing:-.1px;color:var(--text);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gbar .gcount{font:400 10.5px/1 var(--font-mono);color:var(--text-faint);white-space:nowrap;flex:none}
+.gbar .gdel{
+  margin-left:auto;flex:none;width:18px;height:18px;border:0;border-radius:50%;padding:0;
+  display:grid;place-items:center;background:transparent;
+  font:400 11px/1 var(--font-ui);color:var(--text-faint);
+  opacity:0;transition:opacity .12s,background .1s,color .1s;
+}
+.gbar:hover .gdel{opacity:1}
+.gbar .gdel:hover{background:var(--surface);box-shadow:0 0 0 1px var(--line);color:var(--text)}
+.loose-label{
+  font:500 10.5px/1 var(--font-mono);color:var(--text-faint);text-transform:uppercase;letter-spacing:.08em;
+  margin:4px 0 8px;
+}
+
+/* ---------- карточки ---------- */
+.tab-card{
+  position:relative;border-radius:var(--card-radius);background:var(--surface);
+  box-shadow:0 0 0 1px var(--line);transition:box-shadow .12s,transform .12s;
+  cursor:pointer;display:flex;flex-direction:column;
+}
+.tab-card:hover{box-shadow:0 0 0 1px var(--line),var(--shadow-hover);transform:translateY(-1px)}
+.cbody{padding:8px 10px 9px}
+.cname{display:flex;align-items:center;gap:5px}
+.tab-favicon-fallback{
+  width:15px;height:15px;flex:none;display:grid;place-items:center;
+  font:500 9px/1 var(--font-mono);color:var(--text-muted);
+  background:var(--hover);border-radius:3px;box-shadow:0 0 0 1px var(--line);user-select:none;
+}
+.tab-name{
+  font-size:var(--card-name-size);font-weight:500;letter-spacing:-.1px;
+  color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0;
+}
+.tab-url{
+  margin-top:3px;padding:0 2px;font:400 var(--card-url-size)/1.4 var(--font-mono);color:var(--text-faint);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.folder-select-btn{
+  position:absolute;bottom:6px;right:6px;z-index:2;width:22px;height:22px;border:0;border-radius:5px;padding:0;
+  background:var(--surface);box-shadow:0 0 0 1px var(--line);
+  display:flex;align-items:center;justify-content:center;color:var(--text-muted);
+  opacity:0;transition:opacity .12s,background .1s;
+}
+.tab-card:hover .folder-select-btn{opacity:1}
+.folder-select-btn:hover{background:var(--hover)}
+
+/* ---------- дропдаун группы ---------- */
+.folder-dropdown{
+  position:fixed;z-index:300;display:none;min-width:170px;max-height:240px;overflow-y:auto;
+  background:var(--surface);border-radius:6px;padding:2px 0;
+  box-shadow:0 0 0 1px var(--line),var(--shadow-pop);
+}
+.folder-dropdown.open{display:block}
+.folder-dd-item{
+  padding:6px 10px;font-size:12px;color:var(--text);
+  display:flex;align-items:center;gap:6px;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;cursor:pointer;
+}
+.folder-dd-item:hover{background:var(--hover)}
+.folder-dd-item.none{color:var(--text-muted);font-style:italic}
+.folder-dd-item.add{color:var(--text-muted)}
+.folder-dd-item .ck{font:400 10px/1 var(--font-mono);width:10px;flex:none;color:var(--text)}
+.folder-dd-item .gdot{width:6px;height:6px;border-radius:50%;flex:none;background:var(--line2)}
+
+/* ---------- состояния ---------- */
+.empty-state{padding:60px 0;text-align:center;color:var(--text-muted);font-size:14px}
+.empty-state span{display:block;margin-top:6px;font-size:12.5px;color:var(--text-faint)}
+
+/* ---------- модалка ---------- */
+.modal-overlay{
+  display:none;position:fixed;inset:0;background:var(--overlay);z-index:1000;
+  align-items:center;justify-content:center;
+}
+.modal-overlay.open{display:flex}
+.modal{background:var(--surface);border-radius:8px;padding:20px;min-width:280px;box-shadow:0 0 0 1px var(--line),var(--shadow-xl)}
+.modal h3{font-size:14px;font-weight:600;margin-bottom:12px;color:var(--text)}
+.modal input[type="text"]{
+  width:100%;padding:8px 10px;border:0;border-radius:6px;box-shadow:0 0 0 1px var(--line);
+  font:400 13px/1.4 var(--font-ui);color:var(--text);outline:none;margin-bottom:12px;background:var(--bg);
+}
+.modal input[type="text"]:focus{box-shadow:0 0 0 1.5px var(--ink)}
+.modal-actions{display:flex;gap:8px;justify-content:flex-end}
+.modal-btn{height:28px;padding:0 14px;border:0;border-radius:6px;font:500 12.5px/1 var(--font-ui);letter-spacing:-.1px;transition:background .1s,opacity .1s}
+.modal-btn.ghost{background:var(--bg);color:var(--text-muted);box-shadow:0 0 0 1px var(--line)}
+.modal-btn.ghost:hover{background:var(--hover)}
+.modal-btn.primary{background:var(--ink);color:var(--on-ink)}
+.modal-btn.primary:hover{opacity:.88}
+
+@media (max-width:760px){
+  .searchbox{position:static;transform:none;width:auto;flex:1;margin:0 12px;max-width:none}
+  .header{height:auto;padding:10px 16px;flex-wrap:wrap;gap:8px}
+  .top-actions{width:100%;justify-content:flex-end}
+}
+</style>
+</head>
+<body>
+
+<header class="header">
+  <div class="wordmark">Toby</div>
+  <div class="searchbox">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    <input type="text" class="search-box" id="search" placeholder="Поиск во вкладках…" autocomplete="off" spellcheck="false">
+    <kbd>/</kbd>
+  </div>
+  <div class="top-actions">
+    <button class="action-btn" id="theme-btn" title="Переключить тёмную/светлую тему"><span class="glyph" id="theme-glyph">🌙</span></button>
+  </div>
+</header>
+
+<nav class="chip-row" id="spaces-bar">
+  <span id="space-chips" style="display:contents"></span>
+  <button class="chip-add" id="add-space-btn">+ Пространство</button>
+</nav>
+
+<div class="main">
+  <div class="metarow">
+    <div class="metatitle"><span id="meta-label">…</span><span class="n" id="meta-count">0</span></div>
+    <div class="metaright" id="meta-groups"></div>
+  </div>
+  <div class="content" id="content"></div>
+</div>
+
+<div class="folder-dropdown" id="group-dd"></div>
+
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal">
+    <h3 id="modal-title"></h3>
+    <input type="text" id="modal-input" placeholder="Название…" autocomplete="off">
+    <div class="modal-actions">
+      <button class="modal-btn ghost" id="modal-cancel">Отмена</button>
+      <button class="modal-btn primary" id="modal-ok">OK</button>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+/* ================= данные (демо-состояние) ================= */
+let spaces = [
+  { id:'sp-work',   name:'Работа'   },
+  { id:'sp-proj',   name:'Проекты'  },
+  { id:'sp-home',   name:'Дом'      }
+];
+let groups = [
+  { id:'g-mon',   name:'Мониторинг', spaceId:'sp-work', collapsed:false },
+  { id:'g-docs',  name:'Документы',  spaceId:'sp-work', collapsed:true  },
+  { id:'g-ideas', name:'Идеи',       spaceId:'sp-proj', collapsed:false }
+];
+let tabs = [
+  { id:'t01', name:'GitHub — BlattamRoach/BlattamToby', url:'github.com/BlattamRoach/BlattamToby', spaceId:'sp-work', groupId:'g-mon'   },
+  { id:'t02', name:'Linear — Спринт 24',                url:'linear.app/blattam/sprint-24',        spaceId:'sp-work', groupId:'g-mon'   },
+  { id:'t03', name:'Grafana — production',              url:'grafana.com/d/prod-overview',         spaceId:'sp-work', groupId:'g-mon'   },
+  { id:'t04', name:'Notion — архитектура',              url:'notion.so/architecture-notes',        spaceId:'sp-work', groupId:'g-docs'  },
+  { id:'t05', name:'Google Docs — отчёт Q3',            url:'docs.google.com/document/d/q3-report',spaceId:'sp-work', groupId:'g-docs'  },
+  { id:'t06', name:'Figma — онбординг',                 url:'figma.com/file/8a2k/onboarding',      spaceId:'sp-work', groupId:null    },
+  { id:'t07', name:'arXiv — Attention Is All You Need', url:'arxiv.org/abs/1706.03762',            spaceId:'sp-work', groupId:null    },
+  { id:'t08', name:'GitLab — mylab/ideas',              url:'gitlab.com/mylab/ideas',              spaceId:'sp-proj', groupId:'g-ideas'},
+  { id:'t09', name:'Notion — пайплайн идей',            url:'notion.so/idea-pipeline',             spaceId:'sp-proj', groupId:'g-ideas'},
+  { id:'t10', name:'GitHub — awesome-selfhosted',       url:'github.com/selfhosted/awesome-selfhosted', spaceId:'sp-proj', groupId:null },
+  { id:'t11', name:'arXiv — LLM-агенты, обзор',         url:'arxiv.org/abs/2407.01218',            spaceId:'sp-proj', groupId:null    },
+  { id:'t12', name:'Яндекс Карты — маршрут на дачу',    url:'yandex.ru/maps',                      spaceId:'sp-home', groupId:null    },
+  { id:'t13', name:'2ГИС',                              url:'2gis.ru',                             spaceId:'sp-home', groupId:null    }
+];
+
+let activeSpaceId = spaces[0].id;   // активное пространство — первое
+let searchQ = '';
+let seq = 1000;
+const nid = p => p + '-' + (++seq);
+
+/* ================= утилиты ================= */
+function esc(s){ return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function plural(n, one, few, many){
+  const a = Math.abs(n) % 100, d = a % 10;
+  if (a > 10 && a < 20) return many;
+  if (d > 1 && d < 5) return few;
+  if (d === 1) return one;
+  return many;
+}
+function domainLetter(url){
+  const h = url.replace(/^https?:\/\//, '').split('/')[0];
+  return (h && h[0] ? h[0] : '?').toUpperCase();
+}
+function $(s){ return document.querySelector(s); }
+function activeSpace(){ return spaces.find(s => s.id === activeSpaceId) || spaces[0]; }
+function spaceGroups(){ return groups.filter(g => g.spaceId === activeSpaceId); }
+function spaceTabs(){ return tabs.filter(t => t.spaceId === activeSpaceId); }
+
+/* ================= рендер ================= */
+function render(){
+  renderChips();
+  renderContent();
+}
+
+function renderChips(){
+  const wrap = $('#space-chips');
+  wrap.innerHTML = '';
+  spaces.forEach(sp => {
+    const b = document.createElement('button');
+    b.className = 'chip space' + (sp.id === activeSpaceId ? ' active' : '');
+    b.dataset.spaceId = sp.id;
+    b.textContent = sp.name;
+    b.addEventListener('click', () => {
+      if (sp.id !== activeSpaceId){ activeSpaceId = sp.id; render(); }
+    });
+    wrap.appendChild(b);
+  });
+}
+
+function renderContent(){
+  const content = $('#content');
+  content.innerHTML = '';
+  const q = searchQ.trim().toLowerCase();
+  const sGroups = spaceGroups();
+  const sTabs = spaceTabs();
+
+  /* мета */
+  $('#meta-label').textContent = activeSpace().name;
+  let visible = 0;
+  const matches = t => !q || (t.name + ' ' + t.url).toLowerCase().includes(q);
+
+  if (sTabs.length === 0){
+    const e = document.createElement('div');
+    e.className = 'empty-state';
+    e.innerHTML = 'Пока пусто<span>Вкладки, сохранённые в это пространство, появятся здесь</span>';
+    content.appendChild(e);
+    $('#meta-count').textContent = '0';
+    $('#meta-groups').textContent = '';
+    return;
+  }
+
+  /* секции групп (порядок = порядок в массиве) */
+  sGroups.forEach(g => {
+    const sec = document.createElement('section');
+    sec.className = 'gsec';
+    sec.dataset.groupId = g.id;
+
+    const members = sTabs.filter(t => t.groupId === g.id);
+    const shown = g.collapsed ? [] : members.filter(matches);
+    visible += shown.length;
+
+    const bar = document.createElement('div');
+    bar.className = 'gbar';
+    bar.innerHTML =
+      '<span class="chev">' + (g.collapsed ? '▸' : '▾') + '</span>' +
+      '<span class="gname">' + esc(g.name) + '</span>' +
+      '<span class="gcount">' + members.length + ' ' + plural(members.length, 'вкладка', 'вкладки', 'вкладок') + '</span>' +
+      '<button class="gdel" title="Удалить группу">✕</button>';
+    bar.addEventListener('click', e => {
+      if (e.target.closest('.gdel')){
+        if (confirm('Удалить группу «' + g.name + '»? Вкладки останутся в пространстве.')){
+          tabs.forEach(t => { if (t.groupId === g.id) t.groupId = null; });
+          groups = groups.filter(x => x.id !== g.id);
+          render();
+        }
+        return;
+      }
+      g.collapsed = !g.collapsed;
+      render();
+    });
+    sec.appendChild(bar);
+
+    if (shown.length){
+      const g = document.createElement('div');
+      g.className = 'grid ggrid';
+      shown.forEach(t => g.appendChild(makeCard(t)));
+      sec.appendChild(g);
+    }
+    content.appendChild(sec);
+  });
+
+  /* негрупповые вкладки — после групп */
+  const loose = sTabs.filter(t => !t.groupId && matches(t));
+  visible += loose.length;
+  if (sGroups.length && loose.length){
+    const lbl = document.createElement('div');
+    lbl.className = 'loose-label';
+    lbl.textContent = 'Без группы';
+    content.appendChild(lbl);
+  }
+  if (loose.length){
+    const l = document.createElement('div');
+    l.className = 'grid loose-grid';
+    loose.forEach(t => l.appendChild(makeCard(t)));
+    content.appendChild(l);
+  }
+
+  if (visible === 0 && q){
+    const e = document.createElement('div');
+    e.className = 'empty-state';
+    e.innerHTML = 'Ничего не найдено<span>Попробуйте изменить запрос</span>';
+    content.appendChild(e);
+  }
+
+  $('#meta-count').textContent = visible;
+  $('#meta-groups').textContent = sGroups.length
+    ? sGroups.length + ' ' + plural(sGroups.length, 'группа', 'группы', 'групп')
+    : '';
+}
+
+function makeCard(t){
+  const el = document.createElement('article');
+  el.className = 'tab-card';
+  el.dataset.tabId = t.id;
+  el.innerHTML =
+    '<div class="cbody">' +
+      '<div class="cname">' +
+        '<span class="tab-favicon-fallback">' + esc(domainLetter(t.url)) + '</span>' +
+        '<span class="tab-name" title="' + esc(t.name) + '">' + esc(t.name) + '</span>' +
+      '</div>' +
+      '<div class="tab-url">' + esc(t.url) + '</div>' +
+    '</div>' +
+    '<button class="folder-select-btn" title="Группа">' +
+      '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-8l-2-2H5a2 2 0 0 0-2 2z"/></svg>' +
+    '</button>';
+  el.addEventListener('click', e => {
+    if (e.target.closest('.folder-select-btn')) return;
+    console.log('open', t.url);   // в прототипе: только лог
+  });
+  el.querySelector('.folder-select-btn').addEventListener('click', e => {
+    e.stopPropagation();
+    openGroupMenu(t, e.currentTarget);
+  });
+  return el;
+}
+
+/* ================= дропдаун группы ================= */
+const dd = $('#group-dd');
+let ddTabId = null;
+
+function closeGroupMenu(){ dd.classList.remove('open'); ddTabId = null; }
+
+function openGroupMenu(tab, anchor){
+  if (dd.classList.contains('open') && ddTabId === tab.id){ closeGroupMenu(); return; }
+  dd.innerHTML = '';
+  ddTabId = tab.id;
+
+  const item = (cls, html, fn) => {
+    const d = document.createElement('div');
+    d.className = 'folder-dd-item ' + cls;
+    d.innerHTML = html;
+    d.addEventListener('click', e => { e.stopPropagation(); closeGroupMenu(); fn(); });
+    dd.appendChild(d);
+  };
+
+  item('none', 'Без группы', () => { tab.groupId = null; render(); });
+  spaceGroups().forEach(g => {
+    item('', '<span class="ck">' + (tab.groupId === g.id ? '✓' : '') + '</span>' + esc(g.name),
+      () => { tab.groupId = g.id; render(); });
+  });
+  item('add', '+ Новая группа…', () => {
+    openModal('Новая группа', 'Название группы…', name => {
+      const g = { id: nid('g'), name: name || 'Группа ' + (spaceGroups().length + 1),
+                  spaceId: activeSpaceId, collapsed: false };
+      groups.push(g);
+      tab.groupId = g.id;
+      render();
+    });
+  });
+
+  const r = anchor.getBoundingClientRect();
+  dd.classList.add('open');
+  const w = dd.offsetWidth, h = dd.offsetHeight;
+  let left = r.right - w;
+  let top = r.bottom + 4;
+  if (top + h > innerHeight - 8) top = r.top - h - 4;
+  if (left < 8) left = 8;
+  dd.style.left = left + 'px';
+  dd.style.top = top + 'px';
+}
+document.addEventListener('mousedown', e => { if (!dd.contains(e.target)) closeGroupMenu(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeGroupMenu(); });
+
+/* ================= модалка ================= */
+const overlay = $('#modal-overlay');
+let modalOk = null;
+function openModal(title, placeholder, onOk){
+  $('#modal-title').textContent = title;
+  const inp = $('#modal-input');
+  inp.value = '';
+  inp.placeholder = placeholder;
+  modalOk = onOk;
+  overlay.classList.add('open');
+  setTimeout(() => { inp.focus(); inp.select(); }, 0);
+}
+function closeModal(){ overlay.classList.remove('open'); modalOk = null; }
+function modalSubmit(){
+  if (modalOk) modalOk($('#modal-input').value.trim());
+  closeModal();
+}
+$('#modal-ok').addEventListener('click', modalSubmit);
+$('#modal-cancel').addEventListener('click', closeModal);
+overlay.addEventListener('mousedown', e => { if (e.target === overlay) closeModal(); });
+$('#modal-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') modalSubmit();
+  else if (e.key === 'Escape') closeModal();
+});
+
+/* ================= пространство ================= */
+$('#add-space-btn').addEventListener('click', () => {
+  openModal('Новое пространство', 'Название…', name => {
+    const sp = { id: nid('sp'), name: name || 'Пространство ' + (spaces.length + 1) };
+    spaces.push(sp);
+    activeSpaceId = sp.id;
+    render();
+  });
+});
+
+/* ================= поиск и тема ================= */
+$('#search').addEventListener('input', function(){ searchQ = this.value; renderContent(); });
+document.addEventListener('keydown', e => {
+  if (e.key === '/' && document.activeElement !== $('#search') && !overlay.classList.contains('open')){
+    e.preventDefault(); const s = $('#search'); s.focus(); s.select();
+  }
+});
+$('#theme-btn').addEventListener('click', function(){
+  const root = document.documentElement;
+  const dark = root.dataset.theme === 'dark';
+  if (dark) delete root.dataset.theme; else root.dataset.theme = 'dark';
+  $('#theme-glyph').textContent = dark ? '🌙' : '☀️';
+});
+
+/* ================= старт ================= */
+render();
+</script>
+</body>
+</html>

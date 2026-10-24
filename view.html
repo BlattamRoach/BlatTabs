@@ -60,7 +60,7 @@
     .action-btn .glyph { font-size: 12px; line-height: 1; }
 
     /* ---------- chips ---------- */
-    .chip-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 14px 20px 2px; }
+    .chip-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 14px 0 2px; }
     .chip-row .sep { width: 1px; height: 16px; background: var(--line2); margin: 0 6px; flex: none; }
     .chip {
       height: 26px; padding: 0 11px; border: 0; border-radius: 9999px;
@@ -72,8 +72,6 @@
     }
     .chip:hover { background: var(--hover); }
     .chip.active { background: var(--ink); color: var(--on-ink); box-shadow: none; }
-    .chip.nested { margin-left: 4px; padding-left: 9px; }
-    .chip .em { font-size: 11px; line-height: 1; }
     .chip.drag-over { background: var(--drop-over); color: var(--on-drop); box-shadow: none; }
     .chip-add {
       height: 26px; padding: 0 11px; border: 1px dashed var(--dashed); border-radius: 9999px;
@@ -82,6 +80,16 @@
       transition: background .1s, border-color .1s; white-space: nowrap;
     }
     .chip-add:hover { background: var(--hover); border-color: var(--dashed-hover); }
+    /* «+ Пространство» — в левом краю ряда пространств (над
+       «+ Группа» в мета-строке), бледный текст в стиле «+ Группа» */
+    #add-space-btn {
+      height: 26px; padding: 0; border: 0; border-radius: 0;
+      display: inline-flex; align-items: center; gap: 0;
+      background: transparent; font: 500 10.5px/1 var(--font-mono); color: var(--text-faint);
+      text-transform: uppercase; letter-spacing: .08em; cursor: pointer;
+      transition: color .1s; white-space: nowrap;
+    }
+    #add-space-btn:hover { color: var(--text); background: transparent; }
     .chip-actions { display: flex; gap: 1px; opacity: 0; transition: opacity 0.15s; }
     .chip:hover .chip-actions { opacity: 1; }
     .chip-icon-btn {
@@ -93,20 +101,68 @@
 
     /* ---------- meta row ---------- */
     .main { padding: 0 20px; flex: 1; overflow-y: auto; }
-    .metarow { display: flex; align-items: baseline; justify-content: space-between; padding: 16px 0 12px; }
+    .metarow { display: flex; align-items: baseline; gap: 12px; padding: 16px 0 12px; }
     .metatitle { font-size: 15px; font-weight: 600; letter-spacing: -.2px; display: flex; align-items: baseline; gap: 8px; }
     .metatitle .n { font: 500 11px/1 var(--font-mono); color: var(--text-faint); letter-spacing: 0; }
+    /* «+ Группа» — полноширинная пунктирная строка в конце списка вкладок
+       (все ветки рендера, включая пустое пространство) */
+    #add-group-btn {
+      grid-column: 1 / -1; height: 40px; padding: 0;
+      border: 1px dashed var(--dashed); border-radius: 6px; background: transparent;
+      color: var(--text-muted); font: 500 12.5px/1 var(--font-ui); letter-spacing: -.1px;
+      cursor: pointer; transition: background .1s, border-color .1s;
+    }
+    #add-group-btn:hover { background: var(--hover); border-color: var(--dashed-hover); }
 
     /* ---------- grid ---------- */
     .tabs-list {
       display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--card-min), 1fr));
       gap: var(--card-gap); max-width: none; width: 100%; padding-bottom: 110px;
     }
+
+    /* ---------- группы (сворачиваемые секции) ---------- */
+    .gbar {
+      position: relative;
+      grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px;
+      border-radius: 6px; background: var(--surface); box-shadow: 0 0 0 1px var(--line);
+      cursor: pointer; user-select: none; transition: background .1s;
+    }
+    .gbar:hover { background: var(--hover); }
+    .gbar.dragging { opacity: 0.4; }
+    /* Индикатор reorder групп: 2px линия на верхней/нижней кромке целевой шапки */
+    .gbar.drop-before::before, .gbar.drop-after::after {
+      content: ''; position: absolute; left: 0; right: 0; height: 2px; background: var(--ink); z-index: 2;
+    }
+    .gbar.drop-before::before { top: 0; }
+    .gbar.drop-after::after { bottom: 0; }
+    .gbar.drop-over { background: var(--drop-over); color: var(--on-drop); }
+    .gbar.drop-over .chev, .gbar.drop-over .gname, .gbar.drop-over .gcount { color: var(--on-drop); }
+    .gbar .chev {
+      font: 400 10px/1 var(--font-mono); color: var(--text-muted); width: 10px; flex: none; text-align: center;
+    }
+    .gbar .gname {
+      font-size: 13px; font-weight: 500; letter-spacing: -.1px; color: var(--text);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .gbar .gcount { font: 400 10.5px/1 var(--font-mono); color: var(--text-faint); white-space: nowrap; flex: none; }
+    .gbar .gdel {
+      margin-left: auto; flex: none; width: 18px; height: 18px; border: 0; border-radius: 50%; padding: 0;
+      display: grid; place-items: center; background: transparent;
+      font: 400 11px/1 var(--font-ui); color: var(--text-faint);
+      opacity: 0; transition: opacity .12s, background .1s, color .1s;
+    }
+    .gbar:hover .gdel { opacity: 1; }
+    .gbar .gdel:hover { background: var(--bg); box-shadow: 0 0 0 1px var(--line); color: var(--text); }
+    .loose-label {
+      grid-column: 1 / -1;
+      font: 500 10.5px/1 var(--font-mono); color: var(--text-faint); text-transform: uppercase; letter-spacing: .08em;
+    }
     .tab-card {
-      position: relative; border-radius: var(--card-radius); background: var(--surface);
+      position: relative; border-radius: var(--card-radius); background: var(--card-bg);
       box-shadow: 0 0 0 1px var(--line);
       transition: box-shadow .12s, transform .12s;
       cursor: pointer; display: flex; flex-direction: column; overflow: hidden;
+      min-height: 74px;
     }
     .tab-card:hover { box-shadow: 0 0 0 1px var(--line), var(--shadow-hover); transform: translateY(-1px); }
     .tab-card.dragging { opacity: 0.4; }
@@ -144,7 +200,7 @@
     .tab-card.selected .tab-select { background: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
     .tab-card.selected .tab-select::after { opacity: 1; }
 
-    .cbody { padding: 8px 10px 9px; }
+    .cbody { flex: 1; display: flex; align-items: flex-start; padding: 8px 10px 9px; }
     .cname { display: flex; align-items: center; gap: 5px; }
     .cname img { width: 13px; height: 13px; border-radius: 3px; flex: none; }
     /* Фавикон вкладки — перед именем */
@@ -168,36 +224,6 @@
       font-family: var(--font-ui); padding: 1px 4px; border: 0; border-radius: 4px;
       box-shadow: 0 0 0 1.5px var(--ink); outline: none; background: var(--surface-soft);
     }
-    .tab-url {
-      margin-top: 3px; padding: 0 2px;
-      font: 400 var(--card-url-size)/1.4 var(--font-mono); color: var(--text-faint);
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    }
-    /* Кнопка-дропдаун папки на карточке (видна на hover) */
-    .folder-select-btn {
-      position: absolute; bottom: 6px; right: 6px; z-index: 2;
-      width: 22px; height: 22px; border: 0; border-radius: 5px; padding: 0;
-      background: var(--surface); box-shadow: 0 0 0 1px var(--line);
-      font-size: 11px; display: flex; align-items: center; justify-content: center;
-      color: var(--text-muted); opacity: 0; transition: opacity .12s, background .1s;
-    }
-    .tab-card:hover .folder-select-btn { opacity: 1; }
-    .folder-select-btn:hover { background: var(--hover); }
-
-    /* Дропдаун папок */
-    .folder-dropdown {
-      display: none; position: absolute; top: 100%; right: 0; z-index: 100;
-      background: var(--surface); border-radius: 6px; box-shadow: 0 0 0 1px var(--line), var(--shadow-pop);
-      min-width: 150px; max-height: 220px; overflow-y: auto; padding: 2px 0;
-    }
-    .folder-dropdown.open { display: block; }
-    .folder-dd-item {
-      padding: 6px 10px; font-size: 12px; cursor: pointer; color: var(--text);
-      display: flex; align-items: center; gap: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    }
-    .folder-dd-item:hover { background: var(--hover); }
-    .folder-dd-item.all-folder { color: var(--text-muted); font-style: italic; }
-    .folder-dd-item.nested { padding-left: 24px; }
 
     /* ---------- states ---------- */
     .empty-state { padding: 60px 0; text-align: center; color: var(--text-muted); font-size: 14px; }
@@ -277,21 +303,21 @@
   </header>
 
   <div class="main">
-    <!-- Папки -->
-    <nav class="chip-row" id="folders-bar">
-      <button class="chip folder-chip active" data-folder-id="">Все</button>
-      <button class="chip-add" id="add-folder-btn">+ Папка</button>
+    <!-- Пространства -->
+    <nav class="chip-row" id="spaces-bar">
+      <button class="chip-add" id="add-space-btn" title="Новое пространство">+ Пространство</button>
+      <span id="space-chips" style="display:contents"></span>
     </nav>
 
     <!-- Meta -->
     <div class="metarow">
-      <div class="metatitle"><span id="meta-label">Все вкладки</span><span class="n" id="meta-count">0</span></div>
+      <div class="metatitle"><span id="meta-label">Мои вкладки</span><span class="n" id="meta-count">0</span></div>
     </div>
 
     <!-- States -->
     <div id="empty-state" class="empty-state" style="display:none;">
-      Нет сохранённых вкладок
-      <span>Сохраните вкладку через popup или Ctrl+Shift+S</span>
+      Пока пусто
+      <span>Вкладки, сохранённые в это пространство, появятся здесь</span>
     </div>
     <div id="no-results" class="no-results">
       Ничего не найдено
@@ -311,11 +337,11 @@
     <button id="clear-selection-btn" class="btn btn-ghost">Сбросить</button>
   </div>
 
-  <!-- Modal: create/rename folder -->
-  <div class="modal-overlay" id="folder-modal">
+  <!-- Modal: create/rename space, create group -->
+  <div class="modal-overlay" id="space-modal">
     <div class="modal">
-      <h3 id="modal-title">Новая папка</h3>
-      <input type="text" id="folder-name-input" placeholder="Название..." autocomplete="off">
+      <h3 id="modal-title">Новое пространство</h3>
+      <input type="text" id="space-name-input" placeholder="Название..." autocomplete="off">
       <div class="modal-actions">
         <button class="modal-btn ghost" id="modal-cancel">Отмена</button>
         <button class="modal-btn primary" id="modal-confirm">OK</button>

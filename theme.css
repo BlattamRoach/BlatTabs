@@ -9,7 +9,8 @@
 :root {
   /* Фоны */
   --bg: #ffffff;             /* фон страницы */
-  --surface: #ffffff;        /* карточки, хедер, модалки, дропдауны, поля */
+  --surface: #ffffff;        /* хедер, модалки, дропдауны, поля, гбары */
+  --card-bg: #f5f5f5;        /* фон карточки — чуть выше фона страницы (контраст) */
   --surface-soft: #fafafa;   /* лёгкий фон (hover полей) */
   --btn-hover: #fafafa;      /* hover кнопок/чипов */
   --hover: #fafafa;          /* универсальный hover */
@@ -52,9 +53,7 @@
   --card-gap: 12px;           /* зазор между карточками */
   --card-radius: 8px;
   --card-header-padding: 8px 10px;
-  --card-url-padding: 0 10px;
   --card-name-size: 13px;
-  --card-url-size: 10.5px;
 
   /* Шрифты */
   --font-ui: 'Geist', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
@@ -65,7 +64,8 @@
 [data-theme="dark"] {
   /* Фоны */
   --bg: #000000;
-  --surface: #0a0a0a;        /* карточки, хедер, модалки, дропдауны, поля */
+  --surface: #0a0a0a;        /* хедер, модалки, дропдауны, поля, гбары */
+  --card-bg: #141414;        /* фон карточки — чуть выше фона страницы (контраст) */
   --surface-soft: #111113;
   --btn-hover: #1a1a1c;
   --hover: #1a1a1c;

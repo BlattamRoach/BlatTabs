@@ -1,5 +1,17 @@
+// BlattamToby — background (service worker).
+// Пространства (blattam-spaces, плоские) + сворачиваемые группы (blattam-groups)
+// + вкладки (blattam-tabs). Вкладка: { name, url, title?, favIconUrl?,
+// spaceId (обязательно), groupId? }. blattam-last-space — последнее активное
+// пространство: по умолчанию для save-пути (popup/горячая клавиша) и стартовое
+// пространство view. blattam-folders — legacy, используется только миграцией.
+
 const STORAGE_KEY = 'blattam-tabs';
-const FOLDERS_KEY = 'blattam-folders';
+const SPACES_KEY = 'blattam-spaces';
+const GROUPS_KEY = 'blattam-groups';
+const LAST_SPACE_KEY = 'blattam-last-space';
+const FOLDERS_KEY = 'blattam-folders'; // legacy: только миграция папки → пространства
+
+const DEFAULT_SPACE_NAME = 'Мои вкладки';
 
 // === Хелперы ===
 
@@ -12,55 +24,195 @@ async function saveTabs(tabs) {
   await chrome.storage.sync.set({ [STORAGE_KEY]: tabs });
 }
 
-async function loadFolders() {
-  const data = await chrome.storage.sync.get(FOLDERS_KEY);
-  return data[FOLDERS_KEY] || [];
+async function loadSpaces() {
+  const data = await chrome.storage.sync.get(SPACES_KEY);
+  return data[SPACES_KEY] || [];
 }
 
-async function saveFolders(folders) {
-  await chrome.storage.sync.set({ [FOLDERS_KEY]: folders });
+async function saveSpaces(spaces) {
+  await chrome.storage.sync.set({ [SPACES_KEY]: spaces });
 }
 
-function genId() {
-  return 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+async function loadGroups() {
+  const data = await chrome.storage.sync.get(GROUPS_KEY);
+  return data[GROUPS_KEY] || [];
 }
 
-// === Миграция: старые вкладки без folderId → null ("Все") ===
+async function saveGroups(groups) {
+  await chrome.storage.sync.set({ [GROUPS_KEY]: groups });
+}
 
-async function migrateTabs() {
-  const tabs = await loadTabs();
-  const migrated = tabs.map(t => {
-    if (t.folderId === undefined) t.folderId = null;
-    return t;
+function genId(prefix) {
+  return (prefix || 'x') + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+}
+
+// === Миграция: legacy-папки → пространства (чистая, идемпотентная) ===
+// Каждой папке (любой вложенности) — отдельное плоское пространство с тем же
+// именем; вкладки переезжают folderId → spaceId; без папки (null/неизвестная)
+// → «Мои вкладки». Группы не создаются.
+function migrateFoldersToSpaces(tabs, spaces, folders) {
+  const folderToSpaceId = {};
+  (folders || []).forEach(f => {
+    if (!f || !f.id) return;
+    const sp = { id: genId('sp'), name: f.name };
+    spaces.push(sp);
+    folderToSpaceId[f.id] = sp.id;
   });
-  // Сохраняем только если что-то изменилось
-  if (migrated.some((t, i) => t.folderId !== tabs[i].folderId)) {
-    await saveTabs(migrated);
-  }
+  let defaultSpace = null;
+  (tabs || []).forEach(t => {
+    if (!t) return;
+    if (t.folderId != null && folderToSpaceId[t.folderId]) {
+      t.spaceId = folderToSpaceId[t.folderId];
+    } else {
+      if (!defaultSpace) {
+        defaultSpace = { id: genId('sp'), name: DEFAULT_SPACE_NAME };
+        spaces.push(defaultSpace);
+      }
+      t.spaceId = defaultSpace.id;
+    }
+    t.groupId = null;
+    delete t.folderId;
+  });
 }
 
-// === Чистка: скриншоты вырезаны из проекта ===
-// Удаляем оставшийся ключ 'blattam-screenshots' из chrome.storage.local
-// (у пользователей, у которых миниатюры успели сохраниться, данные
-// не должны висеть в хранилище бесконечно).
-async function purgeScreenshots() {
-  const data = await chrome.storage.local.get(['blattam-screenshots']);
-  if (data['blattam-screenshots']) {
-    await chrome.storage.local.set({ 'blattam-screenshots': null });
+// === Пространства ===
+
+// Гарантирует существование пространств: миграция legacy (если нужна) +
+// по умолчанию «Мои вкладки». Возвращает актуальный массив.
+async function ensureSpaces() {
+  const data = await chrome.storage.sync.get([SPACES_KEY, FOLDERS_KEY, STORAGE_KEY]);
+  const tabs = Array.isArray(data[STORAGE_KEY]) ? data[STORAGE_KEY] : [];
+  const folders = data[FOLDERS_KEY];
+  let spaces = data[SPACES_KEY];
+
+  if (!Array.isArray(spaces)) {
+    spaces = [];
+    // Legacy: нет blattam-spaces, но есть blattam-folders или вкладки с folderId
+    if (folders !== undefined || tabs.some(t => t && t.folderId != null)) {
+      migrateFoldersToSpaces(tabs, spaces, folders);
+      await chrome.storage.sync.set({ [STORAGE_KEY]: tabs, [SPACES_KEY]: spaces });
+      if (folders !== undefined) await chrome.storage.sync.remove(FOLDERS_KEY);
+    }
   }
+  if (spaces.length === 0) {
+    spaces.push({ id: genId('sp'), name: DEFAULT_SPACE_NAME });
+    await saveSpaces(spaces);
+  }
+  return spaces;
+}
+
+// Пространство по умолчанию для save-пути: валидное blattam-last-space →
+// первое пространство → созданное «Мои вкладки».
+async function resolveDefaultSpaceId() {
+  const spaces = await ensureSpaces();
+  const data = await chrome.storage.sync.get(LAST_SPACE_KEY);
+  const last = data[LAST_SPACE_KEY];
+  if (last && spaces.some(s => s.id === last)) return last;
+  return spaces[0].id;
+}
+
+async function createSpace(name) {
+  const spaces = await ensureSpaces();
+  let trimmed = (name || '').trim();
+  if (!trimmed) {
+    // Пустое имя — авто-«Пространство N» (первый свободный номер)
+    let n = spaces.length + 1;
+    trimmed = `Пространство ${n}`;
+    const exists = nm => spaces.some(s => s.name.toLowerCase() === nm.toLowerCase());
+    while (exists(trimmed)) { n++; trimmed = `Пространство ${n}`; }
+  }
+  // Дубль по имени (без учёта регистра) — пропускаем
+  if (spaces.some(s => s.name.toLowerCase() === trimmed.toLowerCase())) return null;
+  const sp = { id: genId('sp'), name: trimmed };
+  spaces.push(sp);
+  await saveSpaces(spaces);
+  return sp;
+}
+
+async function deleteSpace(spaceId) {
+  const spaces = await loadSpaces();
+  if (!spaces.some(s => s.id === spaceId)) return;
+
+  // Вкладки удалённого пространства → первое оставшееся (или новое «Мои вкладки»)
+  let remaining = spaces.filter(s => s.id !== spaceId);
+  let target = remaining[0] || null;
+  if (!target) {
+    target = { id: genId('sp'), name: DEFAULT_SPACE_NAME };
+    remaining = [target];
+  }
+  const tabs = await loadTabs();
+  tabs.forEach(t => { if (t.spaceId === spaceId) t.spaceId = target.id; });
+  // Группы удалённого пространства удаляются
+  const groups = await loadGroups();
+  const keptGroups = groups.filter(g => g.spaceId !== spaceId);
+
+  await saveSpaces(remaining);
+  await saveTabs(tabs);
+  await saveGroups(keptGroups);
+
+  // blattam-last-space на удалённом пространстве — переключить на цель
+  const last = (await chrome.storage.sync.get(LAST_SPACE_KEY))[LAST_SPACE_KEY];
+  if (last === spaceId) await chrome.storage.sync.set({ [LAST_SPACE_KEY]: target.id });
+}
+
+async function renameSpace(spaceId, newName) {
+  const spaces = await loadSpaces();
+  const sp = spaces.find(s => s.id === spaceId);
+  if (!sp) return;
+  const name = (newName || '').trim();
+  if (!name) return;
+  // Дубль по имени — не ренеймим
+  if (spaces.some(s => s.name.toLowerCase() === name.toLowerCase() && s.id !== spaceId)) return;
+  sp.name = name;
+  await saveSpaces(spaces);
+}
+
+// === Группы (внутри пространств) ===
+
+async function createGroup(spaceId, name) {
+  const spaces = await ensureSpaces();
+  if (!spaces.some(s => s.id === spaceId)) return null;
+  const groups = await loadGroups();
+  let trimmed = (name || '').trim();
+  if (!trimmed) {
+    // Пустое имя — авто-«Группа N» (первый свободный номер)
+    let n = groups.length + 1;
+    trimmed = `Группа ${n}`;
+    const exists = nm => groups.some(g => g.name.toLowerCase() === nm.toLowerCase());
+    while (exists(trimmed)) { n++; trimmed = `Группа ${n}`; }
+  }
+  const g = { id: genId('g'), name: trimmed, spaceId, collapsed: false };
+  groups.push(g);
+  await saveGroups(groups);
+  return g;
+}
+
+// Удалить группу: её вкладки остаются в пространстве (groupId → null)
+async function deleteGroup(groupId) {
+  const groups = await loadGroups();
+  if (!groups.some(g => g.id === groupId)) return;
+  await saveGroups(groups.filter(g => g.id !== groupId));
+
+  const tabs = await loadTabs();
+  let changed = false;
+  tabs.forEach(t => {
+    if (t.groupId === groupId) { t.groupId = null; changed = true; }
+  });
+  if (changed) await saveTabs(tabs);
 }
 
 // === Вкладки ===
 
-async function saveCurrentTab(name, folderId = null) {
+async function saveCurrentTab(name, spaceId) {
   const current = await new Promise(resolve => {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => resolve(tabs[0]));
   });
   if (!current || current.url.startsWith('chrome://')) return;
 
+  const sid = spaceId != null ? spaceId : await resolveDefaultSpaceId();
   const tabs = await loadTabs();
-  // Дубль по URL + folderId — пропускаем
-  if (tabs.some(t => t.url === current.url && t.folderId === folderId)) return;
+  // Дубль по URL + пространство — пропускаем
+  if (tabs.some(t => t.url === current.url && t.spaceId === sid)) return;
 
   // Фавикон: URL вкладки (tabs.favIconUrl) — храним как есть, если он есть
   // (data: URL тоже допустим). Пустой/отсутствующий → поле не ставим
@@ -72,15 +224,16 @@ async function saveCurrentTab(name, folderId = null) {
     url: current.url,
     title: current.title,
     ...(favIconUrl ? { favIconUrl } : {}),
-    folderId
+    spaceId: sid
   });
   await saveTabs(tabs);
 }
 
-async function addTab(name, url, folderId = null) {
+async function addTab(name, url, spaceId) {
+  const sid = spaceId != null ? spaceId : await resolveDefaultSpaceId();
   const tabs = await loadTabs();
-  if (tabs.some(t => t.url === url && t.folderId === folderId)) return;
-  tabs.push({ name: name || 'Без имени', url: url || '', title: '', folderId });
+  if (tabs.some(t => t.url === url && t.spaceId === sid)) return;
+  tabs.push({ name: name || 'Без имени', url: url || '', title: '', spaceId: sid });
   await saveTabs(tabs);
 }
 
@@ -97,18 +250,24 @@ async function deleteTab(tabIndex) {
   await saveTabs(tabs);
 }
 
-// Переместить вкладку в папку (или в «Все»)
-async function moveTabToFolder(tabIndex, folderId) {
+// Переместить вкладку: spaceId (в другое пространство, groupId очищается)
+// и/или groupId (null — «Без группы»). Индекс — по полному массиву.
+async function moveTab(tabIndex, spaceId, groupId) {
   const tabs = await loadTabs();
-  if (!tabs[tabIndex]) return;
+  const tab = tabs[tabIndex];
+  if (!tab) return;
 
-  // Если folderId === null — в «Все», иначе проверяем что папка существует
-  if (folderId !== null) {
-    const folders = await loadFolders();
-    if (!folders.some(f => f.id === folderId)) return;
+  if (spaceId != null) {
+    const spaces = await ensureSpaces();
+    if (!spaces.some(s => s.id === spaceId)) return;
+    tab.spaceId = spaceId;
+    tab.groupId = null; // между пространствами группы не ездят
   }
-
-  tabs[tabIndex].folderId = folderId;
+  if (groupId !== undefined) {
+    const groups = await loadGroups();
+    if (groupId !== null && !groups.some(g => g.id === groupId)) return;
+    tab.groupId = groupId;
+  }
   await saveTabs(tabs);
 }
 
@@ -137,86 +296,25 @@ async function renameTab(tabIndex, newName) {
   await saveTabs(tabs);
 }
 
-// === Папки ===
-
-async function createFolder(name, parentId = null) {
-  const folders = await loadFolders();
-  // Дубль по имени — пропускаем (case-insensitive)
-  if (folders.some(f => f.name.toLowerCase() === name.toLowerCase())) return null;
-
-  // Вложенность — максимум 1 уровень: родитель должен существовать и не иметь parent сам
-  if (parentId !== null) {
-    const parent = folders.find(f => f.id === parentId);
-    if (!parent || parent.parentId != null) return null;
-  }
-
-  const folder = { id: genId(), name, parentId };
-  folders.push(folder);
-  await saveFolders(folders);
-  return folder;
-}
-
-// Все id вложенных папок (рекурсивно, на случай >1 уровня в данных)
-async function collectChildIds(folderId) {
-  const folders = await loadFolders();
-  const result = [];
-  const walk = (fid) => {
-    folders.filter(f => f.parentId === fid).forEach(f => {
-      result.push(f.id);
-      walk(f.id);
-    });
-  };
-  walk(folderId);
-  return result;
-}
-
-async function deleteFolder(folderId) {
-  const folders = await loadFolders();
-  if (!folders.some(f => f.id === folderId)) return;
-
-  const removedIds = new Set([folderId, ...(await collectChildIds(folderId))]);
-  const remaining = folders.filter(f => !removedIds.has(f.id));
-  await saveFolders(remaining);
-
-  // Вкладки из удалённой папки (и всех вложенных) → "Все"
-  const tabs = await loadTabs();
-  tabs.forEach(t => {
-    if (t.folderId !== null && t.folderId !== undefined && removedIds.has(t.folderId)) t.folderId = null;
-  });
-  await saveTabs(tabs);
-}
-
-async function renameFolder(folderId, newName) {
-  const folders = await loadFolders();
-  const folder = folders.find(f => f.id === folderId);
-  if (!folder) return;
-
-  // Дубль по имени — не ренеймим
-  if (folders.some(f => f.name.toLowerCase() === newName.toLowerCase() && f.id !== folderId)) return;
-
-  folder.name = newName;
-  await saveFolders(folders);
-}
-
 // === Сообщения ===
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   switch (msg.action) {
     // Вкладки
     case 'add-tab':
-      addTab(msg.name, msg.url, msg.folderId);
+      addTab(msg.name, msg.url, msg.spaceId);
       break;
     case 'save-current':
-      saveCurrentTab(msg.name, msg.folderId);
+      saveCurrentTab(msg.name, msg.spaceId);
       break;
     case 'open':
       openTab(msg.index);
       break;
-    // Открыть one saved tab (view путь) — создаёт browser-tab
+    // Открыть одну сохранённую вкладку (view-путь) — создаёт браузерную вкладку
     case 'open-one':
       chrome.tabs.create({ url: msg.url, active: true });
       break;
-    // Массовое открытие: открывает каждую вкладку (неактивно)
+    // Массовое открытие: открывает each saved tab (неактивно)
     case 'open-many':
       for (const url of msg.urls || []) chrome.tabs.create({ url, active: false });
       break;
@@ -224,7 +322,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       deleteTab(msg.index);
       break;
     case 'move-tab':
-      moveTabToFolder(msg.index, msg.folderId);
+      moveTab(msg.index, msg.spaceId, msg.groupId);
       break;
     case 'rename-tab':
       renameTab(msg.index, msg.name);
@@ -233,16 +331,29 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       reorderTab(msg.fromIndex, msg.toIndex, msg.side);
       break;
 
-    // Папки
-    case 'create-folder':
-      createFolder(msg.name, msg.parentId).then(result => sendResponse(result));
-      return true; // асинхронный ответ
-    case 'delete-folder':
-      deleteFolder(msg.id).then(() => sendResponse(true));
-      return true;
-    case 'rename-folder':
-      renameFolder(msg.id, msg.name).then(() => sendResponse(true));
-      return true;
+    // Пространства (асинхронный ответ: возвращаем Promise, канал остаётся открытым)
+    case 'create-space': {
+      const p = createSpace(msg.name).then((result) => { sendResponse(result); return result; });
+      return p;
+    }
+    case 'delete-space': {
+      const p = deleteSpace(msg.id).then(() => { sendResponse(true); return true; });
+      return p;
+    }
+    case 'rename-space': {
+      const p = renameSpace(msg.id, msg.name).then(() => { sendResponse(true); return true; });
+      return p;
+    }
+
+    // Группы
+    case 'create-group': {
+      const p = createGroup(msg.spaceId, msg.name).then((result) => { sendResponse(result); return result; });
+      return p;
+    }
+    case 'delete-group': {
+      const p = deleteGroup(msg.id).then(() => { sendResponse(true); return true; });
+      return p;
+    }
 
     default:
       return false;
@@ -253,6 +364,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 // === Горячие клавиши ===
 
 // Ctrl+Shift+S (commands.save-tab) — сохранить текущую вкладку
+// (пространство по умолчанию: blattam-last-space → первое → «Мои вкладки»)
 chrome.commands.onCommand.addListener((command) => {
   if (command !== 'save-tab') return;
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
@@ -261,6 +373,17 @@ chrome.commands.onCommand.addListener((command) => {
   });
 });
 
-// Автомиграция при загрузке расширения + чистка ключа скриншотов
-migrateTabs();
+// Автомиграция legacy-папок при загрузке расширения
+ensureSpaces();
+
+// === Чистка: скриншоты вырезаны из проекта ===
+// Удаляем оставшийся ключ 'blattam-screenshots' из chrome.storage.local
+// (у пользователей, у которых миниатюры успели сохраниться, данные
+// не должны висеть в хранилище бесконечно).
+async function purgeScreenshots() {
+  const data = await chrome.storage.local.get(['blattam-screenshots']);
+  if (data['blattam-screenshots']) {
+    await chrome.storage.local.set({ 'blattam-screenshots': null });
+  }
+}
 purgeScreenshots();

@@ -1,46 +1,45 @@
 const saveBtn = document.getElementById('save-current-tab');
-const folderSelect = document.getElementById('folder-select');
+const spaceSelect = document.getElementById('space-select');
 const savedMsg = document.getElementById('saved-msg');
-const addFolderBtn = document.getElementById('popup-add-folder');
+const addSpaceBtn = document.getElementById('popup-add-space');
 
 // Модалка
-const folderModal = document.getElementById('folder-modal');
-const folderNameInput = document.getElementById('folder-name-input');
+const spaceModal = document.getElementById('space-modal');
+const spaceNameInput = document.getElementById('space-name-input');
 const modalCancel = document.getElementById('modal-cancel');
 const modalConfirm = document.getElementById('modal-confirm');
 
-let folders = [];
-let lastFolderId = ''; // Помним последнюю выбранную папку
+let spaces = [];
+let lastSpaceId = ''; // Помним последнее выбранное пространство
 
-// Загрузка списка папок
-function loadFolders() {
-  chrome.storage.sync.get(['blattam-folders'], (result) => {
-    folders = result['blattam-folders'] || [];
-    renderFolders();
+// Загрузка списка пространств + запомненное blattam-last-space
+function loadSpaces() {
+  chrome.storage.sync.get(['blattam-spaces', 'blattam-last-space'], (result) => {
+    spaces = Array.isArray(result['blattam-spaces']) ? result['blattam-spaces'] : [];
+    lastSpaceId = result['blattam-last-space'] || '';
+    renderSpaces();
   });
 }
 
-function renderFolders() {
+function renderSpaces() {
   // Сохраняем текущий выбор
-  const currentVal = folderSelect.value;
-  
-  folderSelect.innerHTML = '<option value="">Все (без папки)</option>';
-  
-  // Иерархия: вложенные папки — с «↳»
-  const appendFolderOption = (folder, depth) => {
+  const currentVal = spaceSelect.value;
+
+  spaceSelect.innerHTML = '';
+  spaces.forEach(sp => {
     const opt = document.createElement('option');
-    opt.value = folder.id;
-    opt.textContent = (depth > 0 ? '↳ ' : '') + folder.name;
-    folderSelect.appendChild(opt);
-    folders.filter(f => f.parentId === folder.id).forEach(child => appendFolderOption(child, depth + 1));
-  };
-  folders.filter(f => f.parentId == null).forEach(f => appendFolderOption(f, 0));
-  
-  // Восстанавливаем выбор или используем последнюю
-  if (folders.some(f => f.id === currentVal)) {
-    folderSelect.value = currentVal;
-  } else if (lastFolderId) {
-    folderSelect.value = lastFolderId;
+    opt.value = sp.id;
+    opt.textContent = sp.name;
+    spaceSelect.appendChild(opt);
+  });
+
+  // Восстанавливаем выбор: текущий → blattam-last-space → первое пространство
+  if (spaces.some(sp => sp.id === currentVal)) {
+    spaceSelect.value = currentVal;
+  } else if (spaces.some(sp => sp.id === lastSpaceId)) {
+    spaceSelect.value = lastSpaceId;
+  } else if (spaces.length > 0) {
+    spaceSelect.value = spaces[0].id;
   }
 }
 
@@ -50,13 +49,15 @@ saveBtn.onclick = () => {
     const tab = tabs[0];
     if (!tab || tab.url.startsWith('chrome://')) return;
 
-    const folderId = folderSelect.value || null;
-    lastFolderId = folderId || '';
+    const spaceId = spaceSelect.value || null;
+    lastSpaceId = spaceId || '';
+    // Popup обновляет blattam-last-space при сохранении
+    if (spaceId) chrome.storage.sync.set({ 'blattam-last-space': spaceId });
 
-    chrome.runtime.sendMessage({ 
-      action: 'save-current', 
+    chrome.runtime.sendMessage({
+      action: 'save-current',
       name: tab.title || '',
-      folderId 
+      spaceId
     });
 
     savedMsg.classList.add('show');
@@ -64,50 +65,64 @@ saveBtn.onclick = () => {
   });
 };
 
-// Новая папка из popup
-addFolderBtn.addEventListener('click', () => {
-  folderNameInput.value = '';
-  folderModal.classList.add('open');
-  setTimeout(() => folderNameInput.focus(), 50);
+// Новое пространство из popup
+addSpaceBtn.addEventListener('click', () => {
+  spaceNameInput.value = '';
+  spaceModal.classList.add('open');
+  setTimeout(() => spaceNameInput.focus(), 50);
 });
 
 modalCancel.addEventListener('click', closeModal);
-folderModal.addEventListener('click', (e) => {
-  if (e.target === folderModal) closeModal();
+spaceModal.addEventListener('click', (e) => {
+  if (e.target === spaceModal) closeModal();
 });
 
 function closeModal() {
-  folderModal.classList.remove('open');
+  spaceModal.classList.remove('open');
 }
 
 modalConfirm.addEventListener('click', () => {
-  const name = folderNameInput.value.trim();
+  const name = spaceNameInput.value.trim();
   if (!name) return;
-  
-  chrome.runtime.sendMessage({ action: 'create-folder', name }, (result) => {
-    // Если папка создана (или была дубль), обновляем список
-    loadFolders();
-    if (result) {
-      folderSelect.value = result.id;
-      lastFolderId = result.id;
+
+  chrome.runtime.sendMessage({ action: 'create-space', name }, (result) => {
+    // Если пространство создано, делаем его выбранным
+    if (result && result.id) {
+      lastSpaceId = result.id;
+    }
+    renderSpaces();
+    // renderSpaces() восстанавливает прежний выбор — переопределяем его
+    // только если новое пространство реально в списке
+    if (result && result.id && spaces.some(sp => sp.id === result.id)) {
+      spaceSelect.value = result.id;
     }
   });
-  
+
   closeModal();
 });
 
-folderNameInput.addEventListener('keydown', (e) => {
+spaceNameInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') modalConfirm.click();
   if (e.key === 'Escape') modalCancel.click();
 });
 
-// Автообновление папок при изменении из view
+// Автообновление списков при изменении из view
 chrome.storage.onChanged.addListener((changes, areaName) => {
-  if (areaName === 'sync' && changes['blattam-folders']) {
-    folders = changes['blattam-folders'].newValue || [];
-    renderFolders();
+  if (areaName !== 'sync') return;
+  if (changes['blattam-spaces']) {
+    spaces = changes['blattam-spaces'].newValue || [];
+    renderSpaces();
+  }
+  if (changes['blattam-last-space'] && changes['blattam-last-space'].newValue) {
+    lastSpaceId = changes['blattam-last-space'].newValue;
+    renderSpaces();
+    // Внешняя смена blattam-last-space (из view) — следим за ней,
+    // даже если в popup уже был выбор
+    if (spaces.some(sp => sp.id === lastSpaceId)) {
+      spaceSelect.value = lastSpaceId;
+    }
   }
 });
 
 // Старт
-loadFolders();
+loadSpaces();

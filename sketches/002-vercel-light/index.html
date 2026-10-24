@@ -1,0 +1,499 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Toby — вкладки</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#ffffff; --card:#ffffff; --ink:#171717; --muted:#666666; --faint:#808080;
+    --line:rgba(0,0,0,.08); --line2:#ebebeb; --hover:#fafafa;
+    --thumb:#f6f6f7; --thumbbar:#f0f0f1; --line3:#e3e3e6; --line3b:#d4d4d8; --ph:#e9e9ec; --codebg:#efeff2;
+    --sel-glow:rgba(23,23,23,.08);
+  }
+  [data-theme="dark"]{
+    --bg:#0a0a0a; --card:#111113; --ink:#ededed; --muted:#a1a1a1; --faint:#737373;
+    --line:rgba(255,255,255,.12); --line2:rgba(255,255,255,.14); --hover:#1a1a1c;
+    --thumb:#141416; --thumbbar:#101012; --line3:#2b2b30; --line3b:#3a3a41; --ph:#232327; --codebg:#18181b;
+    --sel-glow:rgba(237,237,237,.10);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+  body{
+    font-family:'Geist',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+    font-feature-settings:'liga';
+    background:var(--bg); color:var(--ink); font-size:14px; line-height:1.5;
+  }
+  ::selection{background:#171717;color:#fff}
+  [data-theme="dark"] ::selection{background:#ededed;color:#0a0a0a}
+  button{font-family:inherit;cursor:pointer}
+
+  /* ---------- top bar ---------- */
+  .topbar{position:sticky;top:0;z-index:50;background:var(--bg);box-shadow:0 1px 0 var(--line2)}
+  .topinner{position:relative;display:flex;align-items:center;justify-content:space-between;height:52px;padding:0 20px}
+  .wordmark{font-size:17px;font-weight:700;letter-spacing:-.06em;user-select:none}
+  .searchbox{position:absolute;left:50%;transform:translateX(-50%);width:440px;max-width:46vw}
+  .searchbox svg{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--faint);pointer-events:none}
+  .searchbox input{
+    width:100%;height:32px;border:0;border-radius:6px;background:var(--bg);
+    box-shadow:0 0 0 1px var(--line);padding:0 32px;font:400 13px/1 'Geist',sans-serif;color:var(--ink);
+    transition:box-shadow .12s;
+  }
+  .searchbox input::placeholder{color:var(--faint)}
+  .searchbox input:focus{outline:0;box-shadow:0 0 0 1.5px var(--ink)}
+  .searchbox kbd{
+    position:absolute;right:8px;top:50%;transform:translateY(-50%);
+    min-width:18px;height:18px;padding:0 4px;display:grid;place-items:center;
+    font:500 10.5px/1 'Geist Mono',ui-monospace,monospace;color:var(--faint);
+    border-radius:4px;box-shadow:0 0 0 1px var(--line2);
+  }
+  .topactions{display:flex;gap:6px}
+  .tbtn{
+    height:28px;padding:0 10px;display:inline-flex;align-items:center;gap:6px;
+    border:0;border-radius:6px;background:var(--bg);box-shadow:0 0 0 1px var(--line);
+    font:500 12.5px/1 'Geist',sans-serif;color:var(--muted);letter-spacing:-.1px;
+    transition:background .1s,color .1s,box-shadow .1s;
+  }
+  .tbtn:hover{background:var(--hover)}
+  .tbtn.on{background:var(--ink);color:var(--bg);box-shadow:none}
+  .tbtn .glyph{font-size:12px;line-height:1}
+
+  /* ---------- chips ---------- */
+  .chips{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:14px 20px 2px}
+  .chips .sep{width:1px;height:16px;background:var(--line2);margin:0 6px;flex:none}
+  .chip{
+    height:26px;padding:0 11px;border:0;border-radius:9999px;
+    display:inline-flex;align-items:center;gap:5px;
+    background:var(--bg);box-shadow:0 0 0 1px var(--line);
+    font:500 12.5px/1 'Geist',sans-serif;color:var(--muted);letter-spacing:-.1px;
+    transition:background .1s,color .1s,box-shadow .1s;
+  }
+  .chip:hover{background:var(--hover)}
+  .chip.on{background:var(--ink);color:var(--bg);box-shadow:none}
+  .chip.sub{margin-left:4px;padding-left:9px}
+  .chip .dot{width:6px;height:6px;border-radius:50%;flex:none}
+  .chip .em{font-size:11px;line-height:1}
+
+  /* ---------- meta row ---------- */
+  .main{padding:0 20px}
+  .metarow{display:flex;align-items:baseline;justify-content:space-between;padding:16px 0 12px}
+  .metatitle{font-size:15px;font-weight:600;letter-spacing:-.2px;display:flex;align-items:baseline;gap:8px}
+  .metatitle .n{font:500 11px/1 'Geist Mono',ui-monospace,monospace;color:var(--faint);letter-spacing:0}
+  .metaright{font:500 10.5px/1 'Geist Mono',ui-monospace,monospace;color:var(--faint);text-transform:uppercase;letter-spacing:.08em}
+
+  /* ---------- grid ---------- */
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(176px,1fr));gap:12px;padding-bottom:110px}
+  body.compact .grid{grid-template-columns:repeat(auto-fill,minmax(130px,1fr))}
+
+  .card{
+    position:relative;border-radius:8px;background:var(--card);
+    box-shadow:0 0 0 1px var(--line);
+    transition:box-shadow .12s,transform .12s;
+    cursor:pointer;
+  }
+  .card:hover{box-shadow:0 0 0 1px var(--line),0 2px 10px rgba(0,0,0,.06)}
+  .card.sel{box-shadow:0 0 0 1.5px var(--ink)}
+  .card.kb{box-shadow:0 0 0 1px var(--ink),0 0 0 5px var(--sel-glow)}
+  .card.kb.sel{box-shadow:0 0 0 1.5px var(--ink),0 0 0 5px var(--sel-glow)}
+  .card.archived{opacity:.45}
+
+  /* fake screenshot (pure CSS) */
+  .thumb{position:relative;aspect-ratio:16/10;background:var(--thumb);border-radius:8px 8px 0 0;overflow:hidden}
+  .chrome{height:12px;display:flex;align-items:center;gap:4px;padding:0 6px;background:var(--thumbbar);border-bottom:1px solid var(--line2)}
+  .fav{width:5px;height:5px;border-radius:50%;flex:none}
+  .cbar{height:3px;max-width:72px;flex:1;border-radius:2px;background:var(--line3)}
+  .t{position:relative;padding:7px 8px;display:flex;flex-direction:column;gap:3px;height:calc(100% - 12px)}
+  .l{display:block;height:3px;border-radius:2px;background:var(--line3);flex:none}
+  .hd{height:5px;background:var(--line3b)}
+  .w90{width:90%}.w85{width:85%}.w80{width:80%}.w75{width:75%}.w70{width:70%}.w65{width:65%}
+  .w60{width:60%}.w55{width:55%}.w50{width:50%}.w45{width:45%}.w40{width:40%}
+  .ph{height:28px;border-radius:3px;background:var(--ph);flex:none}
+  .code{flex:1;background:var(--codebg);border-radius:4px;padding:5px 6px;display:flex;flex-direction:column;gap:3px}
+  .cl{height:2.5px;border-radius:2px;background:var(--line3b)}
+  .ind{margin-left:8px}
+  .t.vc{align-items:center;justify-content:center}
+  .play{width:28px;height:28px;border-radius:50%;background:var(--ph);display:grid;place-items:center}
+  .play b{width:0;height:0;border-left:8px solid var(--line3b);border-top:5px solid transparent;border-bottom:5px solid transparent;margin-left:2px}
+  .bl{display:block;height:3px;border-radius:2px;background:var(--line3);position:relative;margin-left:10px}
+  .bl::before{content:'';position:absolute;left:-10px;top:-.5px;width:4px;height:4px;border-radius:1px;background:var(--line3b)}
+  .road{position:absolute;background:var(--line3);border-radius:2px}
+  .r1{left:-10%;right:-10%;top:40%;height:3px;transform:rotate(-13deg)}
+  .r2{top:-12%;bottom:-12%;left:56%;width:3px;transform:rotate(9deg)}
+  .block{position:absolute;background:var(--ph);border-radius:2px}
+  .b1{left:8px;top:8px;width:28%;height:24%}
+  .b2{right:10px;bottom:9px;width:32%;height:26%}
+  .rect{display:block;border:1px solid var(--line3b);border-radius:3px;height:24px;width:54%;margin-top:3px}
+  .rect.r2{width:36%;margin-top:5px}
+  .cells{flex:1;display:grid;grid-template-columns:repeat(3,1fr);gap:4px}
+  .cells i{background:var(--ph);border-radius:3px}
+  .ava{width:13px;height:13px;border-radius:50%;background:var(--line3b);flex:none;margin-bottom:2px}
+
+  /* hover controls */
+  .cb,.rm{
+    position:absolute;display:grid;place-items:center;
+    background:var(--card);box-shadow:0 0 0 1px var(--line);
+    opacity:0;transition:opacity .12s,background .1s;
+  }
+  .cb{top:6px;left:6px;width:16px;height:16px;border-radius:4px;z-index:2}
+  .cb::after{content:'';width:8px;height:4px;border-left:1.5px solid #fff;border-bottom:1.5px solid #fff;transform:rotate(-45deg) translateY(-1px);opacity:0}
+  .rm{top:5px;right:5px;width:19px;height:19px;border-radius:50%;font:400 12px/1 'Geist',sans-serif;color:var(--muted);z-index:2}
+  .rm:hover{background:var(--hover);color:var(--ink)}
+  .card:hover .cb,.card:hover .rm,body.selection-mode .cb{opacity:1}
+  .card.sel .cb{opacity:1;background:var(--ink);box-shadow:0 0 0 1px var(--ink)}
+  .card.sel .cb::after{opacity:1}
+  .abadge{
+    position:absolute;bottom:6px;right:6px;z-index:2;
+    font:500 9px/1 'Geist Mono',ui-monospace,monospace;text-transform:uppercase;letter-spacing:.1em;
+    color:var(--faint);background:var(--card);padding:3px 5px;border-radius:4px;box-shadow:0 0 0 1px var(--line);
+  }
+
+  .cbody{padding:8px 10px 9px}
+  .cname{font-size:13px;font-weight:500;letter-spacing:-.1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .curl{margin-top:3px;font:400 10.5px/1.4 'Geist Mono',ui-monospace,monospace;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ctags{display:flex;gap:4px;margin-top:7px}
+  .ctags i{width:6px;height:6px;border-radius:50%}
+
+  .empty{padding:60px 0;text-align:center;color:var(--muted);font-size:14px}
+  .empty span{display:block;margin-top:6px;font-size:12.5px;color:var(--faint)}
+  .empty button{margin-top:14px;height:28px;padding:0 12px;border:0;border-radius:6px;background:var(--ink);color:var(--bg);font:500 12.5px/1 'Geist',sans-serif}
+
+  /* ---------- selection bar ---------- */
+  .selbar{
+    position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:60;
+    display:flex;align-items:center;gap:10px;
+    background:var(--card);border-radius:8px;padding:8px 10px;
+    box-shadow:0 0 0 1px var(--line),0 8px 24px rgba(0,0,0,.10),0 2px 2px rgba(0,0,0,.04);
+    transition:opacity .16s,transform .16s;
+  }
+  .selbar.off{opacity:0;transform:translateX(-50%) translateY(14px);pointer-events:none}
+  .selcount{font-size:13px;font-weight:500;letter-spacing:-.1px;padding:0 2px 0 4px;white-space:nowrap}
+  .seldiv{width:1px;height:18px;background:var(--line2)}
+  .btn{height:28px;padding:0 12px;border:0;border-radius:6px;font:500 12.5px/1 'Geist',sans-serif;letter-spacing:-.1px;transition:background .1s,opacity .1s}
+  .btn-dark{background:var(--ink);color:var(--bg)}
+  .btn-dark:hover{opacity:.88}
+  .btn-ghost{background:var(--bg);color:var(--muted);box-shadow:0 0 0 1px var(--line)}
+  .btn-ghost:hover{background:var(--hover)}
+
+  /* ---------- toast ---------- */
+  .toast{
+    position:fixed;left:50%;bottom:78px;transform:translateX(-50%) translateY(6px);z-index:70;
+    background:var(--ink);color:var(--bg);padding:8px 14px;border-radius:6px;
+    font-size:12.5px;font-weight:500;letter-spacing:-.1px;
+    opacity:0;pointer-events:none;transition:opacity .18s,transform .18s;
+  }
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+  @media (max-width:760px){
+    .searchbox{position:static;transform:none;width:auto;flex:1;margin:0 12px;max-width:none}
+    .topinner{height:auto;padding:10px 16px;flex-wrap:wrap;gap:8px}
+    .topactions{width:100%;justify-content:flex-end}
+  }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topinner">
+    <div class="wordmark">Toby</div>
+    <div class="searchbox">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="search" type="text" placeholder="Поиск во вкладках…" autocomplete="off" spellcheck="false">
+      <kbd>/</kbd>
+    </div>
+    <div class="topactions">
+      <button class="tbtn" id="btnSelect" title="Режим выбора"><span class="glyph">☑</span>Выбрать</button>
+      <button class="tbtn" id="btnSize" title="Размер сетки"><span class="glyph">▦</span>Размер</button>
+      <button class="tbtn" id="btnTheme" title="Тема"><span class="glyph" id="themeGlyph">🌙</span></button>
+    </div>
+  </div>
+</header>
+
+<nav class="chips" id="chips">
+  <span>
+    <button class="chip folder on" data-type="folder" data-filter="all">Все</button>
+  </span>
+  <span>
+    <button class="chip folder" data-type="folder" data-filter="work">Работа</button>
+  </span>
+  <span>
+    <button class="chip folder" data-type="folder" data-filter="home">Дома</button>
+  </span>
+  <span>
+    <button class="chip folder sub" data-type="folder" data-filter="projects">↳ Проекты</button>
+  </span>
+  <i class="sep"></i>
+  <span>
+    <button class="chip" data-type="special" data-filter="arch"><span class="em">🗄</span>Архив</button>
+  </span>
+  <span>
+    <button class="chip" data-type="special" data-filter="freq"><span class="em">⭐</span>Частые</button>
+  </span>
+  <span>
+    <button class="chip" data-type="special" data-filter="star"><span class="em">🕘</span>Избранные</button>
+  </span>
+  <i class="sep"></i>
+  <span id="tagChips"></span>
+  <i class="sep"></i>
+  <span>
+    <button class="chip" data-type="session" data-filter="sess-1021"><span class="em">📋</span>Сессия 21.10</button>
+  </span>
+  <span>
+    <button class="chip" data-type="session" data-filter="sess-work"><span class="em">📋</span>Работа</button>
+  </span>
+</nav>
+
+<main class="main">
+  <div class="metarow">
+    <div class="metatitle"><span id="metaLabel">Все вкладки</span><span class="n" id="metaCount">12</span></div>
+    <div class="metaright">обновлено 21.10 · 14:32</div>
+  </div>
+  <div class="grid" id="grid"></div>
+  <div class="empty" id="empty" hidden>
+    Ничего не найдено.
+    <span>Попробуйте изменить запрос или сбросить фильтры.</span>
+    <button id="btnResetFilters">Сбросить фильтры</button>
+  </div>
+</main>
+
+<div class="selbar" id="selbar">
+  <span class="selcount" id="selcount">3 выбрано</span>
+  <i class="seldiv"></i>
+  <button class="btn btn-dark" id="btnOpen">Открыть</button>
+  <button class="btn btn-ghost" id="btnReset">Сбросить</button>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+'use strict';
+const TAGS = {
+  'код':        { c:'#3b82f6' },
+  'дизайн':     { c:'#a855f7' },
+  'новости':    { c:'#ef4444' },
+  'учёба':      { c:'#22c55e' },
+  'инструменты':{ c:'#f97316' }
+};
+
+const CARDS = [
+  { t:'Документация — Python',            u:'docs.python.org/3',                    f:'work',                 tags:['код'],            s:['sess-1021'],              fav:'#5b6b8c', v:'docs',   sel:1, freq:1 },
+  { t:'GitHub — BlattamRoach/BlattamToby',u:'github.com/BlattamRoach/BlattamToby',  f:'work projects',        tags:['код','инструменты'],s:['sess-1021','sess-work'],fav:'#3d3f44', v:'code',   kb:1, star:1 },
+  { t:'MDN Web Docs',                     u:'developer.mozilla.org',                f:'work',                 tags:['код'],            s:['sess-1021'],              fav:'#6b7280', v:'docs' },
+  { t:'Figma — наработка',                u:'figma.com/file/8a2k…/наработка',       f:'work',                 tags:['дизайн'],         s:['sess-work'],              fav:'#9d8fc0', v:'design', star:1 },
+  { t:'Хабр',                             u:'habr.com',                             f:'home',                 tags:['новости'],        s:['sess-1021'],              fav:'#7a8a99', v:'news',   sel:1, freq:1, star:1 },
+  { t:'Lenta.ru',                         u:'lenta.ru',                             f:'home',                 tags:['новости'],        s:['sess-1021'],              fav:'#8a8f98', v:'news' },
+  { t:'YouTube',                          u:'youtube.com',                          f:'home',                 tags:[],                 s:['sess-1021'],              fav:'#a35d5d', v:'video',  freq:1 },
+  { t:'Notion — заметки',                 u:'notion.so/toby-notes',                 f:'home',                 tags:['учёба'],          s:['sess-1021'],              fav:'#5f6368', v:'notes',  sel:1, freq:1, star:1 },
+  { t:'Яндекс Карты',                     u:'yandex.ru/maps',                       f:'home',                 tags:[],                 s:[],                         fav:'#7d8aa0', v:'map' },
+  { t:'Golang — stdlib',                  u:'pkg.go.dev/std',                       f:'work projects',        tags:['код'],            s:['sess-work'],              fav:'#4f6d8a', v:'code' },
+  { t:'Figma Community',                  u:'figma.com/community',                  f:'work',                 tags:['дизайн'],         s:['sess-work'],              fav:'#9d8fc0', v:'grid',   freq:1 },
+  { t:'VK',                               u:'vk.com',                               f:'home',                 tags:[],                 s:[],                         fav:'#6b83a8', v:'social', arch:1 }
+];
+
+const grid      = document.getElementById('grid');
+const search    = document.getElementById('search');
+const selbar    = document.getElementById('selbar');
+const selcount  = document.getElementById('selcount');
+const metaLabel = document.getElementById('metaLabel');
+const metaCount = document.getElementById('metaCount');
+const emptyEl   = document.getElementById('empty');
+const toastEl   = document.getElementById('toast');
+
+const selected = new Set();
+let activeFolder = 'all';
+const activeTags = new Set(), activeSpecial = new Set(), activeSessions = new Set();
+
+function plural(n, one, few, many){
+  const a = Math.abs(n) % 100, d = a % 10;
+  if (a > 10 && a < 20) return many;
+  if (d > 1 && d < 5)  return few;
+  if (d === 1)         return one;
+  return many;
+}
+
+function thumbHTML(c){
+  const inner = {
+    docs:   '<div class="t"><i class="l w45 hd"></i><i class="l w90"></i><i class="l w80"></i><i class="l w85"></i><i class="l w60"></i></div>',
+    code:   '<div class="t"><div class="code"><i class="cl w70"></i><i class="cl w90"></i><i class="cl ind w60"></i><i class="cl ind w75"></i><i class="cl w50"></i></div></div>',
+    news:   '<div class="t"><i class="ph"></i><i class="l w80"></i><i class="l w65"></i></div>',
+    video:  '<div class="t vc"><span class="play"><b></b></span></div>',
+    notes:  '<div class="t"><i class="bl w70"></i><i class="bl w85"></i><i class="bl w55"></i><i class="bl w75"></i></div>',
+    map:    '<div class="t"><i class="road r1"></i><i class="road r2"></i><i class="block b1"></i><i class="block b2"></i></div>',
+    grid:   '<div class="t"><div class="cells"><i></i><i></i><i></i><i></i><i></i><i></i></div></div>',
+    design: '<div class="t"><i class="l w45 hd"></i><i class="rect"></i><i class="rect r2"></i></div>',
+    social: '<div class="t"><span class="ava"></span><i class="l w50"></i><i class="l w70"></i><i class="l w40"></i></div>'
+  }[c.v];
+  const badge = c.arch ? '<span class="abadge">архив</span>' : '';
+  return '<div class="thumb"><div class="chrome"><i class="fav" style="background:' + c.fav + '"></i><span class="cbar"></span></div>'
+       + inner
+       + '<button class="cb" tabindex="-1" aria-label="Выбрать"></button>'
+       + '<button class="rm" tabindex="-1" aria-label="Удалить">✕</button>'
+       + badge + '</div>';
+}
+
+// tag chips
+const tagWrap = document.getElementById('tagChips');
+Object.keys(TAGS).forEach(name => {
+  const b = document.createElement('button');
+  b.className = 'chip';
+  b.dataset.type = 'tag';
+  b.dataset.filter = name;
+  b.innerHTML = '<i class="dot" style="background:' + TAGS[name].c + '"></i>' + name;
+  tagWrap.appendChild(b);
+});
+
+// build cards
+CARDS.forEach(c => {
+  const el = document.createElement('article');
+  el.className = 'card' + (c.sel ? ' sel' : '') + (c.kb ? ' kb' : '') + (c.arch ? ' archived' : '');
+  el.dataset.name = (c.t + ' ' + c.u).toLowerCase();
+  el.innerHTML = thumbHTML(c)
+    + '<div class="cbody"><div class="cname">' + c.t + '</div><div class="curl">' + c.u + '</div>'
+    + (c.tags.length ? '<div class="ctags">' + c.tags.map(t => '<i style="background:' + TAGS[t].c + '" title="' + t + '"></i>').join('') + '</div>' : '')
+    + '</div>';
+  c.el = el;
+  if (c.sel) selected.add(el);
+  grid.appendChild(el);
+});
+
+/* ---------- filtering ---------- */
+function applyFilters(){
+  const q = search.value.trim().toLowerCase();
+  let shown = 0;
+  CARDS.forEach(c => {
+    const el = c.el;
+    if (!el.isConnected) return;
+    let ok = true;
+    if (ok && q) ok = el.dataset.name.includes(q);
+    if (ok && activeFolder !== 'all') ok = c.f.includes(activeFolder);
+    if (ok && activeTags.size) ok = [...activeTags].every(t => c.tags.includes(t));
+    if (ok && activeSpecial.has('arch')) ok = !!c.arch;
+    if (ok && activeSpecial.has('freq')) ok = !!c.freq;
+    if (ok && activeSpecial.has('star')) ok = !!c.star;
+    if (ok && activeSessions.size) ok = [...activeSessions].every(s => c.s.includes(s));
+    el.style.display = ok ? '' : 'none';
+    if (ok) shown++;
+  });
+  metaCount.textContent = shown;
+  emptyEl.hidden = shown !== 0;
+}
+
+function folderLabel(f){
+  return { all:'Все вкладки', work:'Работа', home:'Дома', projects:'Проекты' }[f] || 'Все вкладки';
+}
+
+/* ---------- selection ---------- */
+function updateBar(){
+  const n = selected.size;
+  selcount.textContent = n + ' ' + plural(n, 'выбрана', 'выбрано', 'выбрано');
+  selbar.classList.toggle('off', n === 0);
+}
+function toggleSel(card){
+  card.classList.toggle('sel');
+  if (card.classList.contains('sel')) selected.add(card); else selected.delete(card);
+  updateBar();
+}
+function clearSel(){
+  selected.forEach(el => el.classList.remove('sel'));
+  selected.clear();
+  updateBar();
+}
+function toast(msg){
+  toastEl.textContent = msg;
+  toastEl.classList.add('show');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => toastEl.classList.remove('show'), 1800);
+}
+
+grid.addEventListener('click', e => {
+  const card = e.target.closest('.card');
+  if (!card) return;
+  if (e.target.closest('.rm')){
+    selected.delete(card);
+    card.style.transition = 'opacity .15s, transform .15s';
+    card.style.opacity = '0';
+    card.style.transform = 'scale(.97)';
+    setTimeout(() => { card.remove(); applyFilters(); }, 150);
+    updateBar();
+    return;
+  }
+  toggleSel(card);
+});
+
+document.getElementById('btnReset').addEventListener('click', clearSel);
+document.getElementById('btnOpen').addEventListener('click', () => {
+  const n = selected.size;
+  if (!n) return;
+  toast('Открываю ' + n + ' ' + plural(n, 'вкладку', 'вкладки', 'вкладок') + '…');
+  setTimeout(clearSel, 400);
+});
+
+/* ---------- chips ---------- */
+document.getElementById('chips').addEventListener('click', e => {
+  const ch = e.target.closest('.chip');
+  if (!ch) return;
+  const type = ch.dataset.type, f = ch.dataset.filter;
+  if (type === 'folder'){
+    document.querySelectorAll('.chip.folder').forEach(x => x.classList.remove('on'));
+    ch.classList.add('on');
+    activeFolder = f;
+    metaLabel.textContent = folderLabel(f);
+  } else if (type === 'tag'){
+    ch.classList.toggle('on');
+    ch.classList.contains('on') ? activeTags.add(f) : activeTags.delete(f);
+  } else if (type === 'special'){
+    ch.classList.toggle('on');
+    ch.classList.contains('on') ? activeSpecial.add(f) : activeSpecial.delete(f);
+  } else {
+    ch.classList.toggle('on');
+    ch.classList.contains('on') ? activeSessions.add(f) : activeSessions.delete(f);
+  }
+  applyFilters();
+});
+
+document.getElementById('btnResetFilters').addEventListener('click', () => {
+  search.value = '';
+  activeFolder = 'all';
+  activeTags.clear(); activeSpecial.clear(); activeSessions.clear();
+  document.querySelectorAll('.chip').forEach(x => x.classList.toggle('on', x.dataset.filter === 'all'));
+  metaLabel.textContent = 'Все вкладки';
+  applyFilters();
+});
+
+/* ---------- search & keys ---------- */
+search.addEventListener('input', applyFilters);
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape'){
+    if (selected.size) clearSel();
+    else if (search.value){ search.value = ''; applyFilters(); search.blur(); }
+  } else if (e.key === '/' && document.activeElement !== search){
+    e.preventDefault();
+    search.focus();
+    search.select();
+  }
+});
+
+/* ---------- top actions ---------- */
+document.getElementById('btnSelect').addEventListener('click', function(){
+  document.body.classList.toggle('selection-mode');
+  this.classList.toggle('on');
+});
+document.getElementById('btnSize').addEventListener('click', function(){
+  document.body.classList.toggle('compact');
+  this.classList.toggle('on');
+});
+document.getElementById('btnTheme').addEventListener('click', function(){
+  const root = document.documentElement;
+  const dark = root.dataset.theme === 'dark';
+  root.dataset.theme = dark ? '' : 'dark';
+  document.getElementById('themeGlyph').textContent = dark ? '🌙' : '☀️';
+});
+
+/* ---------- init ---------- */
+updateBar();
+applyFilters();
+</script>
+</body>
+</html>

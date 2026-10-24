@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Toby — все вкладки</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0f1011;
+    --surface:rgba(255,255,255,0.02);
+    --surface-2:rgba(255,255,255,0.04);
+    --surface-3:#191a1c;
+    --border:rgba(255,255,255,0.08);
+    --border-subtle:rgba(255,255,255,0.05);
+    --text:#f7f8f8;
+    --text-2:#d0d6e0;
+    --text-3:#8a8f98;
+    --text-4:#62666d;
+    --accent:#5e6ad2;
+    --accent-2:#7170ff;
+    --accent-3:#828fff;
+    --red:#e5484d; --blue:#4c9ee5; --green:#27a644;
+    --orange:#f0883e; --purple:#a259ff; --yellow:#ecc266;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    background:var(--bg);
+    color:var(--text);
+    font-family:'Inter',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+    font-feature-settings:"cv01","ss03";
+    font-size:14px;
+    overflow-x:hidden;
+    -webkit-font-smoothing:antialiased;
+  }
+  button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+
+  /* ── Top bar ─────────────────────────────────────────── */
+  header{
+    position:sticky;top:0;z-index:20;
+    display:flex;align-items:center;gap:16px;
+    height:56px;padding:0 24px;
+    background:rgba(15,16,17,0.82);
+    backdrop-filter:blur(12px);
+    border-bottom:1px solid var(--border-subtle);
+  }
+  .brand{display:flex;align-items:center;gap:9px;min-width:190px}
+  .brand .mark{
+    width:17px;height:17px;border-radius:5px;
+    background:linear-gradient(135deg,var(--accent) 0%,var(--accent-3) 100%);
+    box-shadow:0 0 10px rgba(94,106,210,0.45);
+  }
+  .brand span.wm{font-size:15px;font-weight:590;letter-spacing:-0.2px}
+
+  .search{
+    flex:1;max-width:440px;margin:0 auto;position:relative;
+    display:flex;align-items:center;
+  }
+  .search svg{position:absolute;left:11px;pointer-events:none}
+  .search input{
+    width:100%;height:32px;
+    background:var(--surface);
+    border:1px solid var(--border);
+    border-radius:6px;
+    padding:0 58px 0 34px;
+    color:var(--text);
+    font-size:13px;font-weight:400;
+    outline:none;
+    transition:border-color .15s, background .15s, box-shadow .15s;
+  }
+  .search input::placeholder{color:var(--text-4)}
+  .search input:focus{
+    border-color:rgba(113,112,255,0.55);
+    background:var(--surface-2);
+    box-shadow:0 0 0 3px rgba(94,106,210,0.15);
+  }
+  .search .kbd{
+    position:absolute;right:8px;
+    font-size:11px;font-weight:510;color:var(--text-4);
+    background:var(--surface-2);
+    border:1px solid var(--border);
+    border-radius:4px;padding:2px 6px;line-height:1;
+    font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+  }
+
+  .actions{display:flex;align-items:center;gap:8px;min-width:190px;justify-content:flex-end}
+  .ghost{
+    display:flex;align-items:center;gap:6px;
+    height:30px;padding:0 11px;
+    background:var(--surface);
+    border:1px solid var(--border-subtle);
+    border-radius:6px;
+    color:var(--text-2);
+    font-size:12.5px;font-weight:510;letter-spacing:-0.1px;
+    transition:background .15s,border-color .15s,color .15s;
+  }
+  .ghost:hover{background:var(--surface-2);color:var(--text)}
+  .ghost.on{background:rgba(94,106,210,0.14);border-color:rgba(113,112,255,0.4);color:var(--accent-3)}
+  .ghost .ic{font-size:13px;opacity:.85}
+  .iconbtn{
+    width:30px;height:30px;border-radius:50%;
+    background:var(--surface-2);
+    border:1px solid var(--border);
+    font-size:13px;line-height:1;
+    transition:background .15s;
+  }
+  .iconbtn:hover{background:rgba(255,255,255,0.07)}
+
+  /* ── Chip row ────────────────────────────────────────── */
+  main{max-width:1400px;margin:0 auto;padding:18px 28px 90px}
+  .chips{
+    display:flex;flex-wrap:wrap;align-items:center;gap:7px;
+    padding-bottom:18px;
+  }
+  .chip{
+    display:inline-flex;align-items:center;gap:6px;
+    height:27px;padding:0 11px;
+    border-radius:9999px;
+    border:1px solid rgba(255,255,255,0.07);
+    color:var(--text-3);
+    font-size:12px;font-weight:510;letter-spacing:-0.1px;
+    background:transparent;
+    transition:background .12s,color .12s,border-color .12s;
+    white-space:nowrap;
+  }
+  .chip:hover{color:var(--text-2);border-color:rgba(255,255,255,0.14)}
+  .chip.active{
+    color:var(--text);
+    background:var(--surface-2);
+    border-color:rgba(255,255,255,0.16);
+  }
+  .chip .dot{width:7px;height:7px;border-radius:50%;background:var(--t)}
+  .chip .em{font-size:11px;opacity:.9}
+  .sep{width:1px;height:16px;background:rgba(255,255,255,0.09);margin:0 5px;flex:none}
+
+  /* ── Card grid ───────────────────────────────────────── */
+  .grid{
+    display:grid;
+    grid-template-columns:repeat(6,minmax(0,1fr));
+    gap:13px;
+  }
+  .card{
+    position:relative;
+    background:var(--surface);
+    border:1px solid var(--border-subtle);
+    border-radius:8px;
+    overflow:hidden;
+    cursor:pointer;
+    transition:background .15s,border-color .15s,opacity .2s,transform .15s;
+  }
+  .card:hover{background:var(--surface-2);border-color:rgba(255,255,255,0.14)}
+  .card.kb-active{
+    border-color:var(--accent-2);
+    box-shadow:0 0 0 1px var(--accent-2),
+               0 0 18px rgba(113,112,255,0.28),
+               0 4px 16px rgba(0,0,0,0.4);
+  }
+  .card.archived{opacity:.4}
+  .card.archived .thumb{filter:grayscale(.7)}
+  .card.gone{display:none}
+
+  /* Fake screenshot */
+  .thumb{
+    position:relative;height:142px;
+    background:#0c0d0f;
+    border-bottom:1px solid rgba(255,255,255,0.05);
+    overflow:hidden;
+  }
+  .thumb .tb{
+    position:absolute;top:0;left:0;right:0;height:22px;
+    background:linear-gradient(180deg,var(--c) 0%,rgba(0,0,0,0.25) 160%);
+  }
+  .thumb .tb::before{
+    content:"";position:absolute;left:8px;top:7px;width:8px;height:8px;
+    border-radius:50%;background:rgba(255,255,255,0.55);
+  }
+  .thumb .tb::after{
+    content:"";position:absolute;left:22px;top:9px;width:42px;height:4px;
+    border-radius:2px;background:rgba(255,255,255,0.35);
+  }
+  .thumb .tl{position:absolute;left:9px;right:9px;top:31px}
+  .thumb .tl b{
+    display:block;height:5px;border-radius:3px;
+    background:rgba(255,255,255,0.10);
+    margin-bottom:7px;
+  }
+  .thumb .tl b.dim{background:rgba(255,255,255,0.055)}
+  .thumb .tl b.ph{height:46px;border-radius:5px;background:rgba(255,255,255,0.05)}
+  .thumb .tl b.row{display:flex;align-items:center;gap:7px;height:auto;margin-bottom:9px}
+  .thumb .tl b.row::before{
+    content:"";flex:none;width:13px;height:13px;border-radius:50%;
+    background:rgba(255,255,255,0.13);
+  }
+  .thumb .tl b.row i{
+    display:block;height:5px;border-radius:3px;
+    background:rgba(255,255,255,0.09);width:var(--w,70%);
+  }
+
+  /* Card meta */
+  .meta{padding:10px 12px 11px}
+  .t{
+    font-size:13px;font-weight:510;letter-spacing:-0.13px;
+    color:var(--text);
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  }
+  .u{
+    margin-top:3px;
+    font-size:11.5px;font-weight:400;color:var(--text-4);
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  }
+  .tags{margin-top:8px;display:flex;gap:5px;align-items:center;height:7px}
+  .tags .dot{width:6px;height:6px;border-radius:50%}
+
+  /* Hover controls */
+  .cb{
+    position:absolute;top:6px;left:6px;z-index:2;
+    width:17px;height:17px;border-radius:4px;
+    background:rgba(9,10,11,0.6);
+    border:1px solid rgba(255,255,255,0.35);
+    opacity:0;transition:opacity .12s,background .12s,border-color .12s;
+    display:flex;align-items:center;justify-content:center;
+  }
+  .cb::after{
+    content:"";width:3.5px;height:7.5px;
+    border-left:1.6px solid #fff;border-bottom:1.6px solid #fff;
+    transform:rotate(-45deg) translate(0.5px,-1px);
+    opacity:0;
+  }
+  .card:hover .cb,body.selecting .cb{opacity:1}
+  .card.checked .cb{
+    opacity:1;background:var(--accent);border-color:var(--accent);
+  }
+  .card.checked .cb::after{opacity:1}
+  .card.checked{border-color:rgba(94,106,210,0.5)}
+  .rm{
+    position:absolute;top:6px;right:6px;z-index:2;
+    width:19px;height:19px;border-radius:4px;
+    background:rgba(9,10,11,0.6);
+    border:1px solid rgba(255,255,255,0.22);
+    color:var(--text-2);font-size:10px;line-height:1;
+    display:flex;align-items:center;justify-content:center;
+    opacity:0;transition:opacity .12s,color .12s;
+  }
+  .card:hover .rm{opacity:1}
+  .rm:hover{color:#fff;border-color:rgba(255,255,255,0.5)}
+
+  /* ── Selection bar ───────────────────────────────────── */
+  #selbar{
+    position:fixed;left:50%;bottom:24px;transform:translateX(-50%);
+    z-index:30;
+    display:flex;align-items:center;gap:11px;
+    background:var(--surface-3);
+    border:1px solid rgba(255,255,255,0.11);
+    border-radius:10px;
+    padding:8px 9px 8px 15px;
+    box-shadow:0 8px 28px rgba(0,0,0,0.55),0 2px 8px rgba(0,0,0,0.45);
+  }
+  #selbar .cnt{font-size:13px;font-weight:510;letter-spacing:-0.13px;color:var(--text-2)}
+  #selbar .vr{width:1px;height:16px;background:rgba(255,255,255,0.11)}
+  #selbar .primary{
+    height:30px;padding:0 14px;border-radius:6px;
+    background:var(--accent);color:#fff;
+    font-size:12.5px;font-weight:590;letter-spacing:-0.1px;
+    transition:background .12s;
+  }
+  #selbar .primary:hover{background:var(--accent-3)}
+  #selbar .clear{
+    height:30px;padding:0 12px;border-radius:6px;
+    background:var(--surface-2);
+    border:1px solid var(--border-subtle);
+    color:var(--text-3);
+    font-size:12.5px;font-weight:510;
+    transition:color .12s,background .12s;
+  }
+  #selbar .clear:hover{color:var(--text);background:rgba(255,255,255,0.07)}
+  .empty{
+    display:none;
+    padding:80px 0 0;text-align:center;
+    color:var(--text-4);font-size:14px;font-weight:400;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand"><span class="mark"></span><span class="wm">Toby</span></div>
+  <div class="search">
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#8a8f98" stroke-width="1.4" stroke-linecap="round">
+      <circle cx="7" cy="7" r="4.6"/><line x1="10.5" y1="10.5" x2="14" y2="14"/>
+    </svg>
+    <input id="search" type="text" placeholder="Поиск по вкладкам…" autocomplete="off" spellcheck="false">
+    <span class="kbd">⌘K</span>
+  </div>
+  <div class="actions">
+    <button class="ghost" id="selMode"><span class="ic">☑</span>Выбрать</button>
+    <button class="ghost" id="sizeBtn"><span class="ic">▦</span>Размер</button>
+    <button class="iconbtn" id="themeBtn" title="Тема">🌙</button>
+  </div>
+</header>
+
+<main>
+  <div class="chips" id="chips">
+    <button class="chip active">Все</button>
+    <button class="chip">Работа</button>
+    <button class="chip">Дома</button>
+    <button class="chip">↳ Проекты</button>
+    <span class="sep"></span>
+    <button class="chip"><span class="em">🗄</span>Архив</button>
+    <button class="chip"><span class="em">⭐</span>Частые</button>
+    <button class="chip"><span class="em">🕘</span>Избранные</button>
+    <span class="sep"></span>
+    <button class="chip"><span class="dot" style="--t:var(--blue)"></span>Код</button>
+    <button class="chip"><span class="dot" style="--t:var(--orange)"></span>Дизайн</button>
+    <button class="chip"><span class="dot" style="--t:var(--red)"></span>Новости</button>
+    <button class="chip"><span class="dot" style="--t:var(--yellow)"></span>Медиа</button>
+    <button class="chip"><span class="dot" style="--t:var(--green)"></span>Личное</button>
+    <button class="chip"><span class="dot" style="--t:var(--purple)"></span>Обучение</button>
+    <span class="sep"></span>
+    <button class="chip"><span class="em">📋</span>Сессия 21.10</button>
+    <button class="chip"><span class="em">📋</span>Работа</button>
+  </div>
+
+  <div class="grid" id="grid">
+
+    <article class="card checked" data-title="документация — python docs.python.org" data-url="docs.python.org">
+      <div class="thumb" style="--c:#2d5f8b">
+        <div class="tb"></div>
+        <div class="tl"><b style="width:92%"></b><b class="dim" style="width:64%"></b><b style="width:84%"></b><b class="dim" style="width:78%"></b><b style="width:40%"></b></div>
+      </div>
+      <div class="meta">
+        <div class="t">Документация — Python</div>
+        <div class="u">docs.python.org/3/library/</div>
+        <div class="tags"><span class="dot" style="background:var(--blue)"></span><span class="dot" style="background:var(--green)"></span></div>
+      </div>
+      <span class="cb"></span><button class="rm">✕</button>
+    </article>
+
+    <article class="card kb-active" data-title="github — blattamroach/blattamtoby github.com" data-url="github.com/BlattamRoach/BlattamToby">
+      <div class="thumb" style="--c:#5e6ad2">
+        <div class="tb"></div>
+        <div class="tl">
+          <b class="row" style="--w:52%"><i style="width:52%"></i></b>
+          <b class="row" style="--w:64%"><i style="width:64%"></i></b>
+          <b class="row" style="--w:48%"><i style="width:48%"></i></b>
+          <b class="row" style="--w:70%"><i style="width:70%"></i></b>
+          <b class="row" style="--w:58%"><i style="width:58%"></i></b>
+        </div>
+      </div>
+      <div class="meta">
+        <div class="t">GitHub — BlattamRoach/BlattamToby</div>
+        <div class="u">github.com/BlattamRoach/BlattamToby</div>
+        <div class="tags"><span class="dot" style="background:var(--purple)"></span><span class="dot" style="background:var(--blue)"></span></div>
+      </div>
+      <span class="cb"></span><button class="rm">✕</button>
+    </article>
+
+    <article class="card" data-title="mdn web docs developer.mozilla.org" data-url="developer.mozilla.org">
+      <div class="thumb" style="--c:#4a3d84">
+        <div class="tb"></div>
+        <div class="tl"><b class="ph"></b><b style="width:88%"></b><b class="dim" style="width:72%"></b></div>
+      </div>
+      <div class="meta">
+        <div class="t">MDN Web Docs</div>
+        <div class="u">developer.mozilla.org/ru/</div>
+        <div class="tags"><span class="dot" style="background:var(--blue)"></span></div>
+      </div>
+      <span class="cb"></span><button class="rm">✕</button>
+    </article>
+
+    <article class="card checked" data-title="figma — наработка figma.com" data-url="figma.com/file/toby-mockup">
+      <div class="thumb" style="--c:#8b5cf6">
+        <div class="tb"></div>
+        <div class="tl"><b class="ph" style="width:58%;height:74px"></b><b style="width:44%"></b></div>
+      </div>
+      <div class="meta">
+        <div class="t">Figma — наработка</div>
+        <div class="u">figma.com/file/toby-mockup</div>
+        <div class="tags"><span class="dot" style="background:var(--orange)"></span><span class="dot" style="background:var(--purple)"></span></div>
+      </div>
+      <span class="cb"></span><button class="rm">✕</button>
+    </article>
+
+    <article class="card" data-title="хабр — статьи habr.com" data-url="habr.com/ru">
+      <div class="thumb" style="--c:#3d7cb5">
+        <div class="tb"></div>
+        <div class="tl">
+          <b class="row" style="--w:66%"><i style="width:66%"></i></b>
+          <b class="row" style="--w:58%"><i style="width:58%"></i></b>
+          <b class="row" style="--w:72%"><i style="width:72%"></i></b>
+          <b class="row" style="--w:45%"><i style="width:45%"></i></b>
+          <b class="row" style="--w:62%"><i style="width:62%"></i></b>
+        </div>
+      </div>
+      <div class="meta">
+        <div class="t">Хабр — статьи</div>
+        <div class="u">habr.com/ru/articles</div>
+        <div class="tags"><span class="dot" style="background:var(--red)"></span><span class="dot" style="background:var(--blue)"></span></div>
+      </div>
+      <span class="cb"></span><button class="rm">✕</button>
+    </article>
+
+    <article class="card" data-title="lenta.ru" data-url="lenta.ru">
+      <div class="thumb" style="--c:#c74440">
+        <div class="tb"></div>
+        <div class="tl">
+          <b class="ph"></b>
+          <b style="width:80%"></b><b class="dim" style="width:55%"></b>
+        </div>
+      </div>
+      <div class="meta">
+        <div class="t">Lenta.ru</div>
+        <div class="u">lenta.ru/news</div>
+        <div class="tags"><span class="dot" style="background:var(--red)"></span><span class="dot" style="background:var(--yellow)"></span></div>
+      </div>
+      <span class="cb"></span><button class="rm">✕</button>
+    </article>
+
+    <article class="card" data-title="youtube youtube.com" data-url="youtube.com/watch?v=dQw4">
+      <div class="thumb" style="--c:#c74440">
+        <div class="tb"></div>
+        <div class="tl"><b class="ph" style="height:64px"></b><b style="width:70%"></b><b class="dim" style="width:48%"></b></div>
+      </div>
+      <div class="meta">
+        <div class="t">YouTube</div>
+        <div class="u">youtube.com/watch?v=dQw4</div>
+        <div class="tags"><span class="dot" style="background:var(--yellow)"></span></div>
+      </div>
+      <span class="cb"></span><button class="rm">✕</button>
+    </article>
+
+    <article class="card" data-title="notion — заметки notion.so" data-url="notion.so/workspace/toby">
+      <div class="thumb" style="--c:#9aa0aa">
+        <div class="tb"></div>
+        <div class="tl"><b style="width:46%"></b><b style="width:88%"></b><b class="dim" style="width:76%"></b><b style="width:82%"></b><b class="dim" style="width:34%"></b></div>
+      </div>
+      <div class="meta">
+        <div class="t">Notion — заметки</div>
+        <div class="u">notion.so/workspace/toby</div>
+        <div class="tags"><span class="dot" style="background:var(--yellow)"></span></div>
+      </div>
+      <span class="cb"></span><button class="rm">✕</button>
+    </article>
+
+    <article class="card" data-title="яндекс карты yandex.ru/maps" data-url="yandex.ru/maps">
+      <div class="thumb" style="--c:#d97f35">
+        <div class="tb"></div>
+        <div class="tl"><b class="ph" style="height:78px;border-radius:5px"></b><b style="width:52%"></b></div>
+      </div>
+      <div class="meta">
+        <div class="t">Яндекс Карты</div>
+        <div class="u">yandex.ru/maps/2</div>
+        <div class="tags"><span class="dot" style="background:var(--green)"></span></div>
+      </div>
+      <span class="cb"></span><button class="rm">✕</button>
+    </article>
+
+    <article class="card" data-title="golang — stdlib pkg.go.dev" data-url="pkg.go.dev/stdlib">
+      <div class="thumb" style="--c:#0091b8">
+        <div class="tb"></div>
+        <div class="tl"><b style="width:86%"></b><b class="dim" style="width:70%"></b><b style="width:78%"></b><b class="dim" style="width:58%"></b><b style="width:82%"></b></div>
+      </div>
+      <div class="meta">
+        <div class="t">Golang — stdlib</div>
+        <div class="u">pkg.go.dev/stdlib</div>
+        <div class="tags"><span class="dot" style="background:var(--blue)"></span><span class="dot" style="background:var(--purple)"></span></div>
+      </div>
+      <span class="cb"></span><button class="rm">✕</button>
+    </article>
+
+    <article class="card archived" data-title="figma community figma.com/community" data-url="figma.com/community">
+      <div class="thumb" style="--c:#8b5cf6">
+        <div class="tb"></div>
+        <div class="tl">
+          <b class="row" style="--w:55%"><i style="width:55%"></i></b>
+          <b class="row" style="--w:68%"><i style="width:68%"></i></b>
+          <b class="row" style="--w:50%"><i style="width:50%"></i></b>
+          <b class="row" style="--w:60%"><i style="width:60%"></i></b>
+        </div>
+      </div>
+      <div class="meta">
+        <div class="t">Figma Community</div>
+        <div class="u">figma.com/community</div>
+        <div class="tags"><span class="dot" style="background:var(--purple)"></span></div>
+      </div>
+      <span class="cb"></span><button class="rm">✕</button>
+    </article>
+
+    <article class="card checked" data-title="vk vk.com" data-url="vk.com">
+      <div class="thumb" style="--c:#3d7cb5">
+        <div class="tb"></div>
+        <div class="tl">
+          <b class="row" style="--w:40%"><i style="width:40%"></i></b>
+          <b class="row" style="--w:74%"><i style="width:74%"></i></b>
+          <b class="row" style="--w:56%"><i style="width:56%"></i></b>
+          <b class="row" style="--w:66%"><i style="width:66%"></i></b>
+        </div>
+      </div>
+      <div class="meta">
+        <div class="t">VK</div>
+        <div class="u">vk.com/feed</div>
+        <div class="tags"><span class="dot" style="background:var(--green)"></span></div>
+      </div>
+      <span class="cb"></span><button class="rm">✕</button>
+    </article>
+
+  </div>
+  <div class="empty" id="empty">Ничего не найдено</div>
+</main>
+
+<div id="selbar" style="display:none">
+  <span class="cnt" id="selCount">0 выбрано</span>
+  <span class="vr"></span>
+  <button class="primary" id="openBtn">Открыть</button>
+  <button class="clear" id="clearBtn">Сбросить</button>
+</div>
+
+<script>
+(function(){
+  var cards   = Array.prototype.slice.call(document.querySelectorAll('.card'));
+  var bar     = document.getElementById('selbar');
+  var selCnt  = document.getElementById('selCount');
+  var search  = document.getElementById('search');
+  var empty   = document.getElementById('empty');
+
+  function plural(n){
+    var m10 = n % 10, m100 = n % 100;
+    if (m10 === 1 && m100 !== 11) return n + ' выбран';
+    if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return n + ' выбранных';
+    return n + ' выбрано';
+  }
+
+  function updateSel(){
+    var n = cards.filter(function(c){ return c.classList.contains('checked'); }).length;
+    selCnt.textContent = plural(n);
+    bar.style.display = n ? 'flex' : 'none';
+  }
+
+  cards.forEach(function(c){
+    c.addEventListener('click', function(e){
+      if (e.target.closest('.rm')) {
+        e.stopPropagation();
+        c.classList.add('gone');
+        c.classList.remove('checked');
+        updateSel();
+        showEmpty();
+        return;
+      }
+      c.classList.toggle('checked');
+      updateSel();
+    });
+  });
+
+  document.getElementById('clearBtn').addEventListener('click', function(){
+    cards.forEach(function(c){ c.classList.remove('checked'); });
+    updateSel();
+  });
+  document.getElementById('openBtn').addEventListener('click', function(){
+    cards.forEach(function(c){ if (c.classList.contains('checked')) c.classList.remove('checked'); });
+    updateSel();
+  });
+
+  function showEmpty(){
+    var visible = cards.some(function(c){ return !c.classList.contains('gone'); });
+    empty.style.display = visible ? 'none' : 'block';
+  }
+
+  search.addEventListener('input', function(){
+    var q = search.value.trim().toLowerCase();
+    cards.forEach(function(c){
+      var hit = !q || c.getAttribute('data-title').indexOf(q) !== -1;
+      c.classList.toggle('gone', !hit);
+    });
+    showEmpty();
+  });
+
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape' && document.activeElement === search) {
+      search.value = '';
+      search.dispatchEvent(new Event('input'));
+      search.blur();
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      search.focus();
+    }
+  });
+
+  document.querySelectorAll('.chip').forEach(function(ch){
+    ch.addEventListener('click', function(){ ch.classList.toggle('active'); });
+  });
+
+  document.getElementById('selMode').addEventListener('click', function(){
+    document.body.classList.toggle('selecting');
+    this.classList.toggle('on');
+  });
+
+  var grid = document.getElementById('grid');
+  var cols = ['repeat(6,minmax(0,1fr))','repeat(7,minmax(0,1fr))','repeat(5,minmax(0,1fr))'];
+  var ci = 0;
+  document.getElementById('sizeBtn').addEventListener('click', function(){
+    ci = (ci + 1) % cols.length;
+    grid.style.gridTemplateColumns = cols[ci];
+  });
+
+  var dark = true;
+  document.getElementById('themeBtn').addEventListener('click', function(){
+    dark = !dark;
+    this.textContent = dark ? '🌙' : '☀️';
+  });
+
+  updateSel();
+})();
+</script>
+</body>
+</html>

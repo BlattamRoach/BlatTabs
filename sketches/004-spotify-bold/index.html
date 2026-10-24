@@ -1,0 +1,545 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Toby — вкладки</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#121212; --card:#181818; --surface:#1f1f1f; --hover:#2a2a2a;
+    --ink:#ffffff; --muted:#b3b3b3; --faint:#7c7c7c; --line:#4d4d4d;
+    --green:#1ed760; --green-h:#3be477;
+    --shadow-lg:rgba(0,0,0,.5) 0 8px 24px;
+    --shadow-md:rgba(0,0,0,.3) 0 8px 8px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+  body{
+    font-family:'DM Sans',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+    background:var(--bg); color:var(--ink); font-size:14px; line-height:1.45;
+  }
+  ::selection{background:var(--green);color:#000}
+  button{font-family:inherit;cursor:pointer}
+
+  /* ---------- top bar ---------- */
+  .topbar{position:sticky;top:0;z-index:50;background:var(--bg);box-shadow:0 1px 0 rgba(255,255,255,.06)}
+  .topinner{position:relative;display:flex;align-items:center;justify-content:space-between;height:56px;padding:0 20px}
+  .wordmark{
+    font-size:19px;font-weight:800;letter-spacing:-.04em;text-transform:uppercase;
+    color:var(--green);user-select:none;line-height:1;
+  }
+  .searchbox{position:absolute;left:50%;transform:translateX(-50%);width:440px;max-width:46vw}
+  .searchbox svg{position:absolute;left:14px;top:50%;transform:translateY(-50%);color:var(--faint);pointer-events:none}
+  .searchbox input{
+    width:100%;height:36px;border:0;border-radius:500px;background:var(--surface);
+    box-shadow:rgb(124,124,124) 0 0 0 1px inset;padding:0 44px 0 38px;
+    font:500 13.5px/1 'DM Sans',sans-serif;color:var(--ink);
+    transition:box-shadow .12s;
+  }
+  .searchbox input::placeholder{color:var(--faint)}
+  .searchbox input:focus{outline:0;box-shadow:rgb(255,255,255) 0 0 0 1px inset}
+  .searchbox kbd{
+    position:absolute;right:12px;top:50%;transform:translateY(-50%);
+    min-width:18px;height:18px;padding:0 4px;display:grid;place-items:center;
+    font:600 10.5px/1 'DM Sans',sans-serif;color:var(--muted);
+    border-radius:4px;box-shadow:rgb(124,124,124) 0 0 0 1px inset;
+  }
+  .topactions{display:flex;gap:8px;align-items:center}
+  .tbtn{
+    height:32px;padding:0 16px;display:inline-flex;align-items:center;gap:7px;
+    border:0;border-radius:9999px;background:var(--surface);
+    font:700 12.5px/1 'DM Sans',sans-serif;color:var(--muted);
+    transition:background .12s,color .12s,transform .12s;
+  }
+  .tbtn:hover{background:var(--hover);color:var(--ink);transform:translateY(-1px)}
+  .tbtn.on{background:#fff;color:#000}
+  .tbtn .glyph{font-size:12px;line-height:1}
+  .tbtn.round{width:32px;padding:0;justify-content:center;background:var(--green);color:#000;font-size:15px;font-weight:800}
+  .tbtn.round:hover{background:var(--green-h);color:#000}
+
+  /* ---------- chips ---------- */
+  .chips{display:flex;align-items:center;flex-wrap:wrap;gap:7px;padding:16px 20px 2px}
+  .chips .sep{width:1px;height:16px;background:rgba(255,255,255,.14);margin:0 5px;flex:none}
+  .chip{
+    height:28px;padding:0 13px;border:0;border-radius:9999px;
+    display:inline-flex;align-items:center;gap:6px;
+    background:var(--surface);
+    font:600 12.5px/1 'DM Sans',sans-serif;color:#cbcbcb;
+    transition:background .12s,color .12s,transform .12s;
+  }
+  .chip:hover{background:var(--hover);color:#fff;transform:translateY(-1px)}
+  .chip.on{background:var(--green);color:#000;font-weight:800}
+  .chip.sub{margin-left:3px;padding-left:10px}
+  .chip .dot{width:7px;height:7px;border-radius:50%;flex:none}
+  .chip .em{font-size:11px;line-height:1}
+
+  /* ---------- meta row ---------- */
+  .main{padding:0 20px}
+  .metarow{display:flex;align-items:baseline;justify-content:space-between;padding:18px 0 14px}
+  .metatitle{font-size:20px;font-weight:800;letter-spacing:-.02em;display:flex;align-items:center;gap:10px}
+  .metatitle .n{
+    font:800 12px/1 'DM Sans',sans-serif;color:var(--green);
+    background:rgba(30,215,96,.15);padding:4px 9px;border-radius:9999px;
+  }
+  .metaright{font:600 11px/1 'DM Sans',sans-serif;color:var(--muted);text-transform:uppercase;letter-spacing:.09em}
+
+  /* ---------- grid ---------- */
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(168px,1fr));gap:14px;padding-bottom:110px}
+  body.compact .grid{grid-template-columns:repeat(auto-fill,minmax(132px,1fr))}
+
+  .card{
+    position:relative;border-radius:8px;background:var(--card);
+    box-shadow:0 0 0 1px rgba(255,255,255,.05),0 2px 6px rgba(0,0,0,.35);
+    padding:8px;
+    transition:box-shadow .16s,transform .16s;
+    cursor:pointer;
+  }
+  .card:hover{transform:translateY(-4px);box-shadow:0 0 0 1px rgba(255,255,255,.08),var(--shadow-lg)}
+  .card.sel{box-shadow:0 0 0 2px var(--green),0 4px 12px rgba(0,0,0,.4)}
+  .card.kb{box-shadow:0 0 0 2px var(--green),0 0 0 6px rgba(30,215,96,.22),0 0 34px rgba(30,215,96,.4)}
+  .card.kb.sel{box-shadow:0 0 0 2px var(--green),0 0 0 6px rgba(30,215,96,.22),0 0 34px rgba(30,215,96,.4)}
+  .card.archived{opacity:.45;filter:saturate(.65)}
+
+  /* fake "album cover" (pure CSS) */
+  .thumb{
+    position:relative;aspect-ratio:1/1;border-radius:6px;overflow:hidden;
+    background:linear-gradient(155deg,hsl(var(--h) 85% 56%) 0%,hsl(var(--h) 72% 38%) 55%,hsl(var(--h) 78% 22%) 100%);
+  }
+  .thumb::before{
+    content:'';position:absolute;left:-20%;right:-20%;top:32%;height:26%;
+    transform:rotate(-14deg);background:hsl(var(--h) 92% 63% / .8);
+  }
+  .thumb::after{
+    content:'';position:absolute;inset:0;
+    background:linear-gradient(180deg,transparent 55%,rgba(0,0,0,.3));
+  }
+  .fav{
+    position:absolute;left:8px;top:8px;width:20px;height:20px;border-radius:50%;z-index:2;
+    background:hsl(var(--h) 55% 18% / .92);
+    box-shadow:0 0 0 2px rgba(255,255,255,.85),0 2px 8px rgba(0,0,0,.45);
+  }
+  .fav::after{content:'';position:absolute;inset:5px;border-radius:50%;background:hsl(var(--h) 85% 62%)}
+
+  .t{position:absolute;inset:0;padding:28px 12px 12px;display:flex;flex-direction:column;gap:4px;z-index:1}
+  .l{display:block;height:4px;border-radius:2px;background:rgba(255,255,255,.82);flex:none}
+  .hd{height:6px;background:#fff}
+  .w90{width:90%}.w85{width:85%}.w80{width:80%}.w75{width:75%}.w70{width:70%}.w65{width:65%}
+  .w60{width:60%}.w55{width:55%}.w50{width:50%}.w45{width:45%}.w40{width:40%}
+  .ph{height:34%;border-radius:4px;background:rgba(255,255,255,.3);flex:none}
+  .code{flex:1;background:rgba(0,0,0,.38);border-radius:5px;padding:8px 9px;display:flex;flex-direction:column;gap:4px}
+  .cl{height:3.5px;border-radius:2px;background:rgba(255,255,255,.78)}
+  .ind{margin-left:10px}
+  .t.vc{align-items:center;justify-content:center}
+  .play{width:34px;height:34px;border-radius:50%;background:var(--green);display:grid;place-items:center;box-shadow:0 4px 14px rgba(0,0,0,.35)}
+  .play b{width:0;height:0;border-left:9px solid #0a0a0a;border-top:6px solid transparent;border-bottom:6px solid transparent;margin-left:3px}
+  .bl{display:block;height:4px;border-radius:2px;background:rgba(255,255,255,.82);position:relative;margin-left:12px}
+  .bl::before{content:'';position:absolute;left:-12px;top:0;width:4px;height:4px;border-radius:1px;background:#fff}
+  .road{position:absolute;background:rgba(255,255,255,.75);border-radius:2px}
+  .r1{left:-10%;right:-10%;top:42%;height:4px;transform:rotate(-13deg)}
+  .r2{top:-12%;bottom:-12%;left:56%;width:4px;transform:rotate(9deg)}
+  .block{position:absolute;background:rgba(0,0,0,.3);border-radius:3px}
+  .b1{left:10px;top:32px;width:28%;height:24%}
+  .b2{right:10px;bottom:12px;width:32%;height:26%}
+  .rect{display:block;border:1.5px solid rgba(255,255,255,.85);border-radius:4px;height:26px;width:54%;margin-top:4px}
+  .rect.r2{width:36%;margin-top:6px}
+  .cells{flex:1;display:grid;grid-template-columns:repeat(3,1fr);gap:5px}
+  .cells i{background:rgba(255,255,255,.3);border-radius:3px}
+  .ava{width:15px;height:15px;border-radius:50%;background:rgba(255,255,255,.9);flex:none;margin-bottom:3px}
+
+  /* hover controls */
+  .cb,.rm{
+    position:absolute;display:grid;place-items:center;z-index:3;
+    opacity:0;transition:opacity .12s,background .12s;
+  }
+  .cb{
+    left:8px;bottom:8px;width:18px;height:18px;border-radius:5px;
+    background:rgba(0,0,0,.6);box-shadow:rgb(255,255,255) 0 0 0 1.5px inset;
+  }
+  .cb::after{content:'';width:9px;height:5px;border-left:2px solid #fff;border-bottom:2px solid #fff;transform:rotate(-45deg) translateY(-1px);opacity:0}
+  .rm{
+    top:8px;right:8px;width:21px;height:21px;border-radius:50%;
+    background:rgba(0,0,0,.6);color:#fff;font:400 12px/1 'DM Sans',sans-serif;
+    backdrop-filter:blur(4px);
+  }
+  .rm:hover{background:rgba(0,0,0,.85)}
+  .card:hover .cb,.card:hover .rm,body.selection-mode .cb{opacity:1}
+  .card.sel .cb{opacity:1;background:var(--green);box-shadow:none}
+  .card.sel .cb::after{opacity:1;border-color:#000}
+  .playbtn{
+    position:absolute;right:8px;bottom:8px;z-index:3;width:32px;height:32px;border-radius:50%;
+    background:var(--green);display:grid;place-items:center;
+    box-shadow:0 4px 14px rgba(0,0,0,.45);
+    opacity:0;transform:translateY(5px);transition:opacity .15s,transform .15s,background .12s;
+  }
+  .playbtn b{width:0;height:0;border-left:9px solid #0a0a0a;border-top:6px solid transparent;border-bottom:6px solid transparent;margin-left:3px}
+  .playbtn:hover{background:var(--green-h)}
+  .card:hover .playbtn,.card.kb .playbtn{opacity:1;transform:translateY(0)}
+  .card.archived .playbtn{display:none}
+  .abadge{
+    position:absolute;bottom:8px;right:8px;z-index:3;
+    font:800 9px/1 'DM Sans',sans-serif;text-transform:uppercase;letter-spacing:.12em;
+    color:#fff;background:rgba(0,0,0,.65);padding:4px 7px;border-radius:9999px;
+    backdrop-filter:blur(4px);
+  }
+
+  .cbody{padding:9px 4px 3px}
+  .cname{font-size:13.5px;font-weight:700;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .curl{margin-top:2px;font-size:11px;line-height:1.4;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ctags{display:flex;gap:4px;margin-top:7px}
+  .ctags i{width:7px;height:7px;border-radius:50%}
+
+  .empty{padding:64px 0;text-align:center;color:var(--ink);font-size:16px;font-weight:700}
+  .empty span{display:block;margin-top:8px;font-size:13px;font-weight:400;color:var(--muted)}
+  .empty button{
+    margin-top:16px;height:32px;padding:0 18px;border:0;border-radius:9999px;
+    background:var(--green);color:#000;font:800 12.5px/1 'DM Sans',sans-serif;
+    text-transform:uppercase;letter-spacing:1.4px;
+  }
+  .empty button:hover{background:var(--green-h)}
+
+  /* ---------- selection bar ---------- */
+  .selbar{
+    position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:60;
+    display:flex;align-items:center;gap:12px;
+    background:rgba(24,24,24,.94);backdrop-filter:blur(18px);
+    border-radius:9999px;padding:8px 10px;
+    box-shadow:var(--shadow-lg),0 0 0 1px rgba(255,255,255,.08);
+    transition:opacity .16s,transform .16s;
+  }
+  .selbar.off{opacity:0;transform:translateX(-50%) translateY(16px);pointer-events:none}
+  .selcount{font-size:13.5px;font-weight:700;padding:0 4px;white-space:nowrap}
+  .seldiv{width:1px;height:18px;background:var(--line)}
+  .btn{
+    height:32px;padding:0 18px;border:0;border-radius:9999px;
+    font:800 12px/1 'DM Sans',sans-serif;letter-spacing:1.4px;text-transform:uppercase;
+    transition:background .12s,color .12s,border-color .12s,transform .12s;
+  }
+  .btn:active{transform:scale(.97)}
+  .btn-primary{display:inline-flex;align-items:center;gap:7px;background:var(--green);color:#000}
+  .btn-primary:hover{background:var(--green-h)}
+  .btn-primary .tri{width:0;height:0;border-left:7px solid #0a0a0a;border-top:5px solid transparent;border-bottom:5px solid transparent}
+  .btn-ghost{background:transparent;color:#fff;border:1px solid var(--line)}
+  .btn-ghost:hover{border-color:#9b9b9b;background:rgba(255,255,255,.06)}
+
+  /* ---------- toast ---------- */
+  .toast{
+    position:fixed;left:50%;bottom:82px;transform:translateX(-50%) translateY(6px);z-index:70;
+    background:var(--surface);color:#fff;padding:10px 18px;border-radius:9999px;
+    font-size:13px;font-weight:600;
+    box-shadow:var(--shadow-lg),0 0 0 1px rgba(255,255,255,.08);
+    opacity:0;pointer-events:none;transition:opacity .18s,transform .18s;
+  }
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+  @media (max-width:760px){
+    .searchbox{position:static;transform:none;width:auto;flex:1;margin:0 12px;max-width:none}
+    .topinner{height:auto;padding:10px 16px;flex-wrap:wrap;gap:8px}
+    .topactions{width:100%;justify-content:flex-end}
+  }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topinner">
+    <div class="wordmark">Toby</div>
+    <div class="searchbox">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="search" type="text" placeholder="Поиск во вкладках…" autocomplete="off" spellcheck="false">
+      <kbd>/</kbd>
+    </div>
+    <div class="topactions">
+      <button class="tbtn" id="btnSelect" title="Режим выбора"><span class="glyph">☑</span>Выбрать</button>
+      <button class="tbtn" id="btnSize" title="Размер сетки"><span class="glyph">▦</span>Размер</button>
+      <button class="tbtn round" id="btnNew" title="Новая вкладка">＋</button>
+    </div>
+  </div>
+</header>
+
+<nav class="chips" id="chips">
+  <span>
+    <button class="chip folder on" data-type="folder" data-filter="all">Все</button>
+  </span>
+  <span>
+    <button class="chip folder" data-type="folder" data-filter="work">Работа</button>
+  </span>
+  <span>
+    <button class="chip folder" data-type="folder" data-filter="home">Дома</button>
+  </span>
+  <span>
+    <button class="chip folder sub" data-type="folder" data-filter="projects">↳ Проекты</button>
+  </span>
+  <i class="sep"></i>
+  <span>
+    <button class="chip" data-type="special" data-filter="arch"><span class="em">🗄</span>Архив</button>
+  </span>
+  <span>
+    <button class="chip" data-type="special" data-filter="freq"><span class="em">⭐</span>Частые</button>
+  </span>
+  <span>
+    <button class="chip" data-type="special" data-filter="star"><span class="em">🕘</span>Избранные</button>
+  </span>
+  <i class="sep"></i>
+  <span id="tagChips"></span>
+  <i class="sep"></i>
+  <span>
+    <button class="chip" data-type="session" data-filter="sess-1021"><span class="em">📋</span>Сессия 21.10</button>
+  </span>
+  <span>
+    <button class="chip" data-type="session" data-filter="sess-work"><span class="em">📋</span>Работа</button>
+  </span>
+</nav>
+
+<main class="main">
+  <div class="metarow">
+    <div class="metatitle"><span id="metaLabel">Все вкладки</span><span class="n" id="metaCount">12</span></div>
+    <div class="metaright">обновлено 21.10 · 14:32</div>
+  </div>
+  <div class="grid" id="grid"></div>
+  <div class="empty" id="empty" hidden>
+    Ничего не найдено.
+    <span>Попробуйте изменить запрос или сбросить фильтры.</span>
+    <button id="btnResetFilters">Сбросить фильтры</button>
+  </div>
+</main>
+
+<div class="selbar" id="selbar">
+  <span class="selcount" id="selcount">3 выбрано</span>
+  <i class="seldiv"></i>
+  <button class="btn btn-primary" id="btnOpen"><span class="tri"></span>Открыть</button>
+  <button class="btn btn-ghost" id="btnReset">Сбросить</button>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+'use strict';
+const TAGS = {
+  'код':        { c:'#4da3ff' },
+  'дизайн':     { c:'#c084fc' },
+  'новости':    { c:'#ff6b6b' },
+  'учёба':      { c:'#35e07f' },
+  'инструменты':{ c:'#ffa42b' }
+};
+
+const CARDS = [
+  { t:'Документация — Python',            u:'docs.python.org/3',                    f:'work',                 tags:['код'],            s:['sess-1021'],              hue:235, v:'docs',   sel:1, freq:1 },
+  { t:'GitHub — BlattamRoach/BlattamToby',u:'github.com/BlattamRoach/BlattamToby',  f:'work projects',        tags:['код','инструменты'],s:['sess-1021','sess-work'],hue:255, v:'code',   kb:1, star:1 },
+  { t:'MDN Web Docs',                     u:'developer.mozilla.org',                f:'work',                 tags:['код'],            s:['sess-1021'],              hue:35,  v:'docs' },
+  { t:'Figma — наработка',                u:'figma.com/file/8a2k…/наработка',       f:'work',                 tags:['дизайн'],         s:['sess-work'],              hue:330, v:'design', star:1 },
+  { t:'Хабр',                             u:'habr.com',                             f:'home',                 tags:['новости'],        s:['sess-1021'],              hue:210, v:'news',   sel:1, freq:1, star:1 },
+  { t:'Lenta.ru',                         u:'lenta.ru',                             f:'home',                 tags:['новости'],        s:['sess-1021'],              hue:10,  v:'news' },
+  { t:'YouTube',                          u:'youtube.com',                          f:'home',                 tags:[],                 s:['sess-1021'],              hue:352, v:'video',  freq:1 },
+  { t:'Notion — заметки',                 u:'notion.so/toby-notes',                 f:'home',                 tags:['учёба'],          s:['sess-1021'],              hue:52,  v:'notes',  sel:1, freq:1, star:1 },
+  { t:'Яндекс Карты',                     u:'yandex.ru/maps',                       f:'home',                 tags:[],                 s:[],                         hue:150, v:'map' },
+  { t:'Golang — stdlib',                  u:'pkg.go.dev/std',                       f:'work projects',        tags:['код'],            s:['sess-work'],              hue:185, v:'code' },
+  { t:'Figma Community',                  u:'figma.com/community',                  f:'work',                 tags:['дизайн'],         s:['sess-work'],              hue:285, v:'grid',   freq:1 },
+  { t:'VK',                               u:'vk.com',                               f:'home',                 tags:[],                 s:[],                         hue:305, v:'social', arch:1 }
+];
+
+const grid      = document.getElementById('grid');
+const search    = document.getElementById('search');
+const selbar    = document.getElementById('selbar');
+const selcount  = document.getElementById('selcount');
+const metaLabel = document.getElementById('metaLabel');
+const metaCount = document.getElementById('metaCount');
+const emptyEl   = document.getElementById('empty');
+const toastEl   = document.getElementById('toast');
+
+const selected = new Set();
+let activeFolder = 'all';
+const activeTags = new Set(), activeSpecial = new Set(), activeSessions = new Set();
+
+function plural(n, one, few, many){
+  const a = Math.abs(n) % 100, d = a % 10;
+  if (a > 10 && a < 20) return many;
+  if (d > 1 && d < 5)  return few;
+  if (d === 1)         return one;
+  return many;
+}
+
+function thumbHTML(c){
+  const inner = {
+    docs:   '<div class="t"><i class="l w45 hd"></i><i class="l w90"></i><i class="l w80"></i><i class="l w85"></i><i class="l w60"></i></div>',
+    code:   '<div class="t"><div class="code"><i class="cl w70"></i><i class="cl w90"></i><i class="cl ind w60"></i><i class="cl ind w75"></i><i class="cl w50"></i></div></div>',
+    news:   '<div class="t"><i class="ph"></i><i class="l w80"></i><i class="l w65"></i></div>',
+    video:  '<div class="t vc"><span class="play"><b></b></span></div>',
+    notes:  '<div class="t"><i class="bl w70"></i><i class="bl w85"></i><i class="bl w55"></i><i class="bl w75"></i></div>',
+    map:    '<div class="t"><i class="road r1"></i><i class="road r2"></i><i class="block b1"></i><i class="block b2"></i></div>',
+    grid:   '<div class="t"><div class="cells"><i></i><i></i><i></i><i></i><i></i><i></i></div></div>',
+    design: '<div class="t"><i class="l w45 hd"></i><i class="rect"></i><i class="rect r2"></i></div>',
+    social: '<div class="t"><span class="ava"></span><i class="l w50"></i><i class="l w70"></i><i class="l w40"></i></div>'
+  }[c.v];
+  const badge = c.arch ? '<span class="abadge">архив</span>' : '';
+  return '<div class="thumb">'
+       + inner
+       + '<i class="fav"></i>'
+       + '<button class="cb" tabindex="-1" aria-label="Выбрать"></button>'
+       + '<button class="rm" tabindex="-1" aria-label="Удалить">✕</button>'
+       + '<span class="playbtn"><b></b></span>'
+       + badge + '</div>';
+}
+
+// tag chips
+const tagWrap = document.getElementById('tagChips');
+Object.keys(TAGS).forEach(name => {
+  const b = document.createElement('button');
+  b.className = 'chip';
+  b.dataset.type = 'tag';
+  b.dataset.filter = name;
+  b.innerHTML = '<i class="dot" style="background:' + TAGS[name].c + '"></i>' + name;
+  tagWrap.appendChild(b);
+});
+
+// build cards
+CARDS.forEach(c => {
+  const el = document.createElement('article');
+  el.className = 'card' + (c.sel ? ' sel' : '') + (c.kb ? ' kb' : '') + (c.arch ? ' archived' : '');
+  el.style.setProperty('--h', c.hue);
+  el.dataset.name = (c.t + ' ' + c.u).toLowerCase();
+  el.innerHTML = thumbHTML(c)
+    + '<div class="cbody"><div class="cname">' + c.t + '</div><div class="curl">' + c.u + '</div>'
+    + (c.tags.length ? '<div class="ctags">' + c.tags.map(t => '<i style="background:' + TAGS[t].c + '" title="' + t + '"></i>').join('') + '</div>' : '')
+    + '</div>';
+  c.el = el;
+  if (c.sel) selected.add(el);
+  grid.appendChild(el);
+});
+
+/* ---------- filtering ---------- */
+function applyFilters(){
+  const q = search.value.trim().toLowerCase();
+  let shown = 0;
+  CARDS.forEach(c => {
+    const el = c.el;
+    if (!el.isConnected) return;
+    let ok = true;
+    if (ok && q) ok = el.dataset.name.includes(q);
+    if (ok && activeFolder !== 'all') ok = c.f.includes(activeFolder);
+    if (ok && activeTags.size) ok = [...activeTags].every(t => c.tags.includes(t));
+    if (ok && activeSpecial.has('arch')) ok = !!c.arch;
+    if (ok && activeSpecial.has('freq')) ok = !!c.freq;
+    if (ok && activeSpecial.has('star')) ok = !!c.star;
+    if (ok && activeSessions.size) ok = [...activeSessions].every(s => c.s.includes(s));
+    el.style.display = ok ? '' : 'none';
+    if (ok) shown++;
+  });
+  metaCount.textContent = shown;
+  emptyEl.hidden = shown !== 0;
+}
+
+function folderLabel(f){
+  return { all:'Все вкладки', work:'Работа', home:'Дома', projects:'Проекты' }[f] || 'Все вкладки';
+}
+
+/* ---------- selection ---------- */
+function updateBar(){
+  const n = selected.size;
+  selcount.textContent = n + ' ' + plural(n, 'выбрана', 'выбрано', 'выбрано');
+  selbar.classList.toggle('off', n === 0);
+}
+function toggleSel(card){
+  card.classList.toggle('sel');
+  if (card.classList.contains('sel')) selected.add(card); else selected.delete(card);
+  updateBar();
+}
+function clearSel(){
+  selected.forEach(el => el.classList.remove('sel'));
+  selected.clear();
+  updateBar();
+}
+function toast(msg){
+  toastEl.textContent = msg;
+  toastEl.classList.add('show');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => toastEl.classList.remove('show'), 1800);
+}
+
+grid.addEventListener('click', e => {
+  const card = e.target.closest('.card');
+  if (!card) return;
+  if (e.target.closest('.rm')){
+    selected.delete(card);
+    card.style.transition = 'opacity .15s, transform .15s';
+    card.style.opacity = '0';
+    card.style.transform = 'scale(.97)';
+    setTimeout(() => { card.remove(); applyFilters(); }, 150);
+    updateBar();
+    return;
+  }
+  toggleSel(card);
+});
+
+document.getElementById('btnReset').addEventListener('click', clearSel);
+document.getElementById('btnOpen').addEventListener('click', () => {
+  const n = selected.size;
+  if (!n) return;
+  toast('Открываю ' + n + ' ' + plural(n, 'вкладку', 'вкладки', 'вкладок') + '…');
+  setTimeout(clearSel, 400);
+});
+
+/* ---------- chips ---------- */
+document.getElementById('chips').addEventListener('click', e => {
+  const ch = e.target.closest('.chip');
+  if (!ch) return;
+  const type = ch.dataset.type, f = ch.dataset.filter;
+  if (type === 'folder'){
+    document.querySelectorAll('.chip.folder').forEach(x => x.classList.remove('on'));
+    ch.classList.add('on');
+    activeFolder = f;
+    metaLabel.textContent = folderLabel(f);
+  } else if (type === 'tag'){
+    ch.classList.toggle('on');
+    ch.classList.contains('on') ? activeTags.add(f) : activeTags.delete(f);
+  } else if (type === 'special'){
+    ch.classList.toggle('on');
+    ch.classList.contains('on') ? activeSpecial.add(f) : activeSpecial.delete(f);
+  } else {
+    ch.classList.toggle('on');
+    ch.classList.contains('on') ? activeSessions.add(f) : activeSessions.delete(f);
+  }
+  applyFilters();
+});
+
+document.getElementById('btnResetFilters').addEventListener('click', () => {
+  search.value = '';
+  activeFolder = 'all';
+  activeTags.clear(); activeSpecial.clear(); activeSessions.clear();
+  document.querySelectorAll('.chip').forEach(x => x.classList.toggle('on', x.dataset.filter === 'all'));
+  metaLabel.textContent = 'Все вкладки';
+  applyFilters();
+});
+
+/* ---------- search & keys ---------- */
+search.addEventListener('input', applyFilters);
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape'){
+    if (selected.size) clearSel();
+    else if (search.value){ search.value = ''; applyFilters(); search.blur(); }
+  } else if (e.key === '/' && document.activeElement !== search){
+    e.preventDefault();
+    search.focus();
+    search.select();
+  }
+});
+
+/* ---------- top actions ---------- */
+document.getElementById('btnSelect').addEventListener('click', function(){
+  document.body.classList.toggle('selection-mode');
+  this.classList.toggle('on');
+});
+document.getElementById('btnSize').addEventListener('click', function(){
+  document.body.classList.toggle('compact');
+  this.classList.toggle('on');
+});
+document.getElementById('btnNew').addEventListener('click', () => toast('Новая вкладка'));
+
+/* ---------- init ---------- */
+updateBar();
+applyFilters();
+</script>
+</body>
+</html>
