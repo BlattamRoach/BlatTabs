@@ -121,10 +121,12 @@
     }
 
     /* ---------- группы (сворачиваемые секции) ---------- */
+    /* «Штрих»: шапка без заливки — 1px-линия сверху (--line2) + приглушённое
+       имя; hover — лёгкий фон (--hover) + контролы */
     .gbar {
       position: relative;
-      grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px;
-      border-radius: 6px; background: var(--surface); box-shadow: 0 0 0 1px var(--line);
+      grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 2px;
+      background: transparent; border-top: 1px solid var(--line2);
       cursor: pointer; user-select: none; transition: background .1s;
     }
     .gbar:hover { background: var(--hover); }
@@ -135,27 +137,61 @@
     }
     .gbar.drop-before::before { top: 0; }
     .gbar.drop-after::after { bottom: 0; }
-    .gbar.drop-over { background: var(--drop-over); color: var(--on-drop); }
-    .gbar.drop-over .chev, .gbar.drop-over .gname, .gbar.drop-over .gcount { color: var(--on-drop); }
+    /* Армед-вид шапки пустой/свёрнутой группы (принимает карточку):
+    // тёплый тон --ghost-bg / --ghost-ring, текст --text-soft */
+    .gbar.drop-over {
+      background: var(--ghost-bg); box-shadow: inset 0 0 0 1px var(--ghost-ring); color: var(--text-soft);
+    }
     .gbar .chev {
-      font: 400 10px/1 var(--font-mono); color: var(--text-muted); width: 10px; flex: none; text-align: center;
+      font: 400 10px/1 var(--font-mono); color: var(--text-faint); width: 10px; flex: none; text-align: center;
     }
     .gbar .gname {
-      font-size: 13px; font-weight: 500; letter-spacing: -.1px; color: var(--text);
+      font-size: 12px; font-weight: 500; letter-spacing: -.1px; color: var(--text-soft);
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
     .gbar .gcount { font: 400 10.5px/1 var(--font-mono); color: var(--text-faint); white-space: nowrap; flex: none; }
     .gbar .gdel {
-      margin-left: auto; flex: none; width: 18px; height: 18px; border: 0; border-radius: 50%; padding: 0;
+      flex: none; width: 18px; height: 18px; border: 0; border-radius: 50%; padding: 0;
       display: grid; place-items: center; background: transparent;
       font: 400 11px/1 var(--font-ui); color: var(--text-faint);
       opacity: 0; transition: opacity .12s, background .1s, color .1s;
     }
     .gbar:hover .gdel { opacity: 1; }
     .gbar .gdel:hover { background: var(--bg); box-shadow: 0 0 0 1px var(--line); color: var(--text); }
+    /* Hover-контролы шапки группы: ☑ выбрать все вкладки группы / ✎ переименовать */
+    .gbar .gselect, .gbar .grename {
+      flex: none; width: 18px; height: 18px; border: 0; border-radius: 50%; padding: 0;
+      display: grid; place-items: center; background: transparent;
+      font: 400 11px/1 var(--font-ui); color: var(--text-faint);
+      opacity: 0; transition: opacity .12s, background .1s, color .1s;
+    }
+    /* Контролы идут сразу после счётчика (слева), а не прижаты к правому краю */
+    .gbar:hover .gselect, .gbar:hover .grename { opacity: 1; }
+    .gbar .gselect:hover, .gbar .grename:hover { background: var(--bg); box-shadow: 0 0 0 1px var(--line); color: var(--text); }
+    .gbar .gselect.on { opacity: 1; background: var(--ink); color: var(--on-ink); box-shadow: none; }
+    /* Инлайн-ренейм группы — как .tab-name-input, но по высоте шапки */
+    .gbar .gname-input {
+      height: 22px; width: 180px; max-width: 40vw; padding: 0 4px; border: 0; border-radius: 4px;
+      box-shadow: 0 0 0 1.5px var(--ink); outline: none;
+      font: 500 13px var(--font-ui); color: var(--text); background: var(--surface-soft);
+    }
     .loose-label {
       grid-column: 1 / -1;
       font: 500 10.5px/1 var(--font-mono); color: var(--text-faint); text-transform: uppercase; letter-spacing: .08em;
+    }
+    /* Слот-заглушка пустой развёрнутой группы: полноширинная строка высотой
+    // с карточкой (.tab-card min-height), пунктир --dashed, радиус карточки;
+    // армед-вид (.drop-over) — тёплый тон. Drop-цель карточки (view.js) */
+    .group-empty-slot {
+      grid-column: 1 / -1; height: 74px; box-sizing: border-box;
+      display: flex; align-items: center; justify-content: center;
+      font: 400 11px/1 var(--font-mono); letter-spacing: .08em;
+      border-width: 1px; border-style: dashed; border-color: var(--dashed);
+      border-radius: var(--card-radius); background: transparent; color: var(--text-faint);
+      user-select: none; transition: background .1s, border-color .1s, color .1s;
+    }
+    .group-empty-slot.drop-over {
+      background: var(--ghost-bg); border-color: var(--ghost-ring); color: var(--text-soft);
     }
     .tab-card {
       position: relative; border-radius: var(--card-radius); background: var(--card-bg);
@@ -166,12 +202,8 @@
     }
     .tab-card:hover { box-shadow: 0 0 0 1px var(--line), var(--shadow-hover); transform: translateY(-1px); }
     .tab-card.dragging { opacity: 0.4; }
-    /* Индикатор reorder: 2px линия на верхней/нижней кромке целевой карточки */
-    .tab-card.drop-before::before, .tab-card.drop-after::after {
-      content: ''; position: absolute; left: 0; right: 0; height: 2px; background: var(--ink); z-index: 2;
-    }
-    .tab-card.drop-before::before { top: 0; }
-    .tab-card.drop-after::after { bottom: 0; }
+    /* Ghost-slot: тёплая пустая заглушка размера карточки на месте вставки (единственный индикатор дропа) */
+    .tab-ghost-slot { pointer-events: none; background: var(--ghost-bg); border: 1px dashed var(--ghost-ring); }
     .tab-card.selected { box-shadow: 0 0 0 1.5px var(--ink); }
     .tab-card.kbd-active { box-shadow: 0 0 0 1px var(--ink), 0 0 0 5px var(--kbd-ring); }
     .tab-card.kbd-active.selected { box-shadow: 0 0 0 1.5px var(--ink), 0 0 0 5px var(--kbd-ring); }
@@ -183,7 +215,7 @@
       opacity: 0; transition: opacity .12s, background .1s; z-index: 2;
     }
     .tab-select {
-      top: 6px; left: 6px; width: 16px; height: 16px; border-radius: 4px; border: 0; padding: 0; cursor: pointer;
+      top: 8px; left: 10px; width: 15px; height: 15px; border-radius: 3px; border: 0; padding: 0; cursor: pointer;
       appearance: none; -webkit-appearance: none; margin: 0;
     }
     .tab-select::after {
@@ -198,7 +230,35 @@
     .tab-card:hover .tab-select, .tab-card:hover .tab-remove,
     .tab-card.selected .tab-select { opacity: 1; }
     .tab-card.selected .tab-select { background: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
+    /* При hover / на выбранной карточке фавикон заменяется на месте чекбоксом
+       (visibility: hidden — слот сохраняет место, имя не сдвигается) */
+    .tab-card:hover .tab-favicon, .tab-card.selected .tab-favicon,
+    .tab-card:hover .tab-favicon-fallback, .tab-card.selected .tab-favicon-fallback { visibility: hidden; }
     .tab-card.selected .tab-select::after { opacity: 1; }
+    /* Редактирование вкладки: hover-иконка снизу-справа + меню + комментарий
+       внизу внутри карточки */
+    .tab-edit {
+      position: absolute; right: 6px; bottom: 6px; width: 18px; height: 18px;
+      border: 0; border-radius: 50%; padding: 0; display: grid; place-items: center;
+      background: transparent; font: 400 11px/1 var(--font-ui); color: var(--text-faint);
+      opacity: 0; transition: opacity .12s, background .1s, color .1s; cursor: pointer;
+    }
+    .tab-card:hover .tab-edit { opacity: 1; }
+    .tab-edit:hover { background: var(--bg); box-shadow: 0 0 0 1px var(--line); color: var(--text); }
+    .tab-card-menu {
+      position: absolute; right: 6px; bottom: 28px; z-index: 20; min-width: 110px; padding: 4px 0;
+      background: var(--surface); border-radius: 6px; box-shadow: 0 0 0 1px var(--line), var(--shadow-xl);
+    }
+    .tab-card-menu button {
+      display: block; width: 100%; padding: 6px 12px; border: 0; background: none; cursor: pointer;
+      font: 400 12.5px/1.2 var(--font-ui); color: var(--text); text-align: left;
+    }
+    .tab-card-menu button:hover { background: var(--hover); }
+    .tab-comment {
+      position: absolute; left: 10px; right: 30px; bottom: 8px;
+      font: 400 10px/1.3 var(--font-mono); color: var(--text-faint);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
 
     .cbody { flex: 1; display: flex; align-items: flex-start; padding: 8px 10px 9px; }
     .cname { display: flex; align-items: center; gap: 5px; }
@@ -345,6 +405,20 @@
       <div class="modal-actions">
         <button class="modal-btn ghost" id="modal-cancel">Отмена</button>
         <button class="modal-btn primary" id="modal-confirm">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: редактирование сохранённой вкладки (имя / адрес / комментарий) -->
+  <div class="modal-overlay" id="edit-tab-modal">
+    <div class="modal">
+      <h3>Редактировать вкладку</h3>
+      <input type="text" id="edit-name-input" placeholder="Название..." autocomplete="off">
+      <input type="text" id="edit-url-input" placeholder="https://..." autocomplete="off" spellcheck="false">
+      <input type="text" id="edit-comment-input" placeholder="Комментарий — будет виден внизу карточки" autocomplete="off">
+      <div class="modal-actions">
+        <button class="modal-btn ghost" id="edit-cancel">Отмена</button>
+        <button class="modal-btn primary" id="edit-confirm">Сохранить</button>
       </div>
     </div>
   </div>

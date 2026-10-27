@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Toby — Штрих (hairline label)</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #ffffff; --surface: #ffffff; --card-bg: #f5f5f5; --surface-soft: #fafafa; --hover: #fafafa;
+  --text: #171717; --text-soft: #4d4d4d; --text-muted: #666666; --text-faint: #808080; --on-ink: #ffffff;
+  --line: rgba(0,0,0,0.08); --line2: #ebebeb; --dashed: #b0b0b0; --dashed-hover: #737373;
+  --ink: #171717; --gbar-bg: #fbf1de; --gbar-bg-hover: #f7e6c6;
+  --shadow-hover: 0 2px 10px rgba(0,0,0,0.06);
+  --card-min: 176px; --card-gap: 12px; --card-radius: 8px; --card-name-size: 13px;
+  --font-ui: 'Geist', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+}
+[data-theme="dark"] {
+  --bg: #1f1c1b; --surface: #2a2624; --card-bg: #36312d; --surface-soft: #282422; --hover: #38322f;
+  --text: #f5f2ee; --text-soft: #d7d1cb; --text-muted: #a8a09a; --text-faint: #827c76; --on-ink: #1f1c1b;
+  --line: rgba(255,255,255,0.10); --line2: rgba(255,255,255,0.16); --dashed: #6d655e; --dashed-hover: #a8a09a;
+  --ink: #f5f2ee; --gbar-bg: #3d3223; --gbar-bg-hover: #463a29;
+  --shadow-hover: 0 2px 10px rgba(0,0,0,0.45);
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { background:var(--bg); }
+body { font-family:var(--font-ui); font-size:14px; color:var(--text); -webkit-font-smoothing:antialiased; }
+button { font-family:inherit; cursor:pointer; }
+
+.top { position:sticky; top:0; z-index:10; height:52px; display:flex; align-items:center; gap:16px; padding:0 20px; background:var(--bg); border-bottom:1px solid var(--line); }
+.wordmark { font-size:17px; font-weight:700; letter-spacing:-.06em; }
+.search-wrap { flex:1; display:flex; justify-content:center; }
+.search { position:relative; width:100%; max-width:440px; }
+.search input { width:100%; height:32px; border:1px solid var(--line); border-radius:6px; background:var(--surface); padding:0 36px 0 12px; font-family:inherit; font-size:13px; color:var(--text); outline:none; }
+.search input::placeholder { color:var(--text-faint); }
+.search input:focus { border-color:var(--dashed); }
+.search kbd { position:absolute; right:8px; top:50%; transform:translateY(-50%); font-family:var(--font-mono); font-size:10.5px; line-height:1; color:var(--text-faint); border:1px solid var(--line); border-radius:4px; padding:2px 6px; }
+.top-actions { display:flex; gap:8px; }
+.tbtn { height:28px; padding:0 10px; display:inline-flex; align-items:center; gap:5px; border:1px solid var(--line); border-radius:6px; background:transparent; font-size:12.5px; color:var(--text-muted); }
+.tbtn:hover { background:var(--hover); color:var(--text); }
+
+.content { padding:12px 20px 0; }
+.chip-row { display:flex; align-items:center; gap:10px; padding-bottom:14px; }
+.sp-label { font-family:var(--font-mono); font-size:10.5px; text-transform:uppercase; letter-spacing:.06em; color:var(--text-faint); }
+.chip { height:26px; padding:0 12px; border-radius:13px; border:1px solid var(--line); background:transparent; color:var(--text-muted); font-size:12.5px; display:inline-flex; align-items:center; }
+.chip:hover { background:var(--hover); color:var(--text); }
+.chip.active { background:var(--ink); border-color:var(--ink); color:var(--on-ink); }
+.meta-row { display:flex; align-items:baseline; gap:8px; padding:2px 0 12px; }
+.meta-title { font-size:15px; font-weight:600; }
+.meta-count { font-family:var(--font-mono); font-size:11px; color:var(--text-faint); }
+
+.tabs-list { display:grid; grid-template-columns:repeat(auto-fill, minmax(176px, 1fr)); gap:12px; padding:0 0 110px; }
+
+.card { min-height:74px; border-radius:8px; background:var(--card-bg); box-shadow:0 0 0 1px var(--line); padding:12px; display:flex; flex-direction:column; justify-content:center; gap:9px; cursor:pointer; transition:transform .12s ease, box-shadow .12s ease; }
+.card:hover { transform:translateY(-1px); box-shadow:0 0 0 1px var(--line), var(--shadow-hover); }
+.tile { width:15px; height:15px; border-radius:3px; background:var(--hover); border:1px solid var(--line); display:flex; align-items:center; justify-content:center; font-family:var(--font-mono); font-size:9px; line-height:1; color:var(--text-soft); flex:none; }
+.ctitle { font-size:13px; font-weight:500; letter-spacing:-.1px; line-height:1.35; overflow-wrap:anywhere; }
+
+/* Variant A "Штрих": hairline label group header — no filled container */
+.gbar { grid-column:1/-1; display:flex; align-items:center; gap:8px; height:26px; padding:0 2px; background:transparent; border-top:1px solid var(--line2); cursor:pointer; user-select:none; transition:background .12s ease; }
+.gbar:hover { background:var(--hover); }
+.chev { font-family:var(--font-mono); font-size:10px; line-height:1; color:var(--text-faint); width:10px; text-align:center; }
+.gname { font-size:12px; font-weight:500; color:var(--text-soft); white-space:nowrap; }
+.gcount { font-family:var(--font-mono); font-size:10.5px; color:var(--text-faint); white-space:nowrap; }
+.gctl { margin-left:auto; display:flex; gap:4px; opacity:0; transition:opacity .12s ease; }
+.gbar:hover .gctl { opacity:1; }
+.gbtn { width:18px; height:18px; border-radius:50%; border:none; padding:0; background:transparent; color:var(--text-faint); font-size:11px; line-height:1; display:flex; align-items:center; justify-content:center; }
+.gbtn:hover { color:var(--text); }
+.gbtn.on { background:var(--ink); color:var(--on-ink); }
+
+.ugroup-label { grid-column:1/-1; padding:6px 2px 0; font-family:var(--font-mono); font-size:10.5px; text-transform:uppercase; letter-spacing:.08em; color:var(--text-faint); }
+
+.add-group { grid-column:1/-1; height:40px; border:1px dashed var(--dashed); border-radius:8px; background:transparent; color:var(--text-muted); font-size:12.5px; transition:border-color .12s ease, color .12s ease; }
+.add-group:hover { border-color:var(--dashed-hover); color:var(--text); }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wordmark">Toby</div>
+  <div class="search-wrap">
+    <div class="search">
+      <input id="searchInput" type="text" placeholder="Поиск во вкладках…" autocomplete="off">
+      <kbd>/</kbd>
+    </div>
+  </div>
+  <div class="top-actions">
+    <button type="button" class="tbtn">☑ Выбрать</button>
+    <button type="button" class="tbtn" id="themeBtn" title="Переключить тему">🌙</button>
+    <button type="button" class="tbtn">↓ Экспорт</button>
+    <button type="button" class="tbtn">↑ Импорт</button>
+  </div>
+</header>
+<div class="content">
+  <div class="chip-row">
+    <span class="sp-label">+ Пространство</span>
+    <button type="button" class="chip active">Работа</button>
+    <button type="button" class="chip">Личное</button>
+  </div>
+  <div class="meta-row">
+    <span class="meta-title">Мои вкладки</span>
+    <span class="meta-count">7</span>
+  </div>
+  <div class="tabs-list" id="tabsList"></div>
+</div>
+<script>
+(function () {
+  'use strict';
+  var GROUPS = [
+    { name: 'Статьи', cards: [
+      { t: 'Как устроены LLM — разбор', l: 'H' },
+      { t: 'Attention Is All You Need', l: 'A' },
+      { t: 'CSS Grid: A Complete Guide', l: 'C' }
+    ] },
+    { name: 'Книги', cards: [
+      { t: 'Databases for Mortals — PDF', l: 'D' },
+      { t: 'Проект Ганновер — заметки', l: 'П' }
+    ] }
+  ];
+  var UNGROUPED = [
+    { t: 'GitHub — BlattamToby', l: 'G' },
+    { t: 'llama.cpp releases', l: 'l' }
+  ];
+
+  var grid = document.getElementById('tabsList');
+
+  function makeCard(c) {
+    var d = document.createElement('div');
+    d.className = 'card';
+    var tile = document.createElement('span');
+    tile.className = 'tile';
+    tile.textContent = c.l;
+    var t = document.createElement('div');
+    t.className = 'ctitle';
+    t.textContent = c.t;
+    d.appendChild(tile);
+    d.appendChild(t);
+    return d;
+  }
+
+  GROUPS.forEach(function (g) {
+    var bar = document.createElement('div');
+    bar.className = 'gbar';
+
+    var chev = document.createElement('span');
+    chev.className = 'chev';
+    chev.textContent = '\u25BE';
+
+    var name = document.createElement('span');
+    name.className = 'gname';
+    name.textContent = g.name;
+
+    var cnt = document.createElement('span');
+    cnt.className = 'gcount';
+    cnt.textContent = g.cards.length + ' вкладок';
+
+    var ctl = document.createElement('span');
+    ctl.className = 'gctl';
+    ['\u2611', '\u270E', '\u2715'].forEach(function (glyph, i) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'gbtn';
+      b.textContent = glyph;
+      b.setAttribute('aria-label', i === 0 ? 'Выбрать' : (i === 1 ? 'Переименовать' : 'Удалить'));
+      b.addEventListener('click', function (e) {
+        e.stopPropagation();
+        if (i === 0) b.classList.toggle('on');
+      });
+      ctl.appendChild(b);
+    });
+
+    bar.appendChild(chev);
+    bar.appendChild(name);
+    bar.appendChild(cnt);
+    bar.appendChild(ctl);
+
+    var cards = g.cards.map(makeCard);
+    bar.addEventListener('click', function () {
+      var collapsed = bar.classList.toggle('collapsed');
+      chev.textContent = collapsed ? '\u25B8' : '\u25BE';
+      if (collapsed) {
+        cards.forEach(function (c) { c.remove(); });
+      } else {
+        cards.forEach(function (c) { bar.insertAdjacentElement('afterend', c); });
+      }
+    });
+
+    grid.appendChild(bar);
+    cards.forEach(function (c) { grid.appendChild(c); });
+  });
+
+  var ul = document.createElement('div');
+  ul.className = 'ugroup-label';
+  ul.textContent = 'БЕЗ ГРУППЫ';
+  grid.appendChild(ul);
+  UNGROUPED.forEach(function (c) { grid.appendChild(makeCard(c)); });
+
+  var add = document.createElement('button');
+  add.type = 'button';
+  add.className = 'add-group';
+  add.textContent = '+ Группа';
+  grid.appendChild(add);
+
+  var root = document.documentElement;
+  var themeBtn = document.getElementById('themeBtn');
+  themeBtn.addEventListener('click', function () {
+    var dark = root.getAttribute('data-theme') === 'dark';
+    if (dark) {
+      root.removeAttribute('data-theme');
+      themeBtn.textContent = '\uD83C\uDFA0';
+    } else {
+      root.setAttribute('data-theme', 'dark');
+      themeBtn.textContent = '\u2600\uFE0F';
+    }
+  });
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === '/' && document.activeElement !== document.getElementById('searchInput')) {
+      e.preventDefault();
+      document.getElementById('searchInput').focus();
+    }
+  });
+})();
+</script>
+</body>
+</html>

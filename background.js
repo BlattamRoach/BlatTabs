@@ -285,6 +285,28 @@ async function reorderTab(fromIndex, toIndex, side) {
   await saveTabs(tabs);
 }
 
+// Поставить вкладку в позицию слота DnD: вставить в ПОЛНОМ массиве
+// перед/после якорной вкладки (anchorIndex null — в конец списка) и задать
+// groupId секции слота (null — «Без группы»). spaceId не меняется.
+async function placeTab(tabIndex, anchorIndex, side, groupId) {
+  const tabs = await loadTabs();
+  const from = Number(tabIndex);
+  if (!Number.isInteger(from) || from < 0 || from >= tabs.length) return;
+  const [moved] = tabs.splice(from, 1);
+  let at = tabs.length; // конец списка
+  if (anchorIndex !== null && anchorIndex !== undefined) {
+    const a0 = Number(anchorIndex);
+    if (Number.isInteger(a0) && a0 >= 0 && a0 <= tabs.length) {
+      let a = a0;
+      if (a > from) a -= 1; // сдвиг индексов после вырезания источника
+      at = side === 'after' ? a + 1 : a;
+    }
+  }
+  if (groupId !== undefined) moved.groupId = groupId;
+  tabs.splice(Math.max(0, Math.min(tabs.length, at)), 0, moved);
+  await saveTabs(tabs);
+}
+
 // Переименовать вкладку
 async function renameTab(tabIndex, newName) {
   const tabs = await loadTabs();
@@ -293,6 +315,23 @@ async function renameTab(tabIndex, newName) {
   const name = (newName || '').trim();
   if (!name) return;
   tab.name = name;
+  await saveTabs(tabs);
+}
+
+// Редактировать вкладку: имя / адрес / комментарий.
+// Пустое имя или адрес — старое значение; комментарий '' — очистить
+// (из storage уходит сам ключ).
+async function updateTab(tabIndex, name, url, comment) {
+  const tabs = await loadTabs();
+  const tab = tabs[tabIndex];
+  if (!tab) return;
+  const n = (name != null ? String(name) : '').trim();
+  const u = (url != null ? String(url) : '').trim();
+  const c = (comment != null ? String(comment) : '').trim();
+  if (n) tab.name = n;
+  if (u) tab.url = u;
+  if (c) tab.comment = c;
+  else delete tab.comment;
   await saveTabs(tabs);
 }
 
@@ -329,6 +368,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       break;
     case 'reorder-tab':
       reorderTab(msg.fromIndex, msg.toIndex, msg.side);
+      break;
+    case 'place-tab':
+      placeTab(msg.index, msg.anchorIndex, msg.side, msg.groupId);
+      break;
+    case 'update-tab':
+      updateTab(msg.index, msg.name, msg.url, msg.comment);
       break;
 
     // Пространства (асинхронный ответ: возвращаем Promise, канал остаётся открытым)

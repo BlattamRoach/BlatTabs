@@ -40,6 +40,15 @@ const spaceNameInput = document.getElementById('space-name-input');
 const modalCancel = document.getElementById('modal-cancel');
 const modalConfirm = document.getElementById('modal-confirm');
 
+// Модалка редактирования вкладки (имя / адрес / комментарий)
+const editTabModal = document.getElementById('edit-tab-modal');
+const editNameInput = document.getElementById('edit-name-input');
+const editUrlInput = document.getElementById('edit-url-input');
+const editCommentInput = document.getElementById('edit-comment-input');
+const editCancel = document.getElementById('edit-cancel');
+const editConfirm = document.getElementById('edit-confirm');
+let editTabRef = null; // вкладка, открытая в модалке редактирования
+
 // Панель массового выбора
 const selectionBar = document.getElementById('selection-bar');
 const selectionCount = document.getElementById('selection-count');
@@ -55,6 +64,8 @@ let modalCallback = null;
 let modalAllowEmpty = false; // модалки создания допускают пустое имя (авто-«Пространство N» / «Группа N»)
 let selectedUrls = new Set(); // выбор вкладок для массового открытия
 let dragSourceUrl = null; // URL перетаскиваемой карточки (для reorder; индексы в payload могут устареть)
+let dragSourceCardEl = null; // DOM-элемент перетаскиваемой карточки (исключается из расчёта зазора)
+let dragGhostSlot = null; // ghost-slot: пустая заглушка размера карточки на её месте в сетке
 let dragSourceGroupId = null; // id перетаскиваемой группы (reorder шапок внутри пространства)
 let activeUrl = null; // карточка, выбранная клавиатурой (по URL — переживает перерисовку)
 let openModalId = null; // id открытой модалки — чтобы глобальный keydown её не перехватывал
@@ -284,6 +295,52 @@ spaceNameInput.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') modalCancel.click();
 });
 
+// === Модалка: редактирование сохранённой вкладки (имя / адрес / комментарий) ===
+function openEditTabModal(tab) {
+  editTabRef = tab;
+  editNameInput.value = tab.name;
+  editUrlInput.value = tab.url;
+  editCommentInput.value = tab.comment || '';
+  editTabModal.classList.add('open');
+  setModalOpen('edit-tab');
+  setTimeout(() => { editNameInput.focus(); editNameInput.select(); }, 50);
+}
+
+function closeEditTabModal() {
+  editTabModal.classList.remove('open');
+  editTabRef = null;
+  setModalOpen(null);
+}
+
+editCancel.addEventListener('click', closeEditTabModal);
+// Клик по затемнённому фону НЕ закрывает модалку: при выделении текста
+// в поле указатель уносит за окно, и «клик снаружи» бы схлопнул форму.
+// Закрытие: Enter (сохранить), «Отмена», Escape.
+
+editConfirm.addEventListener('click', () => {
+  if (!editTabRef) return;
+  const name = editNameInput.value.trim();
+  const url = editUrlInput.value.trim();
+  const comment = editCommentInput.value.trim();
+  if (!name && !url && !comment) return; // пустая форма — не сохраняем
+  // Пустое имя/адрес — старое значение; комментарий пустой — очистить
+  chrome.runtime.sendMessage({
+    action: 'update-tab',
+    index: allTabs.indexOf(editTabRef),
+    name: name || editTabRef.name,
+    url: url || editTabRef.url,
+    comment,
+  });
+  closeEditTabModal();
+});
+
+[editNameInput, editUrlInput, editCommentInput].forEach((inp) => {
+  inp.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') editConfirm.click();
+    if (e.key === 'Escape') editCancel.click();
+  });
+});
+
 // === Открытие вкладок (единый путь: background создаёт browser-tab) ===
 
 // Открыть одну вкладку: background создаёт browser-tab
@@ -358,9 +415,33 @@ function pluralVkladok(n) {
   return 'вкладок';
 }
 
-// Шапка группы: полноширинная (grid-column 1/-1), chevron + имя + mono-счётчик
-// + «✕». Всегда видна; клик — свернуть/развернуть (карточки уходят из DOM,
-// счётчик на шапке остаётся). Состояние сворачивания — в данных
+// Защита hover-кнопок от drag, «проглотившего» клик: на draggable-родителе
+// (шапка группы / карточка) нажатие + движение >~5px запускает drag родителем
+// и click по вложенной кнопке теряется (реальный Chrome; синтетический
+// .click() это не ловит). Пока мышь нажата на кнопке — снимаем draggable,
+// восстанавливаем на mouseup/blur окна (fallback: press, завершённый вне
+// окна).
+function guardDragOverButtons(parent, selector) {
+  parent.addEventListener('mousedown', (e) => {
+    const t = e.target;
+    if (!(t instanceof Element) || !t.closest(selector)) return;
+    parent.draggable = false;
+    parent.dataset.pressBtn = '1'; // click-обработчик родителя учитывает
+    const restore = () => {
+      parent.draggable = true;
+      delete parent.dataset.pressBtn;
+      window.removeEventListener('mouseup', restore);
+      window.removeEventListener('blur', restore);
+    };
+    window.addEventListener('mouseup', restore);
+    window.addEventListener('blur', restore);
+  });
+}
+
+// Шапка группы «Штрих»: полноширинная (grid-column 1/-1) строка БЕЗ заливки
+// — 1px-линия сверху (--line2) + chevron + приглушённое имя (--text-soft, 12px)
+// + mono-счётчик + «✕». Всегда видна; клик — свернуть/развернуть (карточки
+// уходят из DOM, счётчик на шапке остаётся). Состояние сворачивания — в данных
 // (blattam-groups.collapsed), поэтому переживает перерисовку.
 function appendGroupBar(g, memberCount) {
   const bar = document.createElement('div');
@@ -390,15 +471,46 @@ function appendGroupBar(g, memberCount) {
     }
   });
 
+  const gUrls = allTabs.filter(t => t.spaceId === g.spaceId && t.groupId === g.id).map(t => t.url);
+
+  // ☑ — выбрать/снять выбор ВСЕХ вкладок группы (hover-контрол; не сворачивает
+  // группу и не стартует drag — stopPropagation)
+  const gselect = document.createElement('button');
+  gselect.className = 'gselect';
+  gselect.textContent = '\u2611';
+  gselect.title = 'Выбрать все вкладки группы';
+  if (gUrls.length > 0 && gUrls.every(u => selectedUrls.has(u))) gselect.classList.add('on');
+  gselect.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleGroupSelection(g);
+  });
+
+  // ✎ — инлайн-ренейм группы (hover-контрол, та же идиоматика, что у карточки)
+  const grename = document.createElement('button');
+  grename.className = 'grename';
+  grename.textContent = '\u270E';
+  grename.title = 'Переименовать группу';
+  grename.addEventListener('click', (e) => {
+    e.stopPropagation();
+    startGroupRename(g, name);
+  });
+
   bar.appendChild(chev);
   bar.appendChild(name);
   bar.appendChild(count);
+  bar.appendChild(gselect);
+  bar.appendChild(grename);
   bar.appendChild(del);
 
   // DnD-источник: шапку можно перетащить на другую шапку (reorder групп
   // внутри пространства). Пейлоад: id группы (у карточки — индекс вкладки).
   bar.draggable = true;
+  // Кнопки шапки (☑/✎/✕) не стартуют drag: нажатие на них временно снимает
+  // draggable, иначе движение >~5px во время press уносит drag-ом шапку и
+  // click по кнопке теряется (реальный Chrome).
+  guardDragOverButtons(bar, '.gselect, .grename, .gdel');
   bar.addEventListener('dragstart', (e) => {
+    if (!bar.draggable) { e.preventDefault(); return; } // press начался на кнопке
     e.dataTransfer.setData('text/plain', g.id);
     e.dataTransfer.effectAllowed = 'move';
     dragSourceGroupId = g.id;
@@ -410,8 +522,9 @@ function appendGroupBar(g, memberCount) {
     clearGroupReorderIndicators();
   });
 
-  // DnD: бар группы принимает перетаскиваемую карточку — вкладка уходит в
-  // группу (drop-over); ЛИБО другую шапку — reorder (2px-индикатор до/после)
+  // DnD: шапка принимает только другую шапку — reorder групп (2px-индикатор
+  // до/после). Карточка, сброшенная на шапку, больше не уходит в группу
+  // (свою семантику дропа карточки сохранил только чип пространства)
   bar.addEventListener('dragover', (e) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
@@ -422,7 +535,9 @@ function appendGroupBar(g, memberCount) {
       bar.classList.toggle('drop-after', side === 'after');
       return;
     }
-    bar.classList.add('drop-over');
+    // Пустая/свёрнутая группа (нет видимых карточек): шапка принимает
+    // карточку — тёплый армед-подсвет
+    if (dragSourceUrl && !groupVisibleCardCount(g.id)) bar.classList.add('drop-over');
   });
   bar.addEventListener('dragleave', () => bar.classList.remove('drop-over', 'drop-before', 'drop-after'));
   bar.addEventListener('drop', (e) => {
@@ -432,13 +547,62 @@ function appendGroupBar(g, memberCount) {
       reorderGroups(dragSourceGroupId, g.id, reorderSide(bar, e.clientY));
       return;
     }
-    const idx = parseInt(e.dataTransfer.getData('text/plain'), 10);
-    const tab = allTabs[idx];
-    if (tab) moveTabTo(tab, undefined, g.id);
+    // Пустая/свёрнутая группа: карточка уходит в группу — в конец списка
+    // (anchorIndex null); карточка своей группы — no-op
+    if (dragSourceUrl && !groupVisibleCardCount(g.id)) {
+      const src = allTabs.find(t => t.url === dragSourceUrl);
+      if (src && src.groupId !== g.id) {
+        chrome.runtime.sendMessage({ action: 'place-tab', index: allTabs.indexOf(src),
+          anchorIndex: null, side: 'after', groupId: g.id });
+      }
+    }
   });
 
-  bar.addEventListener('click', () => toggleGroupCollapsed(g.id));
+  bar.addEventListener('click', () => {
+    if (bar.dataset.pressBtn) return; // press начался на кнопке и сошёл на шапку — не сворачиваем
+    toggleGroupCollapsed(g.id);
+  });
   tabsList.appendChild(bar);
+}
+
+// Число ВИДИМЫХ карточек группы в #tabs-list (перетаскиваемая скрыта —
+// не считается; свёрнутая группа — карточек в DOM нет → 0). По нему
+// шапка/слот пустой группы принимают карточку.
+function groupVisibleCardCount(groupId) {
+  return [...document.querySelectorAll('#tabs-list .tab-card')]
+    .filter(c => c.style.display !== 'none' && c.__tab && c.__tab.groupId === groupId).length;
+}
+
+// Слот-заглушка пустой развёрнутой группы: полноширинная пунктирная строка
+// «Перетащите вкладку сюда» сразу после шапки — видимая drop-цель карточки
+// (свёрнутая группа слота не даёт). Drop-семантика как у шапки пустой
+// группы: вкладка уходит в группу (place-tab, anchorIndex null — конец
+// списка); карточка своей группы — no-op. Слот рендерится во всех ветках
+// renderTabs, где группа развёрнута без карточек.
+function appendEmptyGroupSlot(g) {
+  const slot = document.createElement('div');
+  slot.className = 'group-empty-slot';
+  slot.dataset.groupId = g.id;
+  slot.textContent = 'Перетащите вкладку сюда';
+  slot.draggable = false;
+  // DnD: слот принимает карточку (перетаскиваемая шапка группы — no-op)
+  slot.addEventListener('dragover', (e) => {
+    if (dragSourceGroupId) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    slot.classList.add('drop-over');
+  });
+  slot.addEventListener('dragleave', () => slot.classList.remove('drop-over'));
+  slot.addEventListener('drop', (e) => {
+    e.preventDefault();
+    slot.classList.remove('drop-over');
+    if (dragSourceGroupId) return;
+    const src = allTabs.find(t => t.url === dragSourceUrl);
+    if (!src || src.groupId === g.id) return;
+    chrome.runtime.sendMessage({ action: 'place-tab', index: allTabs.indexOf(src),
+      anchorIndex: null, side: 'after', groupId: g.id });
+  });
+  tabsList.appendChild(slot);
 }
 
 // Сворачивание группы: запись в blattam-groups → onChanged → перерисовка.
@@ -448,6 +612,51 @@ function toggleGroupCollapsed(groupId) {
   if (!g) return;
   g.collapsed = !g.collapsed;
   chrome.storage.sync.set({ 'blattam-groups': allGroups });
+}
+
+// ☑ — выбор ВСЕХ вкладок группы (независимо от сворачивания): если все члены
+// уже в selectedUrls — снять всех, иначе добавить всех. Выбор завязан на URL,
+// переживает перерисовку; перерисовка — с текущим поиском.
+function toggleGroupSelection(g) {
+  const urls = allTabs.filter(t => t.spaceId === g.spaceId && t.groupId === g.id).map(t => t.url);
+  if (urls.length === 0) return;
+  const allSelected = urls.every(u => selectedUrls.has(u));
+  urls.forEach(u => allSelected ? selectedUrls.delete(u) : selectedUrls.add(u));
+  renderTabs(searchInput.value);
+}
+
+// ✎ — инлайн-ренейм группы: <input> на месте .gname. Enter/blur — сохранить
+// (пустое/whitespace-имя — старое имя, дубли имён допустимы), Esc — отмена.
+// Имя пишется в allGroups + blattam-groups (запись в storage → onChanged).
+function startGroupRename(g, nameEl) {
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'gname-input';
+  input.value = g.name;
+  input.autocomplete = 'off';
+  nameEl.replaceWith(input);
+  input.focus();
+  input.select();
+
+  let done = false;
+  const finish = (save) => {
+    if (done) return;
+    done = true;
+    const newName = input.value.trim();
+    if (save && newName && newName !== g.name) {
+      g.name = newName;
+      chrome.storage.sync.set({ 'blattam-groups': allGroups });
+    }
+    renderTabs(searchInput.value);
+  };
+
+  input.addEventListener('click', (e) => e.stopPropagation());
+  input.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') finish(true);
+    if (e.key === 'Escape') finish(false);
+  });
+  input.addEventListener('blur', () => finish(true));
 }
 
 // Reorder групп: вырезаем группу из глобального allGroups и вставляем
@@ -517,6 +726,7 @@ function appendCard(tab) {
   card.className = 'tab-card'
     + (selectedUrls.has(tab.url) ? ' selected' : '')
     + (activeUrl === tab.url ? ' kbd-active' : '');
+  card.__tab = tab; // ссылка на данные (секционно-чуткий расчёт слота при DnD)
 
   // Чекбокс массового выбора (hover-контрол, сверху-слева)
   const selectCb = document.createElement('input');
@@ -546,9 +756,43 @@ function appendCard(tab) {
     }
   });
 
+  // Кнопка редактирования (hover-контрол, снизу-справа) — меню «Изменить»
+  const editBtn = document.createElement('button');
+  editBtn.className = 'tab-edit';
+  editBtn.title = 'Редактировать вкладку';
+  editBtn.textContent = '\u270E';
+  let cardMenu = null;
+  const closeCardMenu = () => {
+    if (cardMenu) { cardMenu.remove(); cardMenu = null; }
+  };
+  editBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (cardMenu) { closeCardMenu(); return; } // повторный клик — закрыть
+    cardMenu = document.createElement('div');
+    cardMenu.className = 'tab-card-menu';
+    const changeItem = document.createElement('button');
+    changeItem.textContent = 'Изменить';
+    changeItem.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      closeCardMenu();
+      openEditTabModal(tab);
+    });
+    cardMenu.appendChild(changeItem);
+    card.appendChild(cardMenu);
+    // Клик вне меню — закрыть
+    const onOutside = (ev) => {
+      if (cardMenu && !cardMenu.contains(ev.target)) {
+        closeCardMenu();
+        document.removeEventListener('click', onOutside);
+      }
+    };
+    setTimeout(() => document.addEventListener('click', onOutside), 0);
+  });
+
   // Hover-контролы — absolute, привязаны к карточке
   card.appendChild(selectCb);
   card.appendChild(deleteBtn);
+  card.appendChild(editBtn);
 
   // Тело: имя + URL
   const body = document.createElement('div');
@@ -591,28 +835,54 @@ function appendCard(tab) {
   body.appendChild(nameEl);
   card.appendChild(body);
 
+  // Комментарий (если задан) — внизу внутри карточки, моно, обрезается
+  if (tab.comment) {
+    const commentEl = document.createElement('div');
+    commentEl.className = 'tab-comment';
+    commentEl.textContent = tab.comment;
+    commentEl.title = tab.comment;
+    card.appendChild(commentEl);
+  }
+
   // Клик по карточке — открыть вкладку + снять выбор
   card.addEventListener('click', () => {
+    if (card.dataset.pressBtn) return; // press начался на чекбоксе/✕ — не открываем
     openUrl(tab.url);
   });
 
   // Drag & drop: карточку можно перетащить на чип пространства (переместить)
-  // или на другую карточку (перестановка — см. attachCardReorderDrop)
+  // или в зазор между карточками (reorder — глобальные обработчики ниже)
   card.draggable = true;
+  // Hover-кнопки (чекбокс/✕/✎) не стартуют drag — то же, что у шапки группы.
+  guardDragOverButtons(card, '.tab-select, .tab-remove, .tab-edit');
   card.addEventListener('dragstart', (e) => {
+    if (!card.draggable) { e.preventDefault(); return; } // press начался на кнопке
     e.dataTransfer.setData('text/plain', String(allTabs.indexOf(tab)));
     e.dataTransfer.effectAllowed = 'move';
     dragSourceUrl = tab.url;
+    dragSourceCardEl = card;
     card.classList.add('dragging');
+    // Оригинал исчезает из слота (нативный drag-образ браузера следует за
+    // курсором); место занимает тёплая заглушка (ghost-slot) — отложенно:
+    // display:none в самом dragstart «залипает» HTML5-drag в Chrome
+    setTimeout(() => {
+      if (dragSourceUrl !== tab.url) return;
+      if (!dragGhostSlot) {
+        // Меряем ДО display:none (у скрытой карточки offsetWidth/Height = 0)
+        dragGhostSlot = makeGhostSlot(card);
+        card.insertAdjacentElement('afterend', dragGhostSlot);
+      }
+      card.style.display = 'none';
+    }, 0);
   });
   card.addEventListener('dragend', () => {
     dragSourceUrl = null;
+    dragSourceCardEl = null;
     card.classList.remove('dragging');
-    clearReorderIndicators();
+    if (card.isConnected) card.style.display = ''; // drag без drop — вернуть карточку в слот
+    removeGhostSlot();
     document.querySelectorAll('.space-chip.drag-over').forEach(c => c.classList.remove('drag-over'));
-    document.querySelectorAll('.gbar.drop-over').forEach(b => b.classList.remove('drop-over'));
   });
-  attachCardReorderDrop(card, tab);
 
   tabsList.appendChild(card);
 }
@@ -651,6 +921,9 @@ function visibleTabs(filter = '') {
 
 function renderTabs(filter = '') {
   tabsList.innerHTML = '';
+  // Перерисовка во время перетаскивания уносит заглушку (и заменяет карточку) —
+  // сбрасываем ссылку, чтобы ghost-slot не «воскрес» после dragend
+  if (dragGhostSlot && !dragGhostSlot.isConnected) dragGhostSlot = null;
 
   const sTabs = spaceTabs();
   const sGroups = spaceGroups();
@@ -666,7 +939,10 @@ function renderTabs(filter = '') {
       // Пространство без вкладок, но с группами — не «пусто»: показываем
       // пустые группы (счётчик «0 вкладок»)
       emptyState.style.display = 'none';
-      sGroups.forEach(g => appendGroupBar(g, 0));
+      sGroups.forEach(g => {
+        appendGroupBar(g, 0);
+        if (!g.collapsed) appendEmptyGroupSlot(g);
+      });
       noResults.style.display = 'none';
       metaCount.textContent = '0';
     } else {
@@ -692,6 +968,7 @@ function renderTabs(filter = '') {
         appendCard(t);
         visibleCount++;
       });
+      if (members.length === 0) appendEmptyGroupSlot(g);
     }
   });
 
@@ -750,47 +1027,195 @@ function attachSpaceDrop(chip, spaceId) {
   });
 }
 
-// === Drag & drop: перестановка карточек (reorder) ===
-// Карточка принимает перетаскиваемую карточку: верхняя половина — вставить
-// перед, нижняя — после. Меняется только порядок в 'blattam-tabs' (spaceId/groupId
-// не трогается); работает в любом фильтре — позиция считается по полному массиву.
+// === Drag & drop: перестановка карточек (reorder), toby-style ===
+// Забрали карточку: оригинал исчезает из слота (на его месте — ghost-slot: тёплая пустая
+// заглушка размера карточки); нативный drag-образ браузера следует за курсором, клон-призрака нет.
+// Заглушка — ЕДИНСТВЕННЫЙ индикатор вставки (2px-линия убрана): она ходит за
+// курсором с учётом секций (группы / «Без группы») — встаёт перед карточкой,
+// после последней, ДО шапки секции (конец предыдущей) или ПОСЛЕ шапки
+// (начало секции). Дроп ставит вкладку в ПОЛНОМ allTabs на позицию заглушки
+// (работает под любым фильтром) и задаёт groupId секции заглушки
+// (null — «Без группы»); spaceId не меняется. Свою семантику дропа карточки
+// сохранил только чип пространства (над ним и над шапкой группы заглушка
+// просто стоит до drop/dragend); шапка группы — только reorder групп.
 
-// Снимаем индикаторы reorder со всех карточек
-function clearReorderIndicators() {
-  document.querySelectorAll('.tab-card.drop-before, .tab-card.drop-after')
-    .forEach(c => c.classList.remove('drop-before', 'drop-after'));
+// Ghost-slot: пустая заглушка размера карточки (без текста) — занимает слот
+// карточки в сетке; тон — тёплые токены --ghost-bg/--ghost-ring (фон) и
+// пунктирный --ghost-ring (контур).
+// pointer-events:none — курсор «видит сквозь» заглушку (gap-индекс не дёргается,
+// дроп падает на сам список). Инлайн: в тестах <head>-стили view.html не грузятся.
+function makeGhostSlot(card) {
+  const slot = document.createElement('div');
+  slot.className = 'tab-ghost-slot';
+  slot.draggable = false;
+  slot.style.cssText =
+    'pointer-events:none;box-sizing:border-box;background:var(--ghost-bg);' +
+    'border-width:1px;border-style:dashed;border-color:var(--ghost-ring);' +
+    'border-radius:' + (getComputedStyle(card).borderRadius || '0px');
+  slot.style.width = card.offsetWidth + 'px';
+  slot.style.height = card.offsetHeight + 'px';
+  return slot;
 }
 
-// 'before'/'after' — по позиции курсора относительно середины карточки
+// Переносит заглушку в потенциальный слот вставки: anchor — {el, side} из
+// slotAnchor(); соседи сдвигаются естественным reflow сетки. Своя (отложенная)
+// точка создания — в dragstart; перерисовка во время перетаскивания уносит
+// заглушку из DOM — в этом случае её не воссоздаём (drag продолжится без
+// заглушки, дроп всё равно сработает).
+function moveGhostSlot(anchor) {
+  if (!dragSourceUrl || !anchor || !anchor.el) return;
+  if (!dragGhostSlot) return;
+  if (!dragGhostSlot.isConnected) { dragGhostSlot = null; return; }
+  if (anchor.side === 'before') anchor.el.before(dragGhostSlot);
+  else anchor.el.after(dragGhostSlot);
+}
+
+function removeGhostSlot() {
+  if (dragGhostSlot && dragGhostSlot.isConnected) dragGhostSlot.remove();
+  dragGhostSlot = null;
+}
+
+// Видимые карточки для расчёта зазора: перетаскиваемая карточка
+// исключается (она скрыта во время перетаскивания; сетка уже закрыла её слот)
+function visibleCards() {
+  return [...document.querySelectorAll('#tabs-list .tab-card')]
+    .filter(c => c !== dragSourceCardEl && c.style.display !== 'none');
+}
+
+// Gap index = how many visible cards the cursor has "passed" (multi-row grid:
+// a card is passed when cursor Y is below its bottom, or cursor is on the
+// card's row and right of its horizontal center)
+function cardGapIndex(clientX, clientY) {
+  let idx = 0;
+  for (const c of visibleCards()) {
+    const r = c.getBoundingClientRect();
+    const onRow = clientY >= r.top && clientY <= r.bottom;
+    if (clientY > r.bottom || (onRow && clientX > r.left + r.width / 2)) idx++;
+  }
+  return idx;
+}
+
+// Секция вкладки по данным: groupId или null (негрупповая)
+function tabGroupOf(t) {
+  return t && t.groupId ? t.groupId : null;
+}
+
+// Шапка секции, стоящая перед карточкой в списке: .gbar (группа) или
+// .loose-label (негрупповая секция); null — карточка в начале списка
+function sectionHeaderBefore(card) {
+  let el = card.previousElementSibling;
+  while (el && !el.classList.contains('gbar') && !el.classList.contains('loose-label'))
+    el = el.previousElementSibling;
+  return el;
+}
+
+// Секция секционной шапки: .gbar — её groupId; .loose-label — null
+function headerSection(header) {
+  return header && header.classList.contains('gbar') ? (header.dataset.groupId || null) : null;
+}
+
+// Позиция заглушки с учётом секций: плоский gap-индекс + Y курсора →
+// {el, side}. На границе секций (карточка — первая своей секции, перед ней
+// шапка): курсор НИЖЕ середины шапки — начало этой секции (заглушка после
+// шапки), ВЫШЕ — конец предыдущей (заглушка до шапки). Остальные позиции —
+// перед карточкой / после последней видимой.
+function slotAnchor(idx, clientY) {
+  const cards = visibleCards();
+  if (!cards.length) return null;
+  if (idx <= 0) return { el: cards[0], side: 'before' };
+  if (idx >= cards.length) return { el: cards[cards.length - 1], side: 'after' };
+  const card = cards[idx];
+  const header = sectionHeaderBefore(card);
+  if (header && tabGroupOf(card.__tab) !== tabGroupOf(cards[idx - 1].__tab)) {
+    const r = header.getBoundingClientRect();
+    const below = clientY == null || clientY > r.top + r.height / 2;
+    return { el: header, side: below ? 'after' : 'before' };
+  }
+  return { el: card, side: 'before' };
+}
+
+// Секция позиции заглушки (groupId или null): карточка — группа её вкладки;
+// «после» шапки — секция шапки; «до» шапки — секция карточки, стоящей
+// перед шапкой.
+function slotSection(anchor) {
+  if (anchor.el.classList.contains('tab-card')) return tabGroupOf(anchor.el.__tab);
+  if (anchor.side === 'after') return headerSection(anchor.el);
+  let prev = anchor.el.previousElementSibling;
+  while (prev && !prev.classList.contains('tab-card')) prev = prev.previousElementSibling;
+  return prev ? tabGroupOf(prev.__tab) : null;
+}
+
+// Первая/последняя вкладка секции в ПОЛНОМ массиве (секция = активное
+// пространство + groupId; null — «Без группы»)
+function sectionTabFull(section, last) {
+  const inSec = allTabs.filter(t => t.spaceId === activeSpaceId && tabGroupOf(t) === section);
+  return inSec.length ? inSec[last ? inSec.length - 1 : 0] : null;
+}
+
+// Дроп в позицию заглушки: вкладка встаёт в ПОЛНОМ allTabs на позицию слота —
+// перед/после якорной вкладки (конец секции — после последней вкладки секции,
+// конец списка — в конец) — и получает groupId секции слота (null — «Без
+// группы»); spaceId не меняется. Same slot (позиция и группа те же) — no-op.
+function placeCardToSlot(src, anchor) {
+  if (!anchor || !anchor.el) return;
+  const from = allTabs.indexOf(src);
+  if (from === -1) return;
+  const section = slotSection(anchor);
+  let anchorUrl, side = anchor.side;
+  if (anchor.el.classList.contains('tab-card') && anchor.side === 'before') {
+    anchorUrl = anchor.el.__tab.url;               // перед видимой карточкой X
+  } else if (anchor.el.classList.contains('tab-card')) {
+    const t = sectionTabFull(section, true);       // конец секции (= конец списка)
+    if (!t) return;
+    anchorUrl = t.url; side = 'after';
+  } else if (anchor.side === 'after') {
+    const t = sectionTabFull(section, false);      // начало секции
+    if (!t) return;
+    anchorUrl = t.url; side = 'before';
+  } else {
+    const t = sectionTabFull(section, true);       // конец предыдущей секции
+    if (!t) return;
+    anchorUrl = t.url; side = 'after';
+  }
+  const anchorIndex = allTabs.findIndex(t => t.url === anchorUrl);
+  if (anchorIndex === -1) return;
+  let a = anchorIndex > from ? anchorIndex - 1 : anchorIndex;
+  const finalAt = side === 'before' ? a : Math.min(a + 1, allTabs.length - 1);
+  if (finalAt === from && section === tabGroupOf(src)) return;
+  chrome.runtime.sendMessage({ action: 'place-tab', index: from, anchorIndex, side, groupId: section });
+}
+
+// Глобальные dragover/drop: нативный drag-образ браузера следует за курсором,
+// заглушка — в ближайшую позицию вставки (с учётом секций). Свою семантику дропа
+// карточки сохранил только чип пространства (и свой обработчик drop);
+// шапка группы — только reorder — над обоими заглушка просто стоит.
+document.addEventListener('dragover', (e) => {
+  if (!dragSourceUrl || dragSourceGroupId || !e.dataTransfer) return;
+  const t = e.target;
+  const overSpecial = t && t.closest && (t.closest('.gbar') || t.closest('.space-chip') || t.closest('.group-empty-slot'));
+  if (overSpecial || !tabsList.contains(t)) return;
+  moveGhostSlot(slotAnchor(cardGapIndex(e.clientX, e.clientY), e.clientY));
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+});
+
+document.addEventListener('drop', (e) => {
+  if (!dragSourceUrl || dragSourceGroupId || !e.dataTransfer) return;
+  const t = e.target;
+  if (!t || !tabsList.contains(t)) return;
+  if (t.closest && t.closest('.gbar')) return; // дроп на шапку группы — карточка не переезжает через неё
+  if (t.closest && t.closest('.group-empty-slot')) return; // слот пустой группы — свой обработчик шлёт, глобальный не должен
+  const src = allTabs.find(tb => tb.url === dragSourceUrl);
+  if (!src) return;
+  e.preventDefault();
+  placeCardToSlot(src, slotAnchor(cardGapIndex(e.clientX, e.clientY), e.clientY));
+  removeGhostSlot();
+});
+
+// 'before'/'after' — по позиции курсора относительно середины элемента
 function reorderSide(card, clientY) {
   const rect = card.getBoundingClientRect();
   return (clientY == null || clientY <= rect.top + rect.height / 2) ? 'before' : 'after';
-}
-
-// Карточка принимает другую карточку (drop на себя — no-op)
-function attachCardReorderDrop(card, tab) {
-  card.addEventListener('dragover', (e) => {
-    if (!e.dataTransfer || !dragSourceUrl) return;
-    const src = allTabs.find(t => t.url === dragSourceUrl);
-    if (!src || src === tab) return; // на себя — не целевая
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    const side = reorderSide(card, e.clientY);
-    card.classList.toggle('drop-before', side === 'before');
-    card.classList.toggle('drop-after', side === 'after');
-  });
-  card.addEventListener('dragleave', () => card.classList.remove('drop-before', 'drop-after'));
-  card.addEventListener('drop', (e) => {
-    e.preventDefault();
-    card.classList.remove('drop-before', 'drop-after');
-    if (!e.dataTransfer) return;
-    const from = parseInt(e.dataTransfer.getData('text/plain'), 10);
-    const src = allTabs[from];
-    if (!src || src.url !== dragSourceUrl || src === tab) return; // drop on себя / устаревший индекс — no-op
-    chrome.runtime.sendMessage({
-      action: 'reorder-tab', fromIndex: from, toIndex: allTabs.indexOf(tab), side: reorderSide(card, e.clientY)
-    });
-  });
 }
 
 // Двойной клик по имени → инлайн-переименование

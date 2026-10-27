@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BlattamToby — 008-B Призрачная плашка</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #ffffff; --surface: #ffffff; --card-bg: #f5f5f5; --surface-soft: #fafafa; --hover: #fafafa;
+  --text: #171717; --text-soft: #4d4d4d; --text-muted: #666666; --text-faint: #808080; --on-ink: #ffffff;
+  --line: rgba(0,0,0,0.08); --line2: #ebebeb; --dashed: #b0b0b0; --dashed-hover: #737373;
+  --ink: #171717; --gbar-bg: #fbf1de; --gbar-bg-hover: #f7e6c6;
+  --shadow-hover: 0 2px 10px rgba(0,0,0,0.06);
+  --card-min: 176px; --card-gap: 12px; --card-radius: 8px; --card-name-size: 13px;
+  --font-ui: 'Geist', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+}
+[data-theme="dark"] {
+  --bg: #1f1c1b; --surface: #2a2624; --card-bg: #36312d; --surface-soft: #282422; --hover: #38322f;
+  --text: #f5f2ee; --text-soft: #d7d1cb; --text-muted: #a8a09a; --text-faint: #827c76; --on-ink: #1f1c1b;
+  --line: rgba(255,255,255,0.10); --line2: rgba(255,255,255,0.16); --dashed: #6d655e; --dashed-hover: #a8a09a;
+  --ink: #f5f2ee; --gbar-bg: #3d3223; --gbar-bg-hover: #463a29;
+  --shadow-hover: 0 2px 10px rgba(0,0,0,0.45);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--text); font: 400 14px/1.45 var(--font-ui); }
+
+/* ── top header ─────────────────────────────────────────── */
+.top {
+  position: sticky; top: 0; z-index: 10; height: 52px; padding: 0 20px;
+  display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px;
+  background: var(--bg);
+}
+.wordmark { font-size: 17px; font-weight: 700; letter-spacing: -.06em; }
+.search { position: relative; width: min(420px, 90%); justify-self: center; }
+.search input {
+  width: 100%; height: 32px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--surface); color: var(--text); padding: 0 34px 0 10px;
+  font: 400 13px var(--font-ui); outline: none;
+}
+.search input::placeholder { color: var(--text-faint); }
+.search input:focus { border-color: var(--text-faint); }
+.search kbd {
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  font: 500 10px/1 var(--font-mono); color: var(--text-faint);
+  border: 1px solid var(--line); border-radius: 4px; padding: 2px 5px; background: var(--surface-soft);
+}
+.top-right { display: flex; gap: 8px; justify-self: end; }
+.tbtn {
+  height: 28px; padding: 0 10px; border: 1px solid var(--line); border-radius: 6px;
+  background: transparent; color: var(--text-muted); font: 500 12.5px var(--font-ui);
+  display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+  transition: background .12s ease, color .12s ease;
+}
+.tbtn:hover { background: var(--hover); color: var(--text); }
+.tbtn.icon { width: 28px; padding: 0; justify-content: center; }
+
+/* ── chips ──────────────────────────────────────────────── */
+.chips { display: flex; align-items: center; gap: 8px; padding: 18px 20px 0; }
+.chip-label {
+  font: 500 10.5px var(--font-mono); text-transform: uppercase; letter-spacing: .08em;
+  color: var(--text-faint); margin-right: 4px;
+}
+.chip {
+  height: 26px; padding: 0 12px; border-radius: 13px; border: 1px solid var(--line);
+  background: transparent; color: var(--text-muted); font: 500 12px var(--font-ui);
+  display: inline-flex; align-items: center; cursor: pointer;
+  transition: background .12s ease, color .12s ease;
+}
+.chip:hover { background: var(--hover); color: var(--text); }
+.chip.active { background: var(--ink); color: var(--on-ink); border-color: var(--ink); }
+
+/* ── meta row ───────────────────────────────────────────── */
+.meta { display: flex; align-items: baseline; gap: 8px; padding: 14px 20px 12px; }
+.meta h1 { margin: 0; font-size: 15px; font-weight: 600; }
+.meta .count { font: 500 11px var(--font-mono); color: var(--text-faint); }
+
+/* ── grid ───────────────────────────────────────────────── */
+.tabs-list {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--card-min), 1fr));
+  gap: var(--card-gap); padding: 0 20px 110px;
+}
+
+/* ── GROUP HEADER · ghost bar (VARIANT B) ───────────────── */
+/* Same geometry as the current bar (full-width, 28px hit area),
+   but persistent bg = var(--card-bg), no border, no warm fill. */
+.gbar {
+  grid-column: 1 / -1; height: 28px; padding: 0 10px; border-radius: 6px;
+  background: var(--card-bg);
+  display: flex; align-items: center; gap: 8px;
+  cursor: pointer; user-select: none;
+}
+.gbar:hover { background-image: linear-gradient(rgba(0,0,0,0.03), rgba(0,0,0,0.03)); }
+[data-theme="dark"] .gbar:hover { background-image: linear-gradient(rgba(255,255,255,0.03), rgba(255,255,255,0.03)); }
+.gbar .chev { font: 500 10px/1 var(--font-mono); color: var(--text-faint); width: 10px; }
+.gbar .gname { font-size: 12.5px; font-weight: 500; color: var(--text-muted); transition: color .12s ease; }
+.gbar:hover .gname { color: var(--text-soft); }
+.gbar .gcount { font: 400 10.5px/1 var(--font-mono); color: var(--text-faint); }
+.gbar .ctrls { margin-left: auto; display: flex; gap: 4px; opacity: 0; transition: opacity .12s ease; }
+.gbar:hover .ctrls { opacity: 1; }
+.cbtn {
+  width: 18px; height: 18px; border-radius: 50%; border: none; padding: 0;
+  background: transparent; color: var(--text-faint);
+  font-size: 11px; line-height: 1; display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+}
+.cbtn:hover { background: var(--hover); color: var(--text); }
+.cbtn.on { background: var(--ink); color: var(--on-ink); }
+
+/* ── tab card ───────────────────────────────────────────── */
+.tab {
+  min-height: 74px; border-radius: var(--card-radius); background: var(--card-bg);
+  box-shadow: 0 0 0 1px var(--line);
+  padding: 12px; display: flex; flex-direction: column; justify-content: center; gap: 8px;
+  cursor: pointer; transition: transform .12s ease, box-shadow .12s ease;
+}
+.tab:hover { transform: translateY(-1px); box-shadow: 0 0 0 1px var(--line), var(--shadow-hover); }
+.tab .tile {
+  width: 15px; height: 15px; border-radius: 3px; background: var(--hover);
+  box-shadow: 0 0 0 1px var(--line);
+  display: flex; align-items: center; justify-content: center;
+  font: 500 9px/1 var(--font-mono); color: var(--text-muted);
+}
+.tab .tname {
+  font-size: var(--card-name-size); font-weight: 500; letter-spacing: -.1px;
+  color: var(--text); overflow-wrap: anywhere;
+}
+
+/* ── ungrouped label & add button ───────────────────────── */
+.sec-label {
+  grid-column: 1 / -1; margin-top: 6px;
+  font: 500 10.5px/1 var(--font-mono); letter-spacing: .08em;
+  color: var(--text-faint);
+}
+.add-group {
+  grid-column: 1 / -1; height: 40px;
+  border: 1px dashed var(--dashed); border-radius: 8px;
+  background: transparent; color: var(--text-muted);
+  font: 500 12.5px var(--font-ui); cursor: pointer;
+  transition: border-color .12s ease, color .12s ease;
+}
+.add-group:hover { border-color: var(--dashed-hover); color: var(--text); }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wordmark">Toby</div>
+  <div class="search">
+    <input type="text" placeholder="Поиск во вкладках…" aria-label="Поиск во вкладках">
+    <kbd>/</kbd>
+  </div>
+  <div class="top-right">
+    <button class="tbtn" type="button">☑ Выбрать</button>
+    <button class="tbtn icon" type="button" id="themeBtn" title="Сменить тему">🌙</button>
+    <button class="tbtn" type="button">↓ Экспорт</button>
+    <button class="tbtn" type="button">↑ Импорт</button>
+  </div>
+</header>
+
+<div class="chips">
+  <span class="chip-label">+ Пространство</span>
+  <button class="chip active" type="button">Работа</button>
+  <button class="chip" type="button">Личное</button>
+</div>
+
+<div class="meta">
+  <h1>Мои вкладки</h1>
+  <span class="count">7</span>
+</div>
+
+<main class="tabs-list" id="tabs"></main>
+
+<script>
+const GROUPS = [
+  { name: 'Статьи', cards: [
+    { t: 'Как устроены LLM — разбор', l: 'H' },
+    { t: 'Attention Is All You Need', l: 'A' },
+    { t: 'CSS Grid: A Complete Guide', l: 'C' },
+  ]},
+  { name: 'Книги', cards: [
+    { t: 'Databases for Mortals — PDF', l: 'D' },
+    { t: 'Проект Ганновер — заметки', l: 'П' },
+  ]},
+];
+const UNGROUPED = [
+  { t: 'GitHub — BlattamToby', l: 'G' },
+  { t: 'llama.cpp releases', l: 'l' },
+];
+const collapsed = new Set();
+const grid = document.getElementById('tabs');
+
+function makeCard(c) {
+  const d = document.createElement('div');
+  d.className = 'tab';
+  d.innerHTML = '<span class="tile">' + c.l + '</span><span class="tname">' + c.t + '</span>';
+  return d;
+}
+
+GROUPS.forEach(g => {
+  const bar = document.createElement('div');
+  bar.className = 'gbar';
+  bar.innerHTML =
+    '<span class="chev">▾</span>' +
+    '<span class="gname">' + g.name + '</span>' +
+    '<span class="gcount">' + g.cards.length + ' вкладок</span>' +
+    '<span class="ctrls">' +
+      '<button class="cbtn chk" type="button" title="Выбрать все">☑</button>' +
+      '<button class="cbtn" type="button" title="Переименовать">✎</button>' +
+      '<button class="cbtn" type="button" title="Удалить группу">✕</button>' +
+    '</span>';
+  g._bar = bar;
+  g._chev = bar.querySelector('.chev');
+  g._cards = g.cards.map(makeCard);
+  bar.addEventListener('click', () => toggleGroup(g));
+  bar.querySelectorAll('.cbtn').forEach(b =>
+    b.addEventListener('click', e => {
+      e.stopPropagation();
+      if (b.classList.contains('chk')) b.classList.toggle('on');
+    }));
+  grid.appendChild(bar);
+  if (!collapsed.has(g.name)) grid.append(...g._cards);
+});
+
+const label = document.createElement('div');
+label.className = 'sec-label';
+label.textContent = 'БЕЗ ГРУППЫ';
+grid.appendChild(label);
+UNGROUPED.forEach(c => grid.appendChild(makeCard(c)));
+
+const add = document.createElement('button');
+add.type = 'button';
+add.className = 'add-group';
+add.textContent = '+ Группа';
+grid.appendChild(add);
+
+function toggleGroup(g) {
+  if (collapsed.has(g.name)) {
+    collapsed.delete(g.name);
+    g._bar.after(...g._cards);
+    g._chev.textContent = '▾';
+  } else {
+    collapsed.add(g.name);
+    g._cards.forEach(c => c.remove());
+    g._chev.textContent = '▸';
+  }
+}
+
+const themeBtn = document.getElementById('themeBtn');
+themeBtn.addEventListener('click', () => {
+  const root = document.documentElement;
+  const dark = root.getAttribute('data-theme') === 'dark';
+  if (dark) root.removeAttribute('data-theme'); else root.setAttribute('data-theme', 'dark');
+  themeBtn.textContent = dark ? '🌙' : '☀️';
+});
+</script>
+</body>
+</html>

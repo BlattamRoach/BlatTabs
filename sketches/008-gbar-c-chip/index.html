@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" href="data:,">
+<title>Toby — Sketch C: inline chip</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #ffffff; --surface: #ffffff; --card-bg: #f5f5f5; --surface-soft: #fafafa; --hover: #fafafa;
+  --text: #171717; --text-soft: #4d4d4d; --text-muted: #666666; --text-faint: #808080; --on-ink: #ffffff;
+  --line: rgba(0,0,0,0.08); --line2: #ebebeb; --dashed: #b0b0b0; --dashed-hover: #737373;
+  --ink: #171717; --gbar-bg: #fbf1de; --gbar-bg-hover: #f7e6c6;
+  --shadow-hover: 0 2px 10px rgba(0,0,0,0.06);
+  --card-min: 176px; --card-gap: 12px; --card-radius: 8px; --card-name-size: 13px;
+  --font-ui: 'Geist', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+}
+[data-theme="dark"] {
+  --bg: #1f1c1b; --surface: #2a2624; --card-bg: #36312d; --surface-soft: #282422; --hover: #38322f;
+  --text: #f5f2ee; --text-soft: #d7d1cb; --text-muted: #a8a09a; --text-faint: #827c76; --on-ink: #1f1c1b;
+  --line: rgba(255,255,255,0.10); --line2: rgba(255,255,255,0.16); --dashed: #6d655e; --dashed-hover: #a8a09a;
+  --ink: #f5f2ee; --gbar-bg: #3d3223; --gbar-bg-hover: #463a29;
+  --shadow-hover: 0 2px 10px rgba(0,0,0,0.45);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font: 400 14px/1.45 var(--font-ui); background: var(--bg); color: var(--text); }
+button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+
+/* top header */
+.topbar { position: sticky; top: 0; z-index: 10; height: 52px; display: flex; align-items: center; gap: 16px; padding: 0 20px; background: var(--bg); border-bottom: 1px solid var(--line); }
+.wordmark { font-size: 17px; font-weight: 700; letter-spacing: -.06em; }
+.searchwrap { flex: 1; display: flex; justify-content: center; }
+.search { position: relative; width: 100%; max-width: 420px; }
+.search input { width: 100%; height: 32px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); color: var(--text); font: 400 13px var(--font-ui); padding: 0 34px 0 12px; outline: none; }
+.search input::placeholder { color: var(--text-faint); }
+.search kbd { position: absolute; top: 50%; right: 8px; transform: translateY(-50%); font: 400 10px var(--font-mono); color: var(--text-faint); border: 1px solid var(--line2); border-radius: 4px; background: var(--bg); padding: 2px 5px; }
+.topbtns { display: flex; gap: 8px; }
+.tbtn { height: 28px; padding: 0 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); font-size: 12.5px; color: var(--text-muted); display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.tbtn:hover { background: var(--hover); color: var(--text); }
+
+/* chip row */
+.chiprow { display: flex; align-items: center; gap: 8px; padding: 14px 20px 0; }
+.addspace { height: 26px; padding: 0 11px; border: 1px dashed var(--line2); border-radius: 9999px; background: transparent; font: 400 10.5px var(--font-mono); text-transform: uppercase; letter-spacing: .08em; color: var(--text-faint); }
+.addspace:hover { background: var(--hover); color: var(--text-muted); border-color: var(--dashed-hover); }
+.schip { height: 26px; padding: 0 13px; border: 1px solid var(--line); border-radius: 9999px; background: transparent; font-size: 12.5px; color: var(--text-muted); }
+.schip:hover { background: var(--hover); color: var(--text); }
+.schip.active { background: var(--ink); color: var(--on-ink); border-color: var(--ink); }
+
+/* meta row */
+.meta { display: flex; align-items: baseline; gap: 8px; padding: 14px 20px 12px; }
+.meta .t { font-size: 15px; font-weight: 600; }
+.meta .n { font: 400 11px var(--font-mono); color: var(--text-faint); }
+
+/* grid */
+.tabs-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--card-min), 1fr)); gap: var(--card-gap); padding: 0 20px 110px; }
+
+/* group chip (Variant C) */
+.group-chip { grid-column: 1 / -1; justify-self: start; width: fit-content; max-width: 100%; display: inline-flex; align-items: center; gap: 7px; height: 26px; padding: 0 9px 0 10px; border: 1px solid var(--line); border-radius: 9999px; background: transparent; margin-top: 4px; }
+.group-chip:hover { background: var(--hover); }
+.group-chip .chev { width: 10px; font: 500 9px/1 var(--font-mono); color: var(--text-faint); text-align: center; }
+.group-chip .gname { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 500; letter-spacing: -.1px; color: var(--text-soft); transition: color .12s; }
+.group-chip:hover .gname { color: var(--text); }
+.group-chip .gcount { font: 400 10.5px var(--font-mono); color: var(--text-faint); white-space: nowrap; }
+.group-chip .gdiv { width: 1px; height: 12px; background: var(--line2); opacity: 0; transition: opacity .12s; }
+.group-chip .gctl { width: 14px; height: 14px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; font-size: 9px; color: var(--text-faint); opacity: 0; transition: opacity .12s, color .12s, background .12s; }
+.group-chip:hover .gdiv, .group-chip:hover .gctl { opacity: 1; }
+.group-chip .gctl:hover { color: var(--text); background: var(--card-bg); }
+.group-chip .gctl.on { background: var(--ink); color: var(--on-ink); }
+
+/* tab cards */
+.tab-card { display: flex; align-items: center; gap: 9px; min-height: 74px; padding: 12px; border-radius: var(--card-radius); background: var(--card-bg); box-shadow: 0 0 0 1px var(--line); cursor: pointer; transition: transform .12s ease, box-shadow .12s ease; }
+.tab-card:hover { transform: translateY(-1px); box-shadow: 0 0 0 1px var(--line), var(--shadow-hover); }
+.tile { flex: 0 0 auto; width: 15px; height: 15px; border-radius: 3px; background: var(--hover); box-shadow: 0 0 0 1px var(--line); display: flex; align-items: center; justify-content: center; font: 500 9px/1 var(--font-mono); color: var(--text-muted); }
+.tab-title { font-size: var(--card-name-size); font-weight: 500; letter-spacing: -.1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.nogroup { grid-column: 1 / -1; font: 400 10.5px var(--font-mono); text-transform: uppercase; letter-spacing: .08em; color: var(--text-faint); }
+.add-group { grid-column: 1 / -1; height: 40px; border: 1px dashed var(--dashed); border-radius: var(--card-radius); background: transparent; font-size: 12.5px; color: var(--text-muted); }
+.add-group:hover { background: var(--hover); border-color: var(--dashed-hover); color: var(--text); }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="wordmark">Toby</div>
+  <div class="searchwrap">
+    <div class="search">
+      <input id="search" type="text" placeholder="Поиск во вкладках…">
+      <kbd>/</kbd>
+    </div>
+  </div>
+  <div class="topbtns">
+    <button class="tbtn">☑ Выбрать</button>
+    <button class="tbtn" id="btnTheme" title="Переключить тему">🌙</button>
+    <button class="tbtn">↓ Экспорт</button>
+    <button class="tbtn">↑ Импорт</button>
+  </div>
+</header>
+
+<div class="chiprow">
+  <button class="addspace">+ Пространство</button>
+  <button class="schip active">Работа</button>
+  <button class="schip">Личное</button>
+</div>
+
+<div class="meta">
+  <span class="t">Мои вкладки</span>
+  <span class="n">7</span>
+</div>
+
+<main class="tabs-list" id="tabs-list"></main>
+<script>
+(function () {
+  'use strict';
+  var GROUPS = [
+    { name: 'Статьи', cards: [
+      ['Как устроены LLM — разбор', 'H'],
+      ['Attention Is All You Need', 'A'],
+      ['CSS Grid: A Complete Guide', 'C']
+    ]},
+    { name: 'Книги', cards: [
+      ['Databases for Mortals — PDF', 'D'],
+      ['Проект Ганновер — заметки', 'П']
+    ]}
+  ];
+  var UNGROUPED = [
+    ['GitHub — BlattamToby', 'G'],
+    ['llama.cpp releases', 'l']
+  ];
+
+  var grid = document.getElementById('tabs-list');
+  var state = {};
+
+  function plural(n) {
+    var m10 = n % 10, m100 = n % 100;
+    if (m10 === 1 && m100 !== 11) return 'вкладка';
+    if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return 'вкладки';
+    return 'вкладок';
+  }
+  function el(tag, cls) { var x = document.createElement(tag); x.className = cls; return x; }
+
+  function makeCard(title, letter) {
+    var c = el('div', 'tab-card');
+    var tile = el('span', 'tile'); tile.textContent = letter;
+    var t = el('span', 'tab-title'); t.textContent = title;
+    c.appendChild(tile); c.appendChild(t);
+    return c;
+  }
+
+  function makeChip(g) {
+    var n = g.cards.length;
+    var chip = el('button', 'group-chip');
+    chip.dataset.group = g.name;
+    chip.title = 'Свернуть / развернуть группу';
+    var chev = el('span', 'chev'); chev.textContent = '▾';
+    var name = el('span', 'gname'); name.textContent = g.name;
+    var count = el('span', 'gcount'); count.textContent = n + ' ' + plural(n);
+    var div = el('span', 'gdiv');
+    var sel = el('span', 'gctl'); sel.dataset.act = 'sel'; sel.title = 'Выбрать'; sel.textContent = '☑';
+    var edit = el('span', 'gctl'); edit.dataset.act = 'edit'; edit.title = 'Переименовать'; edit.textContent = '✎';
+    var del = el('span', 'gctl'); del.dataset.act = 'del'; del.title = 'Удалить группу'; del.textContent = '✕';
+    [chev, name, count, div, sel, edit, del].forEach(function (p) { chip.appendChild(p); });
+    chip.addEventListener('click', function (e) {
+      var ctl = e.target.closest('.gctl');
+      if (ctl) {
+        if (ctl.dataset.act === 'sel') ctl.classList.toggle('on');
+        return;
+      }
+      toggle(g.name);
+    });
+    return chip;
+  }
+
+  function toggle(name) {
+    var s = state[name];
+    if (!s) return;
+    s.collapsed = !s.collapsed;
+    s.chev.textContent = s.collapsed ? '▸' : '▾';
+    if (s.collapsed) {
+      s.els.forEach(function (c) { c.remove(); });
+    } else {
+      var anchor = s.chip;
+      s.els.forEach(function (c) { anchor.after(c); anchor = c; });
+    }
+  }
+
+  GROUPS.forEach(function (g) {
+    var chip = makeChip(g);
+    grid.appendChild(chip);
+    var els = g.cards.map(function (c) { var e = makeCard(c[0], c[1]); grid.appendChild(e); return e; });
+    state[g.name] = { collapsed: false, els: els, chip: chip, chev: chip.querySelector('.chev') };
+  });
+
+  var lbl = el('div', 'nogroup'); lbl.textContent = 'БЕЗ ГРУППЫ';
+  grid.appendChild(lbl);
+  UNGROUPED.forEach(function (c) { grid.appendChild(makeCard(c[0], c[1])); });
+  var add = el('button', 'add-group'); add.textContent = '+ Группа';
+  grid.appendChild(add);
+
+  var btnTheme = document.getElementById('btnTheme');
+  btnTheme.addEventListener('click', function () {
+    var root = document.documentElement;
+    var dark = root.getAttribute('data-theme') === 'dark';
+    root.setAttribute('data-theme', dark ? 'light' : 'dark');
+    btnTheme.textContent = dark ? '🌙' : '☀️';
+  });
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === '/' && !/^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName)) {
+      e.preventDefault();
+      document.getElementById('search').focus();
+    }
+  });
+})();
+</script>
+</body>
+</html>
