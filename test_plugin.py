@@ -21,47 +21,74 @@ EXT_PATH = r"C:\Users\DI\Desktop\QwenCode\BlattamToby"
 
 MOCK_CHROME = """
 var mockSeq = 100;
+function cloneVal(v) { return (v === undefined || v === null) ? v : JSON.parse(JSON.stringify(v)); }
 var chrome = {
   storage: {
-    _data: {},
+    _data: {},                 // sync area (blattam-spaces/groups/last-space/folders)
     _fire: function(changeInfo, area) {
       if (window.__storageListeners && window.__storageListeners.length) {
         for (var fn of window.__storageListeners) fn(changeInfo, area);
       }
     },
+    // Bare chrome.storage.* — area-aware convenience (тесты): 'blattam-tabs'
+    // живёт в local, всё остальное — в sync.
+    // real Chrome returns STRUCTURED CLONES — не живые ссылки на _data:
+    // view.js mutates the read array in place (e.g. tab deletion), so a live
+    // reference would make onChanged's oldValue === newValue
     get: function(keys, callback) {
+      var self = this;
+      var pick = function(k) { return (k === 'blattam-tabs') ? self.local._data : self._data; };
       var result = {};
       if (typeof keys === 'string') {
-        result[keys] = this._data[keys];
+        result[keys] = cloneVal(pick(keys)[keys]);
       } else if (Array.isArray(keys)) {
-        for (var k of keys) result[k] = this._data[k];
+        for (var k of keys) result[k] = cloneVal(pick(k)[k]);
       } else {
-        Object.assign(result, this._data);
+        Object.keys(self._data).forEach(function(k) { result[k] = cloneVal(self._data[k]); });
+        Object.keys(self.local._data).forEach(function(k) { result[k] = cloneVal(self.local._data[k]); });
       }
       if (callback) callback(result);
       return Promise.resolve(result);
     },
     set: function(data, callback) {
-      var changeInfo = {};
+      var self = this;
+      var syncData = {}, localData = {};
       for (var k in data) {
-        changeInfo[k] = { newValue: data[k], oldValue: this._data[k] };
+        if (k === 'blattam-tabs') localData[k] = data[k];
+        else syncData[k] = data[k];
       }
-      Object.assign(this._data, data);
-      this._fire(changeInfo, 'sync');
+      self._setStore(self.local._data, localData, 'local');
+      self._setStore(self._data, syncData, 'sync');
       if (callback) callback();
       return Promise.resolve();
     },
     remove: function(keys, callback) {
-      var arr = Array.isArray(keys) ? keys : [keys];
       var self = this;
-      var changeInfo = {};
-      arr.forEach(function(k) {
-        if (self._data[k] !== undefined) changeInfo[k] = { oldValue: self._data[k] };
-        delete self._data[k];
-      });
-      this._fire(changeInfo, 'sync');
+      var arr = Array.isArray(keys) ? keys : [keys];
+      var syncKeys = [], localKeys = [];
+      arr.forEach(function(k) { (k === 'blattam-tabs' ? localKeys : syncKeys).push(k); });
+      self._removeStore(self.local._data, localKeys, 'local');
+      self._removeStore(self._data, syncKeys, 'sync');
       if (callback) callback();
       return Promise.resolve();
+    },
+    _setStore: function(store, data, area) {
+      var changeInfo = {};
+      for (var k in data) {
+        // As with real Chrome: oldValue — snapshot BEFORE the change (copy: view.js
+        // often passes the same array it just mutated in place)
+        changeInfo[k] = { newValue: data[k], oldValue: (store[k] !== undefined ? JSON.parse(JSON.stringify(store[k])) : undefined) };
+        store[k] = data[k];
+      }
+      if (Object.keys(changeInfo).length) this._fire(changeInfo, area);
+    },
+    _removeStore: function(store, keys, area) {
+      var changeInfo = {};
+      (keys || []).forEach(function(k) {
+        if (store[k] !== undefined) changeInfo[k] = { oldValue: JSON.parse(JSON.stringify(store[k])) };
+        delete store[k];
+      });
+      if (Object.keys(changeInfo).length) this._fire(changeInfo, area);
     },
     sync: { _data: {} },
     local: { _data: {} }
@@ -85,46 +112,46 @@ var chrome = {
 
       // rename-tab: применяем к storage и шлём onChanged (как делает background)
       if (msg.action === 'rename-tab') {
-        var tabs = chrome.storage._data['blattam-tabs'] || [];
+        var tabs = chrome.storage.local._data['blattam-tabs'] || [];
         if (tabs[msg.index] && (msg.name || '').trim()) {
           tabs[msg.index].name = String(msg.name).trim();
-          var oldVal = chrome.storage._data['blattam-tabs'];
-          chrome.storage._data['blattam-tabs'] = tabs;
-          chrome.storage._fire({ 'blattam-tabs': { newValue: tabs, oldValue: oldVal } }, 'sync');
+          var oldVal = JSON.parse(JSON.stringify(chrome.storage.local._data['blattam-tabs'] || []));
+          chrome.storage.local._data['blattam-tabs'] = tabs;
+          chrome.storage._fire({ 'blattam-tabs': { newValue: tabs, oldValue: oldVal } }, 'local');
         }
       }
       // move-tab: применяем spaceId/groupId (как делает background)
       if (msg.action === 'move-tab') {
-        var tabs2 = chrome.storage._data['blattam-tabs'] || [];
+        var tabs2 = chrome.storage.local._data['blattam-tabs'] || [];
         if (tabs2[msg.index]) {
           if (msg.spaceId !== undefined) { tabs2[msg.index].spaceId = msg.spaceId; tabs2[msg.index].groupId = null; }
           if (msg.groupId !== undefined) tabs2[msg.index].groupId = msg.groupId;
-          var oldVal2 = chrome.storage._data['blattam-tabs'];
-          chrome.storage._data['blattam-tabs'] = tabs2;
-          chrome.storage._fire({ 'blattam-tabs': { newValue: tabs2, oldValue: oldVal2 } }, 'sync');
+          var oldVal2 = JSON.parse(JSON.stringify(chrome.storage.local._data['blattam-tabs'] || []));
+          chrome.storage.local._data['blattam-tabs'] = tabs2;
+          chrome.storage._fire({ 'blattam-tabs': { newValue: tabs2, oldValue: oldVal2 } }, 'local');
         }
       }
       // reorder-tab: переставляем элемент в массиве (как background.js) и шлём onChanged
       if (msg.action === 'reorder-tab') {
-        var tabs3 = chrome.storage._data['blattam-tabs'] || [];
+        var tabs3 = chrome.storage.local._data['blattam-tabs'] || [];
         var from3 = Number(msg.fromIndex), to3 = Number(msg.toIndex);
         if (Number.isInteger(from3) && Number.isInteger(to3) &&
             from3 !== to3 && from3 >= 0 && from3 < tabs3.length && to3 >= 0 && to3 < tabs3.length) {
-          var oldVal3 = chrome.storage._data['blattam-tabs'];
+          var oldVal3 = JSON.parse(JSON.stringify(tabs3));
           var moved3 = tabs3.splice(from3, 1)[0];
           var shift3 = from3 < to3 ? -1 : 0;
           var at3 = (msg.side === 'before' ? to3 : to3 + 1) + shift3;
           tabs3.splice(Math.max(0, Math.min(tabs3.length, at3)), 0, moved3);
-          chrome.storage._fire({ 'blattam-tabs': { newValue: tabs3, oldValue: oldVal3 } }, 'sync');
+          chrome.storage._fire({ 'blattam-tabs': { newValue: tabs3, oldValue: oldVal3 } }, 'local');
         }
       }
       // place-tab: полный массив — перед/после якорной вкладки (null — в
       // конец списка), groupId секции слота (null — «Без группы»); как background.js
       if (msg.action === 'place-tab') {
-        var tabsP = chrome.storage._data['blattam-tabs'] || [];
+        var tabsP = chrome.storage.local._data['blattam-tabs'] || [];
         var fromP = Number(msg.index);
         if (Number.isInteger(fromP) && fromP >= 0 && fromP < tabsP.length) {
-          var oldValP = chrome.storage._data['blattam-tabs'];
+          var oldValP = JSON.parse(JSON.stringify(tabsP));
           var movedP = tabsP.splice(fromP, 1)[0];
           var atP = tabsP.length;
           if (msg.anchorIndex !== null && msg.anchorIndex !== undefined) {
@@ -136,13 +163,39 @@ var chrome = {
           }
           if (msg.groupId !== undefined) movedP.groupId = msg.groupId;
           tabsP.splice(Math.max(0, Math.min(tabsP.length, atP)), 0, movedP);
-          chrome.storage._fire({ 'blattam-tabs': { newValue: tabsP, oldValue: oldValP } }, 'sync');
+          chrome.storage._fire({ 'blattam-tabs': { newValue: tabsP, oldValue: oldValP } }, 'local');
+        }
+      }
+      // place-tabs: батч выделенных вкладок в позицию слота (как background.js)
+      if (msg.action === 'place-tabs') {
+        var tabsQ = chrome.storage.local._data['blattam-tabs'] || [];
+        var oldValQ = JSON.parse(JSON.stringify(tabsQ));
+        var urlsQ = Array.isArray(msg.urls) ? msg.urls : [];
+        var movedQ = tabsQ.filter(function(t) { return urlsQ.indexOf(t.url) !== -1; });
+        if (movedQ.length) {
+          var atQ;
+          if (msg.anchorUrl === null || msg.anchorUrl === undefined) {
+            atQ = tabsQ.length - movedQ.length;
+          } else {
+            var aQ = -1;
+            for (var iQ = 0; iQ < tabsQ.length; iQ++) if (tabsQ[iQ].url === msg.anchorUrl) { aQ = iQ; break; }
+            if (aQ === -1) return;
+            var removedBeforeQ = 0;
+            for (var jQ = 0; jQ < aQ; jQ++) if (urlsQ.indexOf(tabsQ[jQ].url) !== -1) removedBeforeQ++;
+            atQ = msg.side === 'after' ? aQ - removedBeforeQ + 1 : aQ - removedBeforeQ;
+          }
+          atQ = Math.max(0, Math.min(tabsQ.length - movedQ.length, atQ));
+          for (var kQ = 0; kQ < movedQ.length; kQ++) if (msg.groupId !== undefined) movedQ[kQ].groupId = msg.groupId;
+          var restQ = tabsQ.filter(function(t) { return urlsQ.indexOf(t.url) === -1; });
+          restQ.splice(atQ, 0, ...movedQ);
+          chrome.storage.local._data['blattam-tabs'] = restQ;
+          chrome.storage._fire({ 'blattam-tabs': { newValue: restQ, oldValue: oldValQ } }, 'local');
         }
       }
       // update-tab: имя/адрес/комментарий (как background.js): пустые имя/адрес →
       // старые значения, пустой комментарий → удалить ключ
       if (msg.action === 'update-tab') {
-        var tabsU = chrome.storage._data['blattam-tabs'] || [];
+        var tabsU = chrome.storage.local._data['blattam-tabs'] || [];
         if (tabsU[msg.index]) {
           var nU = String(msg.name == null ? '' : msg.name).trim();
           var uU = String(msg.url == null ? '' : msg.url).trim();
@@ -151,9 +204,9 @@ var chrome = {
           if (uU) tabsU[msg.index].url = uU;
           if (cU) tabsU[msg.index].comment = cU;
           else delete tabsU[msg.index].comment;
-          var oldValU = chrome.storage._data['blattam-tabs'];
-          chrome.storage._data['blattam-tabs'] = tabsU;
-          chrome.storage._fire({ 'blattam-tabs': { newValue: tabsU, oldValue: oldValU } }, 'sync');
+          var oldValU = JSON.parse(JSON.stringify(tabsU));
+          chrome.storage.local._data['blattam-tabs'] = tabsU;
+          chrome.storage._fire({ 'blattam-tabs': { newValue: tabsU, oldValue: oldValU } }, 'local');
         }
       }
       // open-one / open-many: создаёт browser-tab(s) (как background.js)
@@ -183,18 +236,20 @@ var chrome = {
           var remaining = sps2.filter(function(s) { return s.id !== msg.id; });
           var target = remaining[0] || null;
           if (!target) { target = { id: 'spmock' + (++mockSeq), name: 'Мои вкладки' }; remaining = [target]; }
-          var tabsD = chrome.storage._data['blattam-tabs'] || [];
+          var tabsD = chrome.storage.local._data['blattam-tabs'] || [];
           tabsD.forEach(function(t) { if (t && t.spaceId === msg.id) t.spaceId = target.id; });
           var gsD = chrome.storage._data['blattam-groups'] || [];
           var gsKept = gsD.filter(function(g) { return g.spaceId !== msg.id; });
           chrome.storage._data['blattam-spaces'] = remaining;
-          chrome.storage._data['blattam-tabs'] = tabsD;
+          chrome.storage.local._data['blattam-tabs'] = tabsD;
           chrome.storage._data['blattam-groups'] = gsKept;
           chrome.storage._fire({
             'blattam-spaces': { newValue: remaining, oldValue: sps2 },
-            'blattam-tabs': { newValue: tabsD, oldValue: null },
             'blattam-groups': { newValue: gsKept, oldValue: gsD }
           }, 'sync');
+          chrome.storage._fire({
+            'blattam-tabs': { newValue: tabsD, oldValue: null }
+          }, 'local');
           response = true;
         }
       }
@@ -232,14 +287,16 @@ var chrome = {
         var gs3 = chrome.storage._data['blattam-groups'];
         if (Array.isArray(gs3) && gs3.some(function(g) { return g.id === msg.id; })) {
           var gsNew = gs3.filter(function(g) { return g.id !== msg.id; });
-          var tabsG = chrome.storage._data['blattam-tabs'] || [];
+          var tabsG = chrome.storage.local._data['blattam-tabs'] || [];
           tabsG.forEach(function(t) { if (t && t.groupId === msg.id) t.groupId = null; });
           chrome.storage._data['blattam-groups'] = gsNew;
-          chrome.storage._data['blattam-tabs'] = tabsG;
+          chrome.storage.local._data['blattam-tabs'] = tabsG;
           chrome.storage._fire({
-            'blattam-groups': { newValue: gsNew, oldValue: gs3 },
-            'blattam-tabs': { newValue: tabsG, oldValue: null }
+            'blattam-groups': { newValue: gsNew, oldValue: gs3 }
           }, 'sync');
+          chrome.storage._fire({
+            'blattam-tabs': { newValue: tabsG, oldValue: null }
+          }, 'local');
           response = true;
         }
       }
@@ -251,32 +308,43 @@ var chrome = {
   }
 };
 
-// Patch chrome.storage.sync → chrome.storage._data
-Object.defineProperty(chrome.storage, 'sync', { value: { _data: chrome.storage._data } });
-chrome.storage.sync.get = function(keys, cb) { return chrome.storage.get(keys, cb); };
-chrome.storage.sync.set = function(data, cb) { return chrome.storage.set(data, cb); };
-chrome.storage.sync.remove = function(keys, cb) { return chrome.storage.remove(keys, cb); };
-
-// Patch chrome.storage.local — отдельное хранилище (ключи: 'blattam-theme' и т.п.)
+// Area-специфичные методы: sync → _data (flat), local → local._data.
+// chrome.storage.sync._data — тот же объект, что chrome.storage._data.
+chrome.storage.sync = { _data: chrome.storage._data };
+chrome.storage.sync.get = function(keys, cb) {
+  var r = {};
+  if (typeof keys === 'string') r[keys] = cloneVal(chrome.storage._data[keys]);
+  else if (Array.isArray(keys)) { for (var k of keys) r[k] = cloneVal(chrome.storage._data[k]); }
+  else Object.keys(chrome.storage._data).forEach(function(k) { r[k] = cloneVal(chrome.storage._data[k]); });
+  if (cb) cb(r);
+  return Promise.resolve(r);
+};
+chrome.storage.sync.set = function(data, cb) {
+  chrome.storage._setStore(chrome.storage._data, data, 'sync');
+  if (cb) cb();
+  return Promise.resolve();
+};
+chrome.storage.sync.remove = function(keys, cb) {
+  chrome.storage._removeStore(chrome.storage._data, Array.isArray(keys) ? keys : [keys], 'sync');
+  if (cb) cb();
+  return Promise.resolve();
+};
+// chrome.storage.local — отдельное хранилище (blattam-tabs, blattam-theme, ...)
 chrome.storage.local.get = function(keys, cb) {
-  var result = {};
-  if (typeof keys === 'string') {
-    result[keys] = this._data[keys];
-  } else if (Array.isArray(keys)) {
-    for (var k of keys) result[k] = this._data[k];
-  } else {
-    Object.assign(result, this._data);
-  }
-  if (cb) cb(result);
-  return Promise.resolve(result);
+  var r = {};
+  if (typeof keys === 'string') r[keys] = cloneVal(chrome.storage.local._data[keys]);
+  else if (Array.isArray(keys)) { for (var k of keys) r[k] = cloneVal(chrome.storage.local._data[k]); }
+  else Object.keys(chrome.storage.local._data).forEach(function(k) { r[k] = cloneVal(chrome.storage.local._data[k]); });
+  if (cb) cb(r);
+  return Promise.resolve(r);
 };
 chrome.storage.local.set = function(data, cb) {
-  var changeInfo = {};
-  for (var k in data) changeInfo[k] = { newValue: data[k], oldValue: this._data[k] };
-  Object.assign(this._data, data);
-  if (window.__storageListeners && window.__storageListeners.length) {
-    for (var fn of window.__storageListeners) fn(changeInfo, 'local');
-  }
+  chrome.storage._setStore(chrome.storage.local._data, data, 'local');
+  if (cb) cb();
+  return Promise.resolve();
+};
+chrome.storage.local.remove = function(keys, cb) {
+  chrome.storage._removeStore(chrome.storage.local._data, Array.isArray(keys) ? keys : [keys], 'local');
   if (cb) cb();
   return Promise.resolve();
 };
@@ -362,7 +430,7 @@ def load_view(pg, tabs=None, spaces=None, groups=None, folders=None,
     """about:blank + mock + данные + DOM view.html + view.js."""
     init = []
     if tabs is not None:
-        init.append("chrome.storage._data['blattam-tabs'] = " + json.dumps(tabs, ensure_ascii=False) + ";")
+        init.append("chrome.storage.local._data['blattam-tabs'] = " + json.dumps(tabs, ensure_ascii=False) + ";")
     if spaces is not None:
         init.append("chrome.storage._data['blattam-spaces'] = " + json.dumps(spaces, ensure_ascii=False) + ";")
     if groups is not None:
@@ -807,6 +875,82 @@ class TestBackgroundGroups:
 
 
 # ==========================================
+#  BACKGROUND.JS: PLACE-TABS (перенос выделенного батча)
+# ==========================================
+
+class TestBackgroundPlaceTabs:
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        page.goto("about:blank")
+        page.evaluate(MOCK_CHROME)
+        page.evaluate(load_file("background.js") + "; 'loaded'")
+
+    def _load(self, names):
+        sp = read_storage_raw(self.page, "blattam-spaces")[0]
+        self.page.evaluate(
+            "chrome.storage.local._data['blattam-tabs'] = " + json.dumps(
+                [{"name": n, "url": f"https://{n.lower()}.com", "spaceId": sp} for n in names]) + ";")
+
+    def _urls(self):
+        return [t["url"] for t in read_storage_raw(self.page, "blattam-tabs")]
+
+    def test_place_tabs_before_anchor(self):
+        # [A B C D], батч [A D] перед C → [B A D C] (порядок батча — исходный)
+        self._load(["A", "B", "C", "D"])
+        send_msg(self.page, "place-tabs",
+                 urls=["https://a.com", "https://d.com"],
+                 anchorUrl="https://c.com", side="before")
+        assert self._urls() == ["https://b.com", "https://a.com", "https://d.com", "https://c.com"]
+
+    def test_place_tabs_after_anchor(self):
+        # [A B C D], батч [A D] после C → [B C A D]
+        self._load(["A", "B", "C", "D"])
+        send_msg(self.page, "place-tabs",
+                 urls=["https://a.com", "https://d.com"],
+                 anchorUrl="https://c.com", side="after")
+        assert self._urls() == ["https://b.com", "https://c.com", "https://a.com", "https://d.com"]
+
+    def test_place_tabs_anchor_null_to_end(self):
+        # [A B C], батч [A B] в конец → [C A B]
+        self._load(["A", "B", "C"])
+        send_msg(self.page, "place-tabs",
+                 urls=["https://a.com", "https://b.com"], anchorUrl=None, side="after")
+        assert self._urls() == ["https://c.com", "https://a.com", "https://b.com"]
+
+    def test_place_tabs_sets_group_id(self):
+        sp = read_storage_raw(self.page, "blattam-spaces")[0]
+        g = call_msg(self.page, "create-group", spaceId=sp["id"], name="Dev")
+        self._load(["A", "B", "C"])
+        send_msg(self.page, "place-tabs",
+                 urls=["https://a.com", "https://b.com"],
+                 anchorUrl="https://c.com", side="before", groupId=g["id"])
+        tabs = {t["url"]: t for t in read_storage_raw(self.page, "blattam-tabs")}
+        assert tabs["https://a.com"]["groupId"] == g["id"]
+        assert tabs["https://b.com"]["groupId"] == g["id"]
+        assert tabs["https://c.com"].get("groupId") in (None, "")
+
+    def test_place_tabs_member_anchor_keeps_order(self):
+        # Якорь — член батча: [A B C], батч [A B] перед B → без изменений
+        self._load(["A", "B", "C"])
+        send_msg(self.page, "place-tabs",
+                 urls=["https://a.com", "https://b.com"],
+                 anchorUrl="https://b.com", side="before")
+        assert self._urls() == ["https://a.com", "https://b.com", "https://c.com"]
+
+    def test_place_tabs_unknown_anchor_noop(self):
+        self._load(["A", "B"])
+        send_msg(self.page, "place-tabs",
+                 urls=["https://a.com"], anchorUrl="https://nope.com", side="before")
+        assert self._urls() == ["https://a.com", "https://b.com"]
+
+    def test_place_tabs_empty_urls_noop(self):
+        self._load(["A", "B"])
+        send_msg(self.page, "place-tabs", urls=[], anchorUrl="https://b.com", side="before")
+        assert self._urls() == ["https://a.com", "https://b.com"]
+
+
+# ==========================================
 #  BACKGROUND.JS: МИГРАЦИЯ LEGACY-ПАПОК + ЧИСТКА
 # ==========================================
 
@@ -826,7 +970,7 @@ class TestBackgroundMigration:
         init = (
             "chrome.storage._data['blattam-folders'] = "
             "[{id:'f1',name:'Work',parentId:null},{id:'f2',name:'Sub',parentId:'f1'}];\n"
-            "chrome.storage._data['blattam-tabs'] = "
+            "chrome.storage.local._data['blattam-tabs'] = "
             "[{name:'W1',url:'https://w1.com',folderId:'f1'},"
             "{name:'S1',url:'https://s1.com',folderId:'f2'},"
             "{name:'L1',url:'https://l1.com',folderId:null}];"
@@ -850,7 +994,7 @@ class TestBackgroundMigration:
         init = (
             "chrome.storage._data['blattam-folders'] = "
             "[{id:'f1',name:'Work',parentId:null}];\n"
-            "chrome.storage._data['blattam-tabs'] = "
+            "chrome.storage.local._data['blattam-tabs'] = "
             "[{name:'W1',url:'https://w1.com',folderId:'f1'}];"
         )
         self._load_bg(init)
@@ -863,7 +1007,7 @@ class TestBackgroundMigration:
 
     def test_migration_tabs_with_folder_id_only(self):
         """Нет ключа blattam-folders, но у вкладок folderId — миграция всё равно работает."""
-        init = ("chrome.storage._data['blattam-tabs'] = "
+        init = ("chrome.storage.local._data['blattam-tabs'] = "
                 "[{name:'W1',url:'https://w1.com',folderId:'ghost'}];")
         self._load_bg(init)
         sps = read_storage_raw(self.page, "blattam-spaces")
@@ -875,6 +1019,112 @@ class TestBackgroundMigration:
         """Оставшийся blattam-screenshots (local) вычищается при загрузке."""
         self._load_bg("chrome.storage.local._data['blattam-screenshots'] = 'data:image/png;base64,xyz';")
         assert read_local(self.page, "blattam-screenshots") is None
+
+
+# ==========================================
+#  BACKGROUND.JS: МИГРАЦИЯ ВКЛАДОК sync → local (Stage 1)
+# ==========================================
+
+class TestTabsLocalMigration:
+    """blattam-tabs живёт в chrome.storage.local; при загрузке ключ из sync
+    копируется в local и удаляется из sync (идемпотентно, детерминированно)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    def _load_bg(self, init_js=""):
+        pg = self.page
+        pg.goto("about:blank")
+        pg.evaluate(MOCK_CHROME + init_js)
+        pg.evaluate(load_file("background.js") + "; 'loaded'")
+
+    def _sync_has_tabs(self):
+        return self.page.evaluate("'blattam-tabs' in chrome.storage._data") is True
+
+    def test_migration_sync_to_local(self):
+        """(a) sync заполнен, local пуст → вкладки читаются из local, sync-ключ удалён."""
+        tabs = [{"name": "A", "url": "https://a.com"}, {"name": "B", "url": "https://b.com"}]
+        init = "chrome.storage._data['blattam-tabs'] = " + json.dumps(tabs, ensure_ascii=False) + ";"
+        self._load_bg(init)
+        assert read_local(self.page, "blattam-tabs") == tabs
+        assert not self._sync_has_tabs()
+
+    def test_migration_idempotent(self):
+        """(b) повторная загрузка ничего не меняет (local остаётся, sync уже пуст)."""
+        tabs = [{"name": "A", "url": "https://a.com"}]
+        init = "chrome.storage._data['blattam-tabs'] = " + json.dumps(tabs, ensure_ascii=False) + ";"
+        self._load_bg(init)
+        first = read_local(self.page, "blattam-tabs")
+        spaces_first = read_storage_raw(self.page, "blattam-spaces")
+        self.page.evaluate(load_file("background.js") + "; 'reloaded'")
+        assert read_local(self.page, "blattam-tabs") == first
+        assert [s["id"] for s in read_storage_raw(self.page, "blattam-spaces")] == \
+               [s["id"] for s in spaces_first]
+        assert not self._sync_has_tabs()
+
+    def test_save_and_crud_use_local(self):
+        """(c) обычный save/CRUD пишет в local и читает из local (sync не трогается)."""
+        self._load_bg("")
+        send_msg(self.page, "add-tab", name="New", url="https://new.com")
+        tabs = read_local(self.page, "blattam-tabs")
+        assert len(tabs) == 1 and tabs[0]["name"] == "New"
+        assert not self._sync_has_tabs()
+        send_msg(self.page, "rename-tab", index=0, name="Renamed")
+        assert read_local(self.page, "blattam-tabs")[0]["name"] == "Renamed"
+        send_msg(self.page, "delete", index=0)
+        assert read_local(self.page, "blattam-tabs") == []
+        assert not self._sync_has_tabs()
+
+    def test_local_wins_stale_sync_removed(self):
+        """(d) local уже заполнен + stale sync-ключ → sync удалён, local не тронут."""
+        local_tabs = [{"name": "L", "url": "https://l.com"}]
+        sync_tabs = [{"name": "S", "url": "https://s.com"}]
+        init = (
+            "chrome.storage.local._data['blattam-tabs'] = " + json.dumps(local_tabs, ensure_ascii=False) + ";"
+            "chrome.storage._data['blattam-tabs'] = " + json.dumps(sync_tabs, ensure_ascii=False) + ";"
+        )
+        self._load_bg(init)
+        assert read_local(self.page, "blattam-tabs") == local_tabs
+        assert not self._sync_has_tabs()
+
+
+# ==========================================
+#  VIEW.JS: МИГРАЦИЯ ВКЛАДОК sync → local (Stage 1)
+# ==========================================
+
+class TestViewTabsLocalMigration:
+    """view.js: миграция blattam-tabs sync → local выполняется ДО первого
+    рендера (без мигания) — вкладки читаются из local, sync-ключ удалён."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    def _load_view_sync_seeded(self, tabs, spaces):
+        """about:blank + mock + данные в СТАРОМ sync + DOM + view.js."""
+        pg = self.page
+        pg.goto("about:blank")
+        pg.evaluate(MOCK_CHROME)
+        pg.evaluate(
+            "chrome.storage._data['blattam-tabs'] = " + json.dumps(tabs, ensure_ascii=False) + ";"
+            "chrome.storage._data['blattam-spaces'] = " + json.dumps(spaces, ensure_ascii=False) + ";")
+        pg.evaluate("document.body.innerHTML = " + json.dumps(VIEW_DOM))
+        pg.evaluate(load_file("view.js") + "; 'loaded'")
+        pg.wait_for_timeout(40)
+
+    def test_view_migration_renders_from_local(self):
+        tabs = [
+            {"name": "A", "url": "https://a.com", "spaceId": "sp1"},
+            {"name": "B", "url": "https://b.com", "spaceId": "sp1"},
+        ]
+        spaces = [{"id": "sp1", "name": "Main"}]
+        self._load_view_sync_seeded(tabs, spaces)
+        # Рендер из local после миграции
+        assert self.page.evaluate("document.querySelectorAll('.tab-card').length") == 2
+        # Вкладки в local, sync-ключ удалён
+        assert read_local(self.page, "blattam-tabs") == tabs
+        assert self.page.evaluate("'blattam-tabs' in chrome.storage._data") is False
 
 
 # ==========================================
@@ -1213,8 +1463,10 @@ class TestViewGroups:
             {"name": "D1", "url": "https://d1.com", "spaceId": "sp1", "groupId": "g1"},
             {"name": "L", "url": "https://l.com", "spaceId": "sp1"},
         ])
-        lbl = self.page.evaluate("document.querySelector('.loose-label') && document.querySelector('.loose-label').textContent")
+        lbl = self.page.evaluate("document.querySelector('.loose-label .loose-name') && document.querySelector('.loose-label .loose-name').textContent")
         assert lbl == "Без группы"
+        # ☑-кнопка стоит в той же строке (выбор всех негрупповых вкладок)
+        assert self.page.evaluate("document.querySelector('.loose-label .loose-select') !== null")
 
     def test_delete_group(self):
         load_view(self.page, confirm=True, spaces=self.SP, groups=[
@@ -1361,6 +1613,469 @@ class TestGroupBarDrop:
         assert state == {"over": True, "left": True}
         # Dragover не трогает состояние сворачивания группы
         assert read_storage_raw(self.page, "blattam-groups")[0]["collapsed"] is False
+
+    def test_click_right_after_drop_does_not_toggle_collapsed_group(self):
+        # Свернутая группа: клик по шапке сразу ПОСЛЕ дропа (некоторые
+        # браузеры генерируют клик после drop) группу НЕ раскрывает;
+        # вкладка уезжает в группу (счётчик «1 вкладка»)
+        load_view(self.page, spaces=[{"id": "sp1", "name": "Main"}], groups=[
+            {"id": "g1", "name": "Dev", "spaceId": "sp1", "collapsed": True},
+        ], tabs=[{"name": "T", "url": "https://t.com", "spaceId": "sp1"}])
+        self._drag_drop_to_gbar(0)
+        self.page.wait_for_timeout(30)
+        self.page.evaluate("document.querySelector('.gbar').click()")
+        self.page.wait_for_timeout(30)
+        assert read_storage_raw(self.page, "blattam-tabs")[0]["groupId"] == "g1"
+        assert read_storage_raw(self.page, "blattam-groups")[0]["collapsed"] is True
+        count = self.page.evaluate("document.querySelector('.gbar .gcount').textContent")
+        assert count == "1 вкладка"
+
+    def test_plain_click_on_bar_still_toggles(self):
+        # Без драга: клик по шапке как раньше сворачивает/разворачивает
+        load_view(self.page, spaces=[{"id": "sp1", "name": "Main"}], groups=[
+            {"id": "g1", "name": "Dev", "spaceId": "sp1", "collapsed": False},
+        ], tabs=[{"name": "T", "url": "https://t.com", "spaceId": "sp1", "groupId": "g1"}])
+        self.page.evaluate("document.querySelector('.gbar').click()")
+        self.page.wait_for_timeout(30)
+        assert read_storage_raw(self.page, "blattam-groups")[0]["collapsed"] is True
+        self.page.evaluate("document.querySelector('.gbar').click()")
+        self.page.wait_for_timeout(30)
+        assert read_storage_raw(self.page, "blattam-groups")[0]["collapsed"] is False
+
+    def test_reorder_drop_then_click_target_bar_no_toggle(self):
+        # Шапку перетащили на другую, затем клик по целевой шапке
+        # (пост-дроп-клик) — целевая группа не сворачивается
+        load_view(self.page, spaces=[{"id": "sp1", "name": "Main"}], groups=[
+            {"id": "g1", "name": "Dev", "spaceId": "sp1", "collapsed": False},
+            {"id": "g2", "name": "Work", "spaceId": "sp1", "collapsed": False},
+        ], tabs=[
+            {"name": "A", "url": "https://a.com", "spaceId": "sp1", "groupId": "g1"},
+            {"name": "B", "url": "https://b.com", "spaceId": "sp1", "groupId": "g2"},
+        ])
+        self.page.evaluate("""() => {
+          const bars = [...document.querySelectorAll('.gbar')];
+          const src = bars.find(b => b.dataset.groupId === 'g1');
+          const dst = bars.find(b => b.dataset.groupId === 'g2');
+          const dt = new DataTransfer();
+          src.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true}));
+          dst.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true, clientY: 0}));
+          dst.dispatchEvent(new DragEvent('drop', {dataTransfer: dt, bubbles: true, cancelable: true, clientY: 0}));
+          src.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        }""")
+        self.page.wait_for_timeout(30)
+        self.page.evaluate("document.querySelector('.gbar[data-group-id=\"g2\"]').click()")
+        self.page.wait_for_timeout(30)
+        groups = {g["id"]: g for g in read_storage_raw(self.page, "blattam-groups")}
+        assert groups["g1"]["collapsed"] is False and groups["g2"]["collapsed"] is False
+
+
+# ==========================================
+#  VIEW.JS: ЛОЖНЫЙ КЛИК ПО ШАПКЕ ПОСЛЕ ДРОПА (медленная перерисовка)
+# ==========================================
+
+class TestPostDropClickSlowRender:
+    """Пользователь: 3 группы, первая раскрыта. Карточку из g1 перетаскивают
+    в СВЁРНУТУЮ g2 (g3 при этом раскрыта → много видимых карточек →
+    renderTabs блокирует поток >500ms). Браузерный post-drop клик по шапке
+    g2 приходит ПОСЛЕ перерисовки — за 500ms-окном lastDragEndAt — и без
+    one-shot-флага раскрывает g2."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    def _drag_card_to_g2(self, src_idx=0):
+        self.page.evaluate("""(idx) => {
+          const card = document.querySelectorAll('.tab-card')[idx];
+          const bar = document.querySelector('.gbar[data-group-id="g2"]');
+          const dt = new DataTransfer();
+          card.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true}));
+          bar.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true}));
+          bar.dispatchEvent(new DragEvent('drop', {dataTransfer: dt, bubbles: true, cancelable: true}));
+          card.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        }""", src_idx)
+
+    def _load_three_groups(self):
+        load_view(self.page, spaces=[{"id": "sp1", "name": "Main"}], groups=[
+            {"id": "g1", "name": "Dev", "spaceId": "sp1", "collapsed": False},
+            {"id": "g2", "name": "Work", "spaceId": "sp1", "collapsed": True},
+            {"id": "g3", "name": "More", "spaceId": "sp1", "collapsed": False},
+        ], tabs=[
+            {"name": "A", "url": "https://a.com", "spaceId": "sp1", "groupId": "g1"},
+            {"name": "B", "url": "https://b.com", "spaceId": "sp1", "groupId": "g3"},
+        ])
+
+    def test_slow_postdrop_click_does_not_open_collapsed_target(self):
+        # Ложный post-drop клик (без mousedown) приходит >500ms после
+        # dragend — за окном временной защиты: g2 остаётся свёрнутой,
+        # а вкладка в ней (groupId = g2)
+        self._load_three_groups()
+        self._drag_card_to_g2(0)
+        self.page.wait_for_timeout(600)
+        self.page.evaluate("document.querySelector('.gbar[data-group-id=\\\"g2\\\"]').click()")
+        self.page.wait_for_timeout(30)
+        tabs = read_storage_raw(self.page, "blattam-tabs")
+        assert [t for t in tabs if t["url"] == "https://a.com"][0]["groupId"] == "g2"
+        groups = {g["id"]: g for g in read_storage_raw(self.page, "blattam-groups")}
+        assert groups["g2"]["collapsed"] is True
+        # g1 auto-collapse: drop moved its last tab out (g3 keeps its member)
+        assert groups["g1"]["collapsed"] is True and groups["g3"]["collapsed"] is False
+
+    def test_plain_click_without_drag_still_toggles(self):
+        # Регрессия: без предшествующего драга клик по шапке сворачивает/
+        # раскрывает как раньше
+        self._load_three_groups()
+        self.page.evaluate("document.querySelector('.gbar[data-group-id=\\\"g1\\\"]').click()")
+        self.page.wait_for_timeout(30)
+        groups = {g["id"]: g for g in read_storage_raw(self.page, "blattam-groups")}
+        assert groups["g1"]["collapsed"] is True
+        self.page.evaluate("document.querySelector('.gbar[data-group-id=\\\"g1\\\"]').click()")
+        self.page.wait_for_timeout(30)
+        groups = {g["id"]: g for g in read_storage_raw(self.page, "blattam-groups")}
+        assert groups["g1"]["collapsed"] is False
+
+    def test_real_user_click_after_drop_still_toggles(self):
+        # Реальное нажатие ПОЛЬЗОВАТЕЛЯ после дропа (mousedown + click,
+        # Playwright-клик) не глотается: mousedown сбрасывает one-shot флаг
+        # раньше клика, g2 раскрывается ровно один раз
+        self._load_three_groups()
+        self._drag_card_to_g2(0)
+        self.page.wait_for_timeout(600)
+        self.page.locator('.gbar[data-group-id="g2"]').click()
+        self.page.wait_for_timeout(30)
+        groups = {g["id"]: g for g in read_storage_raw(self.page, "blattam-groups")}
+        assert groups["g2"]["collapsed"] is False
+        # флаг гасится одноразово — второй клик сворачивает обратно
+        self.page.locator('.gbar[data-group-id="g2"]').click()
+        self.page.wait_for_timeout(30)
+        groups = {g["id"]: g for g in read_storage_raw(self.page, "blattam-groups")}
+        assert groups["g2"]["collapsed"] is True
+
+
+class TestPostDropClickBeforeDragend:
+    """Реальный Chrome генерирует ложный клик на drop-цели в момент дропа —
+    ДО dragend источника (замер: drop → click → dragend). Флаг, поставленный
+    только на dragend, его не ловит: свёрнутая целевая группа раскрывалась.
+    Плюс: тёплая заглушка (ghost-slot) не должна оставаться в сетке после
+    дропа на шапке группы и не должна «воскресать» для отсоединённой карточки."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    def _load_seeded(self):
+        load_view(self.page, spaces=[{"id": "sp1", "name": "Main"}], groups=[
+            {"id": "g1", "name": "Work", "spaceId": "sp1", "collapsed": True},
+            {"id": "g2", "name": "Dev", "spaceId": "sp1", "collapsed": False},
+        ], tabs=[
+            {"name": "A", "url": "https://a.com", "spaceId": "sp1", "groupId": "g1"},
+            {"name": "B", "url": "https://b.com", "spaceId": "sp1", "groupId": "g1"},
+            {"name": "C", "url": "https://c.com", "spaceId": "sp1", "groupId": "g1"},
+            {"name": "S", "url": "https://s.com", "spaceId": "sp1", "groupId": "g2"},
+        ])
+
+    def test_spurious_click_at_drop_time_does_not_open_collapsed_target(self):
+        # Ложный клик приходит в момент дропа — ДО dragend источника: группа
+        # остаётся свёрнутой, а вкладка в неё переезжает
+        self._load_seeded()
+        self.page.evaluate("""(() => {
+          const card = document.querySelector('.tab-card');
+          const bar = document.querySelector('.gbar[data-group-id="g1"]');
+          const dt = new DataTransfer();
+          card.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true}));
+          bar.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true}));
+          bar.dispatchEvent(new DragEvent('drop', {dataTransfer: dt, bubbles: true, cancelable: true}));
+          // Ложный клик браузера: по (уже перерисованной) шапке, без mousedown
+          document.querySelector('.gbar[data-group-id="g1"]').click();
+          // И только потом — dragend источника
+          card.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        })()""")
+        self.page.wait_for_timeout(30)
+        groups = {g["id"]: g for g in read_storage_raw(self.page, "blattam-groups")}
+        assert groups["g1"]["collapsed"] is True
+        # g2 auto-collapse: drop moved its only tab into g1
+        assert groups["g2"]["collapsed"] is True
+        tabs = read_storage_raw(self.page, "blattam-tabs")
+        assert [t for t in tabs if t["url"] == "https://s.com"][0]["groupId"] == "g1"
+        rendered = self.page.evaluate("""(() => {
+          let cur = document.querySelector('.gbar[data-group-id="g1"]').nextElementSibling, n = 0;
+          while (cur && !cur.classList.contains('gbar') && !cur.classList.contains('add-group-row')) {
+            if (cur.classList.contains('tab-card')) n++;
+            cur = cur.nextElementSibling;
+          }
+          return n;
+        })()""")
+        assert rendered == 0
+
+    def test_spurious_click_after_slow_render_before_dragend(self):
+        # Ложный клик приходит ПОСЛЕ медленной перерисовки (свежий элемент
+        # шапки), но всё ещё до dragend источника — one-shot флаг должен
+        # пережить перерисовку
+        self._load_seeded()
+        self.page.evaluate("""(() => {
+          const card = document.querySelector('.tab-card');
+          const bar = document.querySelector('.gbar[data-group-id="g1"]');
+          const dt = new DataTransfer();
+          card.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true}));
+          bar.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true}));
+          bar.dispatchEvent(new DragEvent('drop', {dataTransfer: dt, bubbles: true, cancelable: true}));
+        })()""")
+        self.page.wait_for_timeout(600)  # за 500ms-окном lastDragEndAt
+        self.page.evaluate("document.querySelector('.gbar[data-group-id=g1]').click()")
+        self.page.evaluate("""(() => {
+          const cards = document.querySelectorAll('.tab-card');
+          if (cards.length) cards[cards.length - 1].dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        })()""")
+        self.page.wait_for_timeout(30)
+        groups = {g["id"]: g for g in read_storage_raw(self.page, "blattam-groups")}
+        assert groups["g1"]["collapsed"] is True
+        tabs = read_storage_raw(self.page, "blattam-tabs")
+        assert [t for t in tabs if t["url"] == "https://s.com"][0]["groupId"] == "g1"
+
+    def test_real_click_after_suppressed_spurious_click_still_toggles(self):
+        # Регрессия: реальное нажатие ПОЛЬЗОВАТЕЛЯ после ложного клика
+        # (mousedown сбрасывает one-shot флаг раньше клика) сворачивает группу
+        self._load_seeded()
+        self.page.evaluate("""(() => {
+          const card = document.querySelector('.tab-card');
+          const bar = document.querySelector('.gbar[data-group-id="g1"]');
+          const dt = new DataTransfer();
+          card.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true}));
+          bar.dispatchEvent(new DragEvent('drop', {dataTransfer: dt, bubbles: true, cancelable: true}));
+          document.querySelector('.gbar[data-group-id="g1"]').click(); // ложный
+          card.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        })()""")
+        self.page.wait_for_timeout(600)  # за 500ms-окном lastDragEndAt
+        self.page.locator('.gbar[data-group-id="g1"]').click()  # реальное нажатие
+        self.page.wait_for_timeout(30)
+        groups = {g["id"]: g for g in read_storage_raw(self.page, "blattam-groups")}
+        assert groups["g1"]["collapsed"] is False
+
+    def test_ghost_slot_not_created_for_detached_source_card(self):
+        # Перерисовка во время драга уносит исходную карточку из DOM: отложенная
+        # заглушка для отсоединённой карточки не вставляется (и не «воскресает»
+        # при следующем драге — там появится свежая заглушка)
+        load_view(self.page, spaces=[{"id": "sp1", "name": "Main"}], groups=[
+            {"id": "g1", "name": "Dev", "spaceId": "sp1", "collapsed": False},
+        ], tabs=[
+            {"name": "T1", "url": "https://t1.com", "spaceId": "sp1", "groupId": "g1"},
+            {"name": "T2", "url": "https://t2.com", "spaceId": "sp1", "groupId": "g1"},
+        ])
+        self.page.evaluate("""(() => {
+          const card = document.querySelector('.tab-card');
+          const dt = new DataTransfer();
+          card.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true}));
+          card.remove(); // перерисовка унесла карточку ДО отложенного создания заглушки
+          return 'ok';
+        })()""")
+        self.page.wait_for_timeout(20)
+        assert self.page.evaluate("document.querySelector('.tab-ghost-slot')") is None
+        # Следующий драг: заглушка появляется заново, под живой карточкой
+        self.page.evaluate("""(() => {
+          const c = document.querySelector('.tab-card');
+          const dt = new DataTransfer();
+          c.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true}));
+        })()""")
+        self.page.wait_for_timeout(20)
+        assert self.page.evaluate("!!document.querySelector('.tab-ghost-slot')") is True
+        self.page.evaluate("(() => { const c = document.querySelector('.tab-card:not(.dragging)') || document.querySelector('.tab-card'); if (c) c.dispatchEvent(new DragEvent('dragend', {bubbles: true})); })()")
+
+    def test_ghost_slot_removed_by_gbar_drop_of_moving_card(self):
+        # Дроп карточки на шапку свёрнутой группы (карточка уезжает): тёплая
+        # заглушка уходит из сетки, не дожидаясь dragend
+        self._load_seeded()
+        self.page.evaluate("""(() => {
+          const card = document.querySelector('.tab-card');
+          const bar = document.querySelector('.gbar[data-group-id="g1"]');
+          const dt = new DataTransfer();
+          card.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true}));
+        })()""")
+        self.page.wait_for_timeout(20)  # отложенная заглушка уже создана
+        assert self.page.evaluate("!!document.querySelector('.tab-ghost-slot')") is True
+        self.page.evaluate("""(() => {
+          const card = document.querySelector('.tab-card');
+          const bar = document.querySelector('.gbar[data-group-id="g1"]');
+          const dt = new DataTransfer();
+          bar.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true}));
+          bar.dispatchEvent(new DragEvent('drop', {dataTransfer: dt, bubbles: true, cancelable: true}));
+        })()""")
+        self.page.wait_for_timeout(20)
+        assert self.page.evaluate("document.querySelector('.tab-ghost-slot')") is None
+
+
+# ==========================================
+#  VIEW.JS: ПЕРЕНОС ВЫДЕЛЕННОГО БАТЧА (drag одного — уезжают все выделенные)
+# ==========================================
+
+class TestSelectedBatchDnD:
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    SP = [{"id": "sp1", "name": "Main"}]
+    TABS4 = [
+        {"name": "A", "url": "https://a.com", "spaceId": "sp1"},
+        {"name": "B", "url": "https://b.com", "spaceId": "sp1"},
+        {"name": "C", "url": "https://c.com", "spaceId": "sp1"},
+        {"name": "D", "url": "https://d.com", "spaceId": "sp1"},
+    ]
+
+    def _select(self, idxs):
+        self.page.evaluate("""(idxs) => {
+          for (const i of idxs) document.querySelectorAll('.tab-card .tab-select')[i].click();
+        }""", idxs)
+
+    def _drag_start(self, idx):
+        self.page.evaluate("""(idx) => {
+          const card = document.querySelectorAll('.tab-card')[idx];
+          const dt = new DataTransfer();
+          card.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true}));
+          window.__batchDt = dt;
+        }""", idx)
+
+    def _drop_before_card(self, idx):
+        # drop на #tabs-list в левом краю строки карточки idx (anchor — «before» неё)
+        self.page.evaluate("""(idx) => {
+          const target = document.querySelectorAll('.tab-card')[idx];
+          const r = target.getBoundingClientRect();
+          document.getElementById('tabs-list').dispatchEvent(new DragEvent('drop', {
+            dataTransfer: window.__batchDt, bubbles: true, cancelable: true,
+            clientX: r.left + 4, clientY: r.top + r.height / 2
+          }));
+        }""", idx)
+
+    def _drag_end(self, idx):
+        self.page.evaluate("""(idx) => {
+          const card = document.querySelectorAll('.tab-card')[idx];
+          if (card) card.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        }""", idx)
+
+    def test_drag_selected_hides_only_dragged_one_slot(self):
+        # Рендер батча «как одна вкладка»: скрыта ТОЛЬКО перетаскиваемая карточка,
+        # остальные выделенные видны, заглушка — одна (клон-призрака нет)
+        load_view(self.page, spaces=self.SP, tabs=self.TABS4)
+        self._select([0, 3])
+        self._drag_start(3)
+        self.page.wait_for_timeout(50)  # отложенное скрытие + ghost-slot
+        d = json.loads(self.page.evaluate("""(() => {
+          const cards = [...document.querySelectorAll('.tab-card')];
+          return JSON.stringify({
+            hidden: cards.filter(c => c.style.display === 'none').length,
+            visible: cards.filter(c => c.style.display !== 'none').length,
+            slots: document.querySelectorAll('.tab-ghost-slot').length,
+            clones: document.querySelectorAll('.tab-ghost').length,
+            dragging: cards.filter(c => c.classList.contains('dragging')).length
+          });
+        })()"""))
+        assert d == {"hidden": 1, "visible": 3, "slots": 1, "clones": 0, "dragging": 1}, d
+        self._drag_end(3)
+        # Без следа: карточка возвращена, заглушка убрана
+        assert self.page.evaluate("document.querySelectorAll('.tab-card').length") == 4
+        assert self.page.evaluate("document.querySelectorAll('.tab-ghost-slot').length") == 0
+
+    def test_drop_selected_batch_moves_all_in_original_order(self):
+        # Выделены A и D; перетаскиваем D «перед B» → батч [A D] уезжает блоком:
+        # [A B C D] → [A D B C]; сообщение — place-tabs с исходным порядком батча
+        load_view(self.page, spaces=self.SP, tabs=self.TABS4)
+        self._select([0, 3])
+        self._drag_start(3)
+        self.page.wait_for_timeout(50)
+        self._drop_before_card(1)  # B
+        self.page.wait_for_timeout(30)
+        msg = json.loads(self.page.evaluate("JSON.stringify(window.lastMessage)"))
+        assert msg["action"] == "place-tabs"
+        assert msg["urls"] == ["https://a.com", "https://d.com"]  # исходный порядок
+        assert msg["anchorUrl"] == "https://b.com" and msg["side"] == "before"
+        assert msg["groupId"] is None
+        tabs = read_storage_raw(self.page, "blattam-tabs")
+        assert [t["url"] for t in tabs] == [
+            "https://a.com", "https://d.com", "https://b.com", "https://c.com"]
+        # Перерисовка: порядок карточек совпадает, выбор (по URL) пережил её
+        names = json.loads(self.page.evaluate(
+            "JSON.stringify([...document.querySelectorAll('.tab-card .tab-name')].map(e => e.textContent))"))
+        assert names == ["A", "D", "B", "C"]
+        assert self.page.evaluate("document.querySelectorAll('.tab-card.selected').length") == 2
+        self._drag_end(3)
+
+    def test_drop_batch_no_change_is_noop(self):
+        # Выделены A и B; перетаскиваем A «перед B» (якорь — член батча):
+        # порядок и группы не меняются → ни place-tab, ни place-tabs не шлется
+        load_view(self.page, spaces=self.SP, tabs=self.TABS4)
+        self._select([0, 1])
+        self._drag_start(0)
+        self.page.wait_for_timeout(50)
+        self._drop_before_card(1)  # B
+        self.page.wait_for_timeout(30)
+        actions = json.loads(self.page.evaluate(
+            "JSON.stringify(chrome.runtime.messagesSent.map(m => m.action))"))
+        assert "place-tab" not in actions and "place-tabs" not in actions, actions
+        assert [t["url"] for t in read_storage_raw(self.page, "blattam-tabs")] == [
+            t["url"] for t in self.TABS4]
+        self._drag_end(0)
+
+    def test_drag_unselected_moves_single_tab(self):
+        # Выделена только C; перетаскиваем её «перед A» — обычный place-tab
+        load_view(self.page, spaces=self.SP, tabs=self.TABS4)
+        self._select([2])
+        self._drag_start(2)
+        self.page.wait_for_timeout(50)
+        self._drop_before_card(0)  # A
+        self.page.wait_for_timeout(30)
+        msg = json.loads(self.page.evaluate("JSON.stringify(window.lastMessage)"))
+        assert msg["action"] == "place-tab" and msg["anchorIndex"] == 0 and msg["side"] == "before"
+        assert [t["url"] for t in read_storage_raw(self.page, "blattam-tabs")] == [
+            "https://c.com", "https://a.com", "https://b.com", "https://d.com"]
+        self._drag_end(0)
+
+    def test_chip_drop_moves_whole_batch(self):
+        # Выделены A и C; дроп на чип другого пространства → move-tab для ОБЕИХ,
+        # группы очищаются; невыделенная B остаётся
+        load_view(self.page, spaces=[{"id": "sp1", "name": "Main"}, {"id": "sp2", "name": "Work"}],
+                  tabs=self.TABS4)
+        self._select([0, 2])
+        self._drag_start(0)
+        self.page.wait_for_timeout(50)
+        self.page.evaluate("""() => {
+          const chip = document.querySelector('.space-chip[data-space-id="sp2"]');
+          chip.dispatchEvent(new DragEvent('drop', {dataTransfer: window.__batchDt, bubbles: true, cancelable: true}));
+        }""")
+        self.page.wait_for_timeout(30)
+        moves = json.loads(self.page.evaluate(
+            "JSON.stringify(chrome.runtime.messagesSent.filter(m => m.action === 'move-tab'))"))
+        assert len(moves) == 2, moves
+        tabs = read_storage_raw(self.page, "blattam-tabs")
+        by_url = {t["url"]: t for t in tabs}
+        assert by_url["https://a.com"]["spaceId"] == "sp2"
+        assert by_url["https://c.com"]["spaceId"] == "sp2"
+        assert by_url["https://b.com"]["spaceId"] == "sp1"
+        self._drag_end(0)
+
+    def test_drop_on_empty_group_slot_moves_batch(self):
+        # Выделены A и B (без группы); дроп на слот пустой группы → place-tabs
+        # целиком в группу (anchorUrl null, в конец списка); счётчик «2 вкладки»
+        load_view(self.page, spaces=self.SP, groups=[
+            {"id": "g1", "name": "Dev", "spaceId": "sp1", "collapsed": False},
+        ], tabs=[
+            {"name": "A", "url": "https://a.com", "spaceId": "sp1"},
+            {"name": "B", "url": "https://b.com", "spaceId": "sp1"},
+        ])
+        self._select([0, 1])
+        self._drag_start(0)
+        self.page.wait_for_timeout(50)
+        self.page.evaluate("""() => {
+          const slot = document.querySelector('.group-empty-slot');
+          slot.dispatchEvent(new DragEvent('drop', {dataTransfer: window.__batchDt, bubbles: true, cancelable: true}));
+        }""")
+        self.page.wait_for_timeout(30)
+        msg = json.loads(self.page.evaluate("JSON.stringify(window.lastMessage)"))
+        assert msg["action"] == "place-tabs"
+        assert msg["urls"] == ["https://a.com", "https://b.com"]
+        assert msg["anchorUrl"] is None and msg["groupId"] == "g1"
+        tabs = read_storage_raw(self.page, "blattam-tabs")
+        assert all(t["groupId"] == "g1" for t in tabs)
+        count = self.page.evaluate("document.querySelector('.gbar .gcount').textContent")
+        assert count == "2 вкладки"
+        self._drag_end(0)
 
 
 # ==========================================
@@ -2075,13 +2790,15 @@ class TestReorderDnD:
             {"name": "B", "url": "https://b.com"},
             {"name": "C", "url": "https://c.com"},
         ])
-        self.page.evaluate("document.getElementById('select-btn').click()")
+        # Выделена только B (не весь батч) — C уезжает одна, выбор и
+        # active-карточка переживают перестановку
+        self.page.evaluate("document.querySelectorAll('.tab-card .tab-select')[1].click()")
         self.page.evaluate("document.dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowDown', bubbles: true, cancelable: true}))")
         self._drag_drop_card(2, 0, 'before')  # C → перед A
         assert self._tab_names() == ["C", "A", "B"]
         checked = self.page.evaluate("document.querySelectorAll('.tab-select:checked').length")
         bar_hidden = self.page.evaluate("document.getElementById('selection-bar').classList.contains('hidden')")
-        assert checked == 3 and not bar_hidden
+        assert checked == 1 and not bar_hidden
         active = json.loads(self.page.evaluate(
             "JSON.stringify([...document.querySelectorAll('.tab-card.kbd-active .tab-name')].map(e => e.textContent))"))
         assert active == ["A"]
@@ -2271,7 +2988,8 @@ class TestTobyDnD:
           const l = document.querySelector('.tab-gap-line');
           const order = [...document.getElementById('tabs-list').children].map(c =>
             c.classList.contains('tab-card') ? 'card' :
-            c.classList.contains('tab-ghost-slot') ? 'slot' : 'other');
+            c.classList.contains('tab-ghost-slot') ? 'slot' :
+            c.classList.contains('tab-row-keeper') ? 'keeper' : 'other');
           return JSON.stringify({
             line: !!l && l.style.display !== 'none',
             order: order
@@ -2279,7 +2997,7 @@ class TestTobyDnD:
         })()""")
         s = json.loads(out)
         assert s["line"] is False  # линии нет вообще
-        assert s["order"] == ["card", "card", "slot", "card", "other"]  # A, B, [заглушка], C
+        assert s["order"] == ["card", "card", "slot", "card", "other"]  # A (скрыта), B, [заглушка до C], C — без keeper: ghost в секции
         self._end_drag()
 
     def test_drop_into_gap(self):
@@ -2342,12 +3060,13 @@ class TestTobyDnD:
           const l = document.querySelector('.tab-gap-line');
           const order = [...document.getElementById('tabs-list').children].map(c =>
             c.classList.contains('tab-card') ? 'card' :
-            c.classList.contains('tab-ghost-slot') ? 'slot' : 'other');
+            c.classList.contains('tab-ghost-slot') ? 'slot' :
+            c.classList.contains('tab-row-keeper') ? 'keeper' : 'other');
           return JSON.stringify({line: !!l && l.style.display !== 'none', order: order});
         })()""")
         s = json.loads(slot)
         assert s["line"] is False
-        assert s["order"] == ["card", "card", "card", "slot", "card", "other"]
+        assert s["order"] == ["card", "card", "card", "slot", "card", "other"]  # без keeper: ghost в той же (loose) секции
         self._drop(r["left"] + r["width"] * 0.4, r["top"] + r["height"] * 0.5)
         self._end_drag()
         # A встаёт после всех карточек первого ряда (B, C) — перед D
@@ -2471,11 +3190,12 @@ class TestTabGhostSlot:
         }""", i)
 
     def _slot_order(self):
-        """Порядок детей #tabs-list: 'card' / 'slot' / 'other' (gbar, кнопка)."""
+        """Порядок детей #tabs-list: 'card' / 'slot' / 'keeper' / 'other' (gbar, кнопка)."""
         return json.loads(self.page.evaluate("""(() => JSON.stringify(
           [...document.getElementById('tabs-list').children].map(c =>
             c.classList.contains('tab-card') ? 'card' :
-            c.classList.contains('tab-ghost-slot') ? 'slot' : 'other')))()"""))
+            c.classList.contains('tab-ghost-slot') ? 'slot' :
+            c.classList.contains('tab-row-keeper') ? 'keeper' : 'other')))()"""))
 
     def test_placeholder_appears_at_source_slot_with_card_size(self):
         load_view(self.page, tabs=self.TABS3)
@@ -2521,10 +3241,10 @@ class TestTabGhostSlot:
         self._start_drag()  # A: [card, slot, card, card, other]
         c = self._card_rect(2)
         self._hover(c["left"] + c["width"] * 0.25, c["top"] + c["height"] * 0.25)  # зазор перед C
-        assert self._slot_order() == ["card", "card", "slot", "card", "other"]
+        assert self._slot_order() == ["card", "card", "slot", "card", "other"]  # без keeper: ghost в секции
         c = self._card_rect(2)
         self._hover(c["left"] + c["width"] * 0.75, c["top"] + c["height"] * 0.75)  # зазор после C
-        assert self._slot_order() == ["card", "card", "card", "slot", "other"]
+        assert self._slot_order() == ["card", "card", "card", "slot", "other"]  # без keeper: ghost в секции
         self._end_drag()
 
     def test_placeholder_moves_to_earlier_slots(self):
@@ -2534,10 +3254,10 @@ class TestTabGhostSlot:
         assert self._slot_order() == ["card", "card", "card", "slot", "card", "other"]
         a = self._card_rect(0)
         self._hover(a["left"] + a["width"] * 0.25, a["top"] + a["height"] * 0.5)  # самое начало
-        assert self._slot_order() == ["slot", "card", "card", "card", "card", "other"]
+        assert self._slot_order() == ["slot", "card", "card", "card", "card", "other"]  # без keeper: ghost в секции
         a = self._card_rect(0)
         self._hover(a["left"] + a["width"] * 0.75, a["top"] + a["height"] * 0.5)  # зазор перед B
-        assert self._slot_order() == ["card", "slot", "card", "card", "card", "other"]
+        assert self._slot_order() == ["card", "slot", "card", "card", "card", "other"]  # без keeper: ghost в секции
         self._end_drag()
 
     def test_drop_commits_order_and_clears_placeholder(self):
@@ -2580,7 +3300,7 @@ class TestTabGhostSlot:
         self._start_drag(1)  # B
         a = self._card_rect(0)
         self._hover(a["left"] + a["width"] * 0.25, a["top"] + a["height"] * 0.5)  # заглушка ушла в начало
-        assert self._slot_order() == ["slot", "card", "card", "card", "other"]
+        assert self._slot_order() == ["slot", "card", "card", "card", "other"]  # без keeper: ghost в секции
         self._end_drag()
         assert self.page.evaluate("document.querySelectorAll('.tab-ghost-slot').length") == 0
         assert self.page.evaluate("!!document.querySelector('.tab-ghost')") is False
@@ -2598,7 +3318,7 @@ class TestTabGhostSlot:
         self._hover(c["left"] + c["width"] * 0.75, c["top"] + c["height"] * 0.75)  # заглушка в конце
         assert self.page.evaluate("!!document.querySelector('.tab-ghost-slot')") is True
         # Изменение storage «из другого окна» → onChanged → перерисовка во время drag
-        self.page.evaluate("chrome.storage.set({'blattam-tabs': chrome.storage._data['blattam-tabs']})")
+        self.page.evaluate("chrome.storage.set({'blattam-tabs': chrome.storage.local._data['blattam-tabs']})")
         assert self.page.evaluate("document.querySelectorAll('.tab-ghost-slot').length") == 0
         assert self._tab_names() == ["A", "B", "C"]
         # Перерисовка не воссоздаёт заглушку на следующих dragover
@@ -2855,11 +3575,12 @@ class TestGroupAwareGhostSlot:
         })()""")
 
     def _slot_order(self):
-        """Порядок детей #tabs-list: 'card' / 'slot' / 'gbar' / 'other'."""
+        """Порядок детей #tabs-list: 'card' / 'slot' / 'keeper' / 'gbar' / 'other'."""
         return json.loads(self.page.evaluate("""(() => JSON.stringify(
           [...document.getElementById('tabs-list').children].map(c =>
             c.classList.contains('tab-card') ? 'card' :
             c.classList.contains('tab-ghost-slot') ? 'slot' :
+            c.classList.contains('tab-row-keeper') ? 'keeper' :
             c.classList.contains('gbar') ? 'gbar' : 'other')))()"""))
 
     def _dom_names(self):
@@ -2900,7 +3621,7 @@ class TestGroupAwareGhostSlot:
         self._start_drag("A")
         bar = self._rect_of('.gbar[data-group-id="g2"]')
         self._hover(bar["left"] + bar["width"] * 0.5, bar["top"] + 1)  # строка над шапкой g2
-        assert self._slot_order() == ["gbar", "card", "card", "card", "slot", "gbar", "card", "card", "other"]
+        assert self._slot_order() == ["gbar", "card", "card", "card", "slot", "gbar", "card", "card", "other"]  # без keeper: ghost в исходной секции
         self._end_drag()
 
     def test_drop_commits_end_of_group(self):
@@ -2921,7 +3642,7 @@ class TestGroupAwareGhostSlot:
         self._start_drag("A")
         e = self._card_rect("E")
         self._hover(e["left"] + e["width"] * 0.75, e["top"] + e["height"] * 0.75)
-        assert self._slot_order() == ["gbar", "card", "card", "card", "gbar", "card", "card", "slot", "other"]
+        assert self._slot_order() == ["gbar", "card", "card", "card", "keeper", "gbar", "card", "card", "slot", "other"]  # keeper — в конце исходной секции (после C)
         self._drop(e["left"] + e["width"] * 0.75, e["top"] + e["height"] * 0.75)
         assert self._names() == ["D", "B", "E", "A", "C"]
         assert self._group_of("A") == "g2"
@@ -2934,7 +3655,7 @@ class TestGroupAwareGhostSlot:
         d = self._card_rect("D")
         x, y = d["left"] + d["width"] * 0.75, d["top"] + d["height"] * 0.5
         self._hover(x, y)
-        assert self._slot_order() == ["gbar", "card", "card", "card", "gbar", "card", "slot", "card", "other"]
+        assert self._slot_order() == ["gbar", "card", "card", "card", "keeper", "gbar", "card", "slot", "card", "other"]  # keeper — в конце исходной секции (после C)
         self._drop(x, y)
         assert self._names() == ["D", "B", "A", "E", "C"]
         assert self._group_of("A") == "g2"
@@ -2948,7 +3669,7 @@ class TestGroupAwareGhostSlot:
         d = self._card_rect("D")
         x, y = d["left"] + d["width"] * 0.25, d["top"] + 1
         self._hover(x, y)
-        assert self._slot_order() == ["gbar", "card", "card", "card", "gbar", "slot", "card", "card", "other"]
+        assert self._slot_order() == ["gbar", "card", "card", "card", "keeper", "gbar", "slot", "card", "card", "other"]  # keeper — в конце исходной секции (после C)
         self._drop(x, y)
         assert self._names() == ["A", "D", "B", "E", "C"]
         assert self._group_of("A") == "g2"
@@ -2968,7 +3689,7 @@ class TestGroupAwareGhostSlot:
         l1 = self._card_rect("L1")
         x, y = l1["left"] + l1["width"] * 0.75, l1["top"] + l1["height"] * 0.5
         self._hover(x, y)  # заглушка между L1 и L2
-        assert self._slot_order() == ["gbar", "card", "card", "other", "card", "slot", "card", "other"]
+        assert self._slot_order() == ["gbar", "card", "card", "keeper", "other", "card", "slot", "card", "other"]  # keeper — в конце исходной секции (после B)
         self._drop(x, y)
         assert self._names() == ["L1", "B", "A", "L2"]
         assert self._group_of("A") is None
@@ -2988,10 +3709,728 @@ class TestGroupAwareGhostSlot:
         l1 = self._card_rect("L1")
         x, y = l1["left"] + l1["width"] * 0.25, l1["top"] + 1
         self._hover(x, y)
-        assert self._slot_order() == ["gbar", "card", "card", "other", "slot", "card", "card", "other"]
+        assert self._slot_order() == ["gbar", "card", "card", "keeper", "other", "slot", "card", "card", "other"]  # keeper — в конце исходной секции (после B)
         self._drop(x, y)
         assert self._names() == ["A", "L1", "B", "L2"]
         assert self._group_of("A") is None
+        self._end_drag()
+
+
+class TestCollapsedRunGhostSlot:
+    """Ghost-slot на границе прогона свёрнутых групп: курсор ниже последней
+    карточки раскрытой группы, дальше — (через свёрнутые) ещё раскрытая
+    группа. Заглушка встаёт на ГРАНИЦЕ (после последней карточки предыдущей
+    секции), а не в пространство НИЗКОЙ свёрнутой группы (из-за неё группа
+    выглядела «раскрытой» с призрачной вкладкой); дроп туда переносит
+    вкладку в конец предыдущей секции (семантика не меняется)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    GROUPS5 = [
+        {"id": "g1", "name": "One", "spaceId": "sp1", "collapsed": False},
+        {"id": "g2", "name": "Two", "spaceId": "sp1", "collapsed": True},
+        {"id": "g3", "name": "Three", "spaceId": "sp1", "collapsed": True},
+        {"id": "g4", "name": "Four", "spaceId": "sp1", "collapsed": True},
+        {"id": "g5", "name": "Five", "spaceId": "sp1", "collapsed": False},
+    ]
+    TABS12 = [
+        {"name": "A", "url": "https://a.com", "spaceId": "sp1", "groupId": "g1"},
+        {"name": "B", "url": "https://b.com", "spaceId": "sp1", "groupId": "g1"},
+        {"name": "C", "url": "https://c.com", "spaceId": "sp1", "groupId": "g1"},
+        {"name": "D", "url": "https://d.com", "spaceId": "sp1", "groupId": "g2"},
+        {"name": "E", "url": "https://e.com", "spaceId": "sp1", "groupId": "g2"},
+        {"name": "F", "url": "https://f.com", "spaceId": "sp1", "groupId": "g3"},
+        {"name": "G", "url": "https://g.com", "spaceId": "sp1", "groupId": "g3"},
+        {"name": "H", "url": "https://h.com", "spaceId": "sp1", "groupId": "g4"},
+        {"name": "I", "url": "https://i.com", "spaceId": "sp1", "groupId": "g4"},
+        {"name": "J", "url": "https://j.com", "spaceId": "sp1", "groupId": "g5"},
+        {"name": "K", "url": "https://k.com", "spaceId": "sp1", "groupId": "g5"},
+        {"name": "L", "url": "https://l.com", "spaceId": "sp1", "groupId": "g5"},
+    ]
+
+    def _load(self):
+        load_view(self.page, spaces=[{"id": "sp1", "name": "Main"}], groups=self.GROUPS5,
+                  tabs=self.TABS12, last_space="sp1")
+
+    def _start_drag(self, name):
+        self.page.evaluate("""(name) => {
+          const card = [...document.querySelectorAll('#tabs-list .tab-card')]
+            .find(c => c.querySelector('.tab-name').textContent.trim() === name);
+          window.__srcCard = card;
+          const dt = new DataTransfer();
+          window.__dt = dt;
+          card.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true}));
+        }""", name)
+        self.page.wait_for_timeout(50)
+
+    def _hover(self, x, y):
+        self.page.evaluate("""([x, y]) => {
+          document.getElementById('tabs-list').dispatchEvent(
+            new DragEvent('dragover', {dataTransfer: window.__dt, bubbles: true, cancelable: true, clientX: x, clientY: y}));
+        }""", [x, y])
+
+    def _drop(self, x, y):
+        self.page.evaluate("""([x, y]) => {
+          document.getElementById('tabs-list').dispatchEvent(
+            new DragEvent('drop', {dataTransfer: window.__dt, bubbles: true, cancelable: true, clientX: x, clientY: y}));
+        }""", [x, y])
+
+    def _end_drag(self):
+        self.page.evaluate("""(() => {
+          const card = window.__srcCard;
+          if (card) card.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        })()""")
+
+    def _slot_order(self):
+        return json.loads(self.page.evaluate("""(() => JSON.stringify(
+          [...document.getElementById('tabs-list').children].map(c =>
+            c.classList.contains('tab-card') ? 'card' :
+            c.classList.contains('tab-ghost-slot') ? 'slot' :
+            c.classList.contains('tab-row-keeper') ? 'keeper' :
+            c.classList.contains('gbar') ? 'gbar' : 'other')))()"""))
+
+    def _rect(self, selector):
+        return self.page.evaluate("""(sel) => {
+          const el = document.querySelector(sel);
+          if (!el) return null;
+          const b = el.getBoundingClientRect();
+          return {left: b.left, top: b.top, width: b.width, height: b.height};
+        }""", selector)
+
+    def _card_rect(self, name):
+        return self.page.evaluate("""(name) => {
+          const card = [...document.querySelectorAll('#tabs-list .tab-card')]
+            .find(c => c.querySelector('.tab-name').textContent.trim() === name);
+          const b = card.getBoundingClientRect();
+          return {left: b.left, top: b.top, width: b.width, height: b.height};
+        }""", name)
+
+    def _region_point(self):
+        """Точка в прогоне свёрнутых групп: ниже последней видимой карточки
+        g1 (C) и выше шапки g5."""
+        c = self._card_rect("C")
+        bar5 = self._rect('.gbar[data-group-id="g5"]')
+        return (bar5["left"] + bar5["width"] * 0.5,
+                (c["top"] + c["height"] + bar5["top"]) / 2)
+
+    def _names(self):
+        return json.loads(self.page.evaluate("""(async () => {
+          const d = await chrome.storage.get('blattam-tabs');
+          return JSON.stringify((d['blattam-tabs'] || []).map(t => t.name));
+        })()"""))
+
+    def _group_of(self, name):
+        return self.page.evaluate("""(async (name) => {
+          const d = await chrome.storage.get('blattam-tabs');
+          const t = (d['blattam-tabs'] || []).find(t => t.name === name);
+          return t.groupId;
+        })""", name)
+
+    def test_ghost_at_boundary_not_in_collapsed_run(self):
+        self._load()
+        self._start_drag("A")
+        x, y = self._region_point()
+        self._hover(x, y)
+        # Полоса над прогоном свёрнутых групп: заглушка — ВИДИМАЯ в ХВОСТЕ
+        # исходной секции g1 (после C), а не «дома» и не в пространстве
+        # НИЗКОЙ свёрнутой группы; keeper нет (ghost в исходной секции)
+        d = json.loads(self.page.evaluate("""(() => JSON.stringify({
+          atHome: window.__srcCard.nextElementSibling === document.querySelector('.tab-ghost-slot'),
+          atTail: (() => {
+            const c = [...document.querySelectorAll('#tabs-list .tab-card')]
+              .find(c => c.querySelector('.tab-name').textContent.trim() === 'C');
+            return c.nextElementSibling === document.querySelector('.tab-ghost-slot');
+          })(),
+          visible: (() => { const s = document.querySelector('.tab-ghost-slot'); return s && getComputedStyle(s).visibility !== 'hidden'; })(),
+          keepers: document.querySelectorAll('.tab-row-keeper').length
+        }))()"""))
+        assert d["atHome"] is False and d["atTail"] is True and d["visible"] is True and d["keepers"] == 0, d
+        assert self._slot_order() == ["gbar", "card", "card", "card", "slot", "gbar",
+                                      "gbar", "gbar", "gbar", "card", "card", "card", "other"]
+        self._end_drag()
+
+    def test_ghost_above_first_collapsed_header(self):
+        # Геометрия: верх заглушки выше шапки g2 (в строке g1), а не в
+        # прогоне свёрнутых групп
+        self._load()
+        self._start_drag("A")
+        x, y = self._region_point()
+        self._hover(x, y)
+        slot = self._rect('.tab-ghost-slot')
+        bar2 = self._rect('.gbar[data-group-id="g2"]')
+        assert slot is not None
+        assert slot["top"] < bar2["top"]
+        self._end_drag()
+
+    def test_drop_in_collapsed_region_lands_at_end_of_prev_section(self):
+        # Дроп в прогон свёрнутых групп: вкладка встаёт в конец g1, группа
+        # не меняется (семантика дропа не зависит от позиции заглушки)
+        self._load()
+        self._start_drag("A")
+        x, y = self._region_point()
+        self._drop(x, y)
+        assert self._names() == ["B", "C", "A", "D", "E", "F", "G", "H", "I", "J", "K", "L"]
+        assert self._group_of("A") == "g1"
+        self._end_drag()
+
+
+class TestDragRowReflow:
+    """Reflow строк при драге (реальная сетка: theme.css + стили view.html,
+    1280x800 → 6 колонок): карточки ЗАКРЫВАЮТ слот скрытой карточки (без
+    «дырки» на её месте), а число строк исходной секции фиксировано — его
+    держит ghost-slot (ghost в секции) или невидимый row-keeper в КОНЦЕ
+    секции (ghost в другой)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self._errors = []
+        page.on("pageerror", self._on_err)
+        yield
+        assert not self._errors, self._errors
+        page.remove_listener("pageerror", self._on_err)
+
+    def _on_err(self, err):
+        self._errors.append(str(err))
+
+    SP = [{"id": "sp1", "name": "Main"}]
+
+    def _load(self, groups, tabs):
+        load_view(self.page, spaces=self.SP, groups=groups, tabs=tabs, last_space="sp1")
+        css = load_file("theme.css")
+        html = load_file("view.html")
+        style_block = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate("""(css) => {
+          const s = document.createElement('style');
+          s.textContent = css;
+          document.head.appendChild(s);
+        }""", css + style_block)
+        self.page.set_viewport_size({"width": 1280, "height": 800})
+        self.page.wait_for_timeout(50)
+
+    def _start_drag(self, name):
+        self.page.evaluate("""(name) => {
+          const card = [...document.querySelectorAll('#tabs-list .tab-card')]
+            .find(c => c.querySelector('.tab-name').textContent.trim() === name);
+          window.__srcCard = card;
+          const dt = new DataTransfer();
+          window.__dt = dt;
+          card.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true}));
+        }""", name)
+        self.page.wait_for_timeout(50)
+
+    def _card_rect(self, name):
+        return self.page.evaluate("""(name) => {
+          const card = [...document.querySelectorAll('#tabs-list .tab-card')]
+            .find(c => c.querySelector('.tab-name').textContent.trim() === name);
+          const b = card.getBoundingClientRect();
+          return {left: b.left, top: b.top, width: b.width, height: b.height};
+        }""", name)
+
+    def _hover(self, x, y):
+        self.page.evaluate("""([x, y]) => {
+          document.getElementById('tabs-list').dispatchEvent(
+            new DragEvent('dragover', {dataTransfer: window.__dt, bubbles: true, cancelable: true, clientX: x, clientY: y}));
+        }""", [x, y])
+
+    def _end_drag(self):
+        self.page.evaluate("""(() => {
+          const card = window.__srcCard;
+          if (card) card.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        })()""")
+
+    def _anchor_top(self):
+        return self.page.evaluate("document.getElementById('add-group-btn').getBoundingClientRect().top")
+
+    def test_in_section_refill_no_keeper_row_fixed(self):
+        # Пример пользователя: группа на 2 строки (6 колонок: 6+1); тащим
+        # вкладку из первой строки, заглушка — в КОНЦЕ секции (всё ещё в ней):
+        # одинокая вкладка последней строки поднялась в первую строку,
+        # исходный слот занят другой карточкой (без дырки), keeper в DOM нет,
+        # якорь под списком не сдвинулся
+        tabs = [{"name": f"T{i}", "url": f"https://t{i}.com", "spaceId": "sp1", "groupId": "g1"}
+                for i in range(1, 8)]
+        self._load([{"id": "g1", "name": "G", "spaceId": "sp1", "collapsed": False}], tabs)
+        pre = self._anchor_top()
+        t1 = self._card_rect("T1")
+        t7 = self._card_rect("T7")
+        assert t7["top"] > t1["top"], (t1, t7)  # T7 одинокая в последней строке
+        self._start_drag("T1")
+        self._hover(t7["left"] + t7["width"] * 0.75, t7["top"] + t7["height"] * 0.75)
+        d = json.loads(self.page.evaluate("""(() => {
+          const slot = document.querySelector('.tab-ghost-slot');
+          const find = (n) => [...document.querySelectorAll('#tabs-list .tab-card')]
+            .find(c => c.querySelector('.tab-name').textContent.trim() === n);
+          const b2 = find('T2').getBoundingClientRect();
+          const b7 = find('T7').getBoundingClientRect();
+          return JSON.stringify({
+            keepers: document.querySelectorAll('.tab-row-keeper').length,
+            slotAtTail: find('T7').nextElementSibling === slot,
+            t7Top: b7.top, t2Left: b2.left, t2Top: b2.top,
+            top: document.getElementById('add-group-btn').getBoundingClientRect().top
+          });
+        })()"""))
+        assert d["keepers"] == 0, d
+        assert d["slotAtTail"], d  # заглушка — в конце секции (после T7)
+        assert abs(d["t7Top"] - t1["top"]) < 2, (t1, d)  # T7 поднялась в первую строку
+        assert abs(d["t2Left"] - t1["left"]) < 2 and abs(d["t2Top"] - t1["top"]) < 2, (t1, d)  # исходный слот занят T2
+        assert abs(d["top"] - pre) < 2, (pre, d["top"])
+        self._end_drag()
+
+    def test_cross_section_keeper_at_source_tail(self):
+        # Ghost в другой группе: row-keeper в конце исходной секции (после
+        # последней видимой карточки), шапка следующей группы не сдвинулась,
+        # исходный слот занят другой карточкой
+        tabs = [{"name": f"T{i}", "url": f"https://t{i}.com", "spaceId": "sp1", "groupId": "g1"}
+                for i in range(1, 8)] + [
+            {"name": "U1", "url": "https://u1.com", "spaceId": "sp1", "groupId": "g2"},
+            {"name": "U2", "url": "https://u2.com", "spaceId": "sp1", "groupId": "g2"},
+        ]
+        self._load([{"id": "g1", "name": "G1", "spaceId": "sp1", "collapsed": False},
+                    {"id": "g2", "name": "G2", "spaceId": "sp1", "collapsed": False}], tabs)
+        pre_bar2 = self.page.evaluate(
+            "document.querySelector(\".gbar[data-group-id='g2']\").getBoundingClientRect().top")
+        t1 = self._card_rect("T1")
+        u1 = self._card_rect("U1")
+        self._start_drag("T1")
+        self._hover(u1["left"] + u1["width"] * 0.5, u1["top"] + u1["height"] * 0.5)
+        d = json.loads(self.page.evaluate("""(() => {
+          const k = document.querySelector('.tab-row-keeper');
+          const slot = document.querySelector('.tab-ghost-slot');
+          const find = (n) => [...document.querySelectorAll('#tabs-list .tab-card')]
+            .find(c => c.querySelector('.tab-name').textContent.trim() === n);
+          const b2 = find('T2').getBoundingClientRect();
+          const prev = slot ? slot.previousElementSibling : null;
+          return JSON.stringify({
+            keeperExists: !!k,
+            keeperAfterT7: !!k && find('T7').nextElementSibling === k,
+            slotAfterBar2: !!prev && prev.classList.contains('gbar') && prev.dataset.groupId === 'g2',
+            bar2Top: document.querySelector('.gbar[data-group-id="g2"]').getBoundingClientRect().top,
+            t2Left: b2.left, t2Top: b2.top
+          });
+        })()"""))
+        assert d["keeperExists"] and d["keeperAfterT7"], d
+        assert d["slotAfterBar2"], d  # заглушка — в начале g2 (после её шапки)
+        assert abs(d["bar2Top"] - pre_bar2) < 2, (pre_bar2, d["bar2Top"])
+        assert abs(d["t2Left"] - t1["left"]) < 2 and abs(d["t2Top"] - t1["top"]) < 2, (t1, d)
+        self._end_drag()
+
+    def test_single_tab_group_keeper_after_gbar(self):
+        # Группа ровно с ОДНОЙ вкладкой: тащим её на карточку другой группы —
+        # в исходной секции не осталось видимых карточек: keeper стоит за её
+        # .gbar, якорь под списком не сдвинулся
+        tabs = [
+            {"name": "T1", "url": "https://t1.com", "spaceId": "sp1", "groupId": "g1"},
+            {"name": "U1", "url": "https://u1.com", "spaceId": "sp1", "groupId": "g2"},
+            {"name": "U2", "url": "https://u2.com", "spaceId": "sp1", "groupId": "g2"},
+        ]
+        self._load([{"id": "g1", "name": "G1", "spaceId": "sp1", "collapsed": False},
+                    {"id": "g2", "name": "G2", "spaceId": "sp1", "collapsed": False}], tabs)
+        pre = self._anchor_top()
+        u1 = self._card_rect("U1")
+        self._start_drag("T1")
+        self._hover(u1["left"] + u1["width"] * 0.5, u1["top"] + u1["height"] * 0.5)
+        d = json.loads(self.page.evaluate("""(() => {
+          const k = document.querySelector('.tab-row-keeper');
+          const bar1 = document.querySelector('.gbar[data-group-id="g1"]');
+          const slot = document.querySelector('.tab-ghost-slot');
+          const prev = slot ? slot.previousElementSibling : null;
+          return JSON.stringify({
+            keeperExists: !!k,
+            keeperAfterBar1: !!k && bar1.nextElementSibling === k,
+            slotAfterBar2: !!prev && prev.classList.contains('gbar') && prev.dataset.groupId === 'g2',
+            top: document.getElementById('add-group-btn').getBoundingClientRect().top
+          });
+        })()"""))
+        assert d["keeperExists"] and d["keeperAfterBar1"], d
+        assert d["slotAfterBar2"], d
+        assert abs(d["top"] - pre) < 2, (pre, d["top"])
+        self._end_drag()
+
+
+class TestDragGhostOverCollapsed:
+    """Ghost-заглушка над шапками групп: над ЛЮБОЙ шапкой (.gbar — развёрнутой,
+    свёрнутой или пустой) заглушка ПРЯЧЕТСЯ ЦЕЛИКОМ (display:none — её ячейка
+    сетки освобождается: ни «тёплая» заглушка на старом месте, ни дырки);
+    row-keeper держит число строк исходной секции. В полосе прямо над шапкой
+    свёрнутой/пустой группы (не сама шапка) — заглушка ВИДИМАЯ в хвосте
+    исходной секции (честно: дроп туда ставит вкладку в хвост той же секции).
+    Семантика дропа не меняется: дроп на шапку свёрнутой группы переносит
+    вкладку в группу, группа остаётся свёрнутой; дроп на развёрнутую шапку —
+    no-op."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self._errors = []
+        page.on("pageerror", self._on_err)
+        yield
+        assert not self._errors, self._errors
+        page.remove_listener("pageerror", self._on_err)
+
+    def _on_err(self, err):
+        self._errors.append(str(err))
+
+    SP = [{"id": "sp1", "name": "Main"}]
+    GROUPS = [
+        {"id": "g1", "name": "One", "spaceId": "sp1", "collapsed": False},
+        {"id": "g2", "name": "Two", "spaceId": "sp1", "collapsed": True},
+        {"id": "g3", "name": "Three", "spaceId": "sp1", "collapsed": False},
+    ]
+    TABS = [
+        {"name": "A", "url": "https://a.com", "spaceId": "sp1", "groupId": "g1"},
+        {"name": "B", "url": "https://b.com", "spaceId": "sp1", "groupId": "g1"},
+        {"name": "C", "url": "https://c.com", "spaceId": "sp1", "groupId": "g1"},
+        {"name": "D", "url": "https://d.com", "spaceId": "sp1", "groupId": "g2"},
+        {"name": "E", "url": "https://e.com", "spaceId": "sp1", "groupId": "g2"},
+        {"name": "F", "url": "https://f.com", "spaceId": "sp1", "groupId": "g3"},
+        {"name": "G", "url": "https://g.com", "spaceId": "sp1", "groupId": "g3"},
+    ]
+
+    def _load(self):
+        load_view(self.page, spaces=self.SP, groups=self.GROUPS, tabs=self.TABS, last_space="sp1")
+        css = load_file("theme.css")
+        html = load_file("view.html")
+        style_block = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate("""(css) => {
+          const s = document.createElement('style');
+          s.textContent = css;
+          document.head.appendChild(s);
+        }""", css + style_block)
+        self.page.set_viewport_size({"width": 1280, "height": 800})
+        self.page.wait_for_timeout(50)
+
+    def _start_drag(self, name):
+        self.page.evaluate("""(name) => {
+          const card = [...document.querySelectorAll('#tabs-list .tab-card')]
+            .find(c => c.querySelector('.tab-name').textContent.trim() === name);
+          window.__srcCard = card;
+          const dt = new DataTransfer();
+          window.__dt = dt;
+          card.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true}));
+        }""", name)
+        self.page.wait_for_timeout(50)
+
+    def _card_rect(self, name):
+        return self.page.evaluate("""(name) => {
+          const card = [...document.querySelectorAll('#tabs-list .tab-card')]
+            .find(c => c.querySelector('.tab-name').textContent.trim() === name);
+          const b = card.getBoundingClientRect();
+          return {left: b.left, top: b.top, width: b.width, height: b.height};
+        }""", name)
+
+    def _rect_of(self, selector):
+        return self.page.evaluate("""(sel) => {
+          const b = document.querySelector(sel).getBoundingClientRect();
+          return {left: b.left, top: b.top, width: b.width, height: b.height};
+        }""", selector)
+
+    def _dragover_gbar(self, gid):
+        self.page.evaluate("""(gid) => {
+          const bar = document.querySelector('.gbar[data-group-id="' + gid + '"]');
+          const b = bar.getBoundingClientRect();
+          bar.dispatchEvent(new DragEvent('dragover', {
+            dataTransfer: window.__dt, bubbles: true, cancelable: true,
+            clientX: b.left + b.width / 2, clientY: b.top + b.height / 2
+          }));
+        }""", gid)
+
+    def _hover(self, x, y):
+        self.page.evaluate("""([x, y]) => {
+          document.getElementById('tabs-list').dispatchEvent(
+            new DragEvent('dragover', {dataTransfer: window.__dt, bubbles: true, cancelable: true, clientX: x, clientY: y}));
+        }""", [x, y])
+
+    def _end_drag(self):
+        self.page.evaluate("""(() => {
+          const card = window.__srcCard;
+          if (card) card.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        })()""")
+
+    def test_ghost_hidden_over_collapsed_gbar(self):
+        # Курсор над шапкой свёрнутой g2 (цель дропа карточки): заглушка
+        # ПРЯЧЕТСЯ ЦЕЛИКОМ (display:none) — не «тёплая» заглушка на старом
+        # месте, не в хвосте; остаётся там, где была (сразу после A), не
+        # удаляется; row-keeper держит число строк исходной секции g1
+        self._load()
+        self._start_drag("A")
+        self._dragover_gbar("g2")
+        d = json.loads(self.page.evaluate("""(() => {
+          const src = window.__srcCard;
+          const slot = document.querySelector('.tab-ghost-slot');
+          const c = [...document.querySelectorAll('#tabs-list .tab-card')]
+            .find(c => c.querySelector('.tab-name').textContent.trim() === 'C');
+          return JSON.stringify({
+            hidden: slot && getComputedStyle(slot).display === 'none',
+            atHome: src.nextElementSibling === slot,
+            notAfterLastG1: c.nextElementSibling !== slot,
+            keepers: document.querySelectorAll('.tab-row-keeper').length
+          });
+        })()"""))
+        assert d == {"hidden": True, "atHome": True, "notAfterLastG1": True, "keepers": 1}, d
+        self._end_drag()
+
+    def test_ghost_visible_at_tail_in_band_above_collapsed_gbar(self):
+        # Курсор в полосе МЕЖДУ последней карточкой g1 и шапкой g2: заглушка —
+        # ВИДИМАЯ в ХВОСТЕ исходной секции (после C), честно: дроп туда ставит
+        # вкладку в хвост g1. ДОМА (home-snap) заглушка уходит только над самой
+        # шапкой свёрнутой/пустой группы
+        self._load()
+        self._start_drag("A")
+        c = self._card_rect("C")
+        bar = self._rect_of('.gbar[data-group-id="g2"]')
+        self._hover(bar["left"] + bar["width"] * 0.5, (c["top"] + c["height"] + bar["top"]) / 2)
+        d = json.loads(self.page.evaluate("""(() => {
+          const slot = document.querySelector('.tab-ghost-slot');
+          const c = [...document.querySelectorAll('#tabs-list .tab-card')]
+            .find(c => c.querySelector('.tab-name').textContent.trim() === 'C');
+          const bar = document.querySelector('.gbar[data-group-id="g2"]');
+          return JSON.stringify({
+            atTail: c.nextElementSibling === slot,
+            visible: slot && getComputedStyle(slot).visibility !== 'hidden',
+            notHome: window.__srcCard.nextElementSibling !== slot,
+            keepers: document.querySelectorAll('.tab-row-keeper').length,
+            aboveBar: slot.getBoundingClientRect().top < bar.getBoundingClientRect().top
+          });
+        })()"""))
+        assert d == {"atTail": True, "visible": True, "notHome": True, "keepers": 0, "aboveBar": True}, d
+        self._end_drag()
+
+    def test_drop_on_collapsed_gbar_moves_tab_group_stays_collapsed(self):
+        # Дроп на шапку свёрнутой g2: вкладка уезжает в g2 (storage),
+        # заглушка убрана, ложный клик в момент дропа не раскрывает g2
+        self._load()
+        self._start_drag("A")
+        self.page.evaluate("""(() => {
+          const bar = document.querySelector('.gbar[data-group-id="g2"]');
+          const b = bar.getBoundingClientRect();
+          const x = b.left + b.width / 2, y = b.top + b.height / 2;
+          bar.dispatchEvent(new DragEvent('dragover', {
+            dataTransfer: window.__dt, bubbles: true, cancelable: true, clientX: x, clientY: y}));
+          bar.dispatchEvent(new DragEvent('drop', {
+            dataTransfer: window.__dt, bubbles: true, cancelable: true, clientX: x, clientY: y}));
+          bar.dispatchEvent(new Event('click', {bubbles: true}));  // ложный post-drop клик (до dragend)
+        })()""")
+        self._end_drag()
+        groups = read_storage_raw(self.page, "blattam-groups")
+        tabs = read_storage_raw(self.page, "blattam-tabs")
+        g2 = [g for g in groups if g["id"] == "g2"][0]
+        a = [t for t in tabs if t["name"] == "A"][0]
+        assert a["groupId"] == "g2", tabs
+        assert g2["collapsed"] is True, g2
+        assert self.page.evaluate("document.querySelectorAll('.tab-ghost-slot').length") == 0
+
+    def test_ghost_hidden_over_expanded_gbar(self):
+        # Над шапкой группы С видимыми карточками (дроп карточки на неё
+        # ничего не делает) заглушка ПРЯЧЕТСЯ ЦЕЛИКОМ (display:none — её
+        # ячейка сетки освобождается, сетка перетекает: ни заглушки, ни дырки):
+        # остаётся на месте, не возвращается домой, не удаляется
+        self._load()
+        self._start_drag("A")
+        b = self._card_rect("B")
+        self._hover(b["left"] + b["width"] * 0.75, b["top"] + b["height"] * 0.75)  # заглушка до C
+        self._dragover_gbar("g3")  # развёрнутая g3 (F, G)
+        d = json.loads(self.page.evaluate("""(() => {
+          const src = window.__srcCard;
+          const slot = document.querySelector('.tab-ghost-slot');
+          const c = [...document.querySelectorAll('#tabs-list .tab-card')]
+            .find(c => c.querySelector('.tab-name').textContent.trim() === 'C');
+          return JSON.stringify({
+            exists: !!slot,
+            hidden: slot && getComputedStyle(slot).display === 'none',
+            beforeC: c.previousElementSibling === slot,
+            notHome: src.nextElementSibling !== slot
+          });
+        })()"""))
+        assert d == {"exists": True, "hidden": True, "beforeC": True, "notHome": True}, d
+        self._end_drag()
+
+class TestOnlyTabHomeDrop:
+    """Группа, где перетаскиваемая карточка ЕДИНСТВЕННАЯ: пока карточка скрыта,
+    секция «пустая» и геометрия прыгает через полосу исходной секции в соседнюю —
+    вкладку нельзя вернуть на место (уезжает в соседнюю группу). Слот над схваченной
+    карточкой — это ДОМАШНИЙ слот исходной карточки: дроп — no-op, заглушка не
+    уезжает из него, пока курсор в полосе секции."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self._errors = []
+        page.on("pageerror", self._on_err)
+        yield
+        assert not self._errors, self._errors
+        page.remove_listener("pageerror", self._on_err)
+
+    def _on_err(self, err):
+        self._errors.append(str(err))
+
+    SP = [{"id": "sp1", "name": "Main"}]
+
+    def _load(self, groups, tabs):
+        load_view(self.page, spaces=self.SP, groups=groups, tabs=tabs, last_space="sp1")
+        css = load_file("theme.css")
+        html = load_file("view.html")
+        style_block = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate("""(css) => {
+          const s = document.createElement('style');
+          s.textContent = css;
+          document.head.appendChild(s);
+        }""", css + style_block)
+        self.page.set_viewport_size({"width": 1280, "height": 800})
+        self.page.wait_for_timeout(50)
+
+    def _start_drag(self, name):
+        self.page.evaluate("""(name) => {
+          const card = [...document.querySelectorAll('#tabs-list .tab-card')]
+            .find(c => c.querySelector('.tab-name').textContent.trim() === name);
+          window.__srcCard = card;
+          const dt = new DataTransfer();
+          window.__dt = dt;
+          card.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true}));
+        }""", name)
+        self.page.wait_for_timeout(50)
+
+    def _home(self):
+        # Центр заглушки: после dragstart она ДОМА — в слоте схваченной карточки
+        g = self.page.evaluate("""(() => {
+          const g = document.querySelector('.tab-ghost-slot');
+          const b = g.getBoundingClientRect();
+          return {x: b.left + b.width / 2, y: b.top + b.height / 2};
+        })()""")
+        return g["x"], g["y"]
+
+    def _hover(self, x, y):
+        self.page.evaluate("""([x, y]) => {
+          document.getElementById('tabs-list').dispatchEvent(
+            new DragEvent('dragover', {dataTransfer: window.__dt, bubbles: true, cancelable: true, clientX: x, clientY: y}));
+        }""", [x, y])
+
+    def _drop(self, x, y):
+        self.page.evaluate("""([x, y]) => {
+          document.getElementById('tabs-list').dispatchEvent(
+            new DragEvent('drop', {dataTransfer: window.__dt, bubbles: true, cancelable: true, clientX: x, clientY: y}));
+        }""", [x, y])
+
+    def _end_drag(self):
+        self.page.evaluate("""(() => {
+          const card = window.__srcCard;
+          if (card) card.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        })()""")
+
+    def _tabs_now(self):
+        return [(t["name"], t.get("groupId")) for t in read_local(self.page, "blattam-tabs")]
+
+    def test_first_group_only_tab_home_drop_noop(self):
+        # Группа с единственной карточкой ПЕРВОЙ в списке: дроп домой не уносит
+        # карточку в соседнюю группу (геометрия прыгала через «пустую» исходную
+        # секцию к первой видимой карточке следующей группы)
+        groups = [{"id": "g1", "name": "G1", "spaceId": "sp1", "collapsed": False},
+                  {"id": "g2", "name": "G2", "spaceId": "sp1", "collapsed": False}]
+        tabs = [{"name": "T1", "url": "https://t1.com", "spaceId": "sp1", "groupId": "g1"},
+                {"name": "B1", "url": "https://b1.com", "spaceId": "sp1", "groupId": "g2"},
+                {"name": "B2", "url": "https://b2.com", "spaceId": "sp1", "groupId": "g2"}]
+        self._load(groups, tabs)
+        self._start_drag("T1")
+        x, y = self._home()
+        self._hover(x, y)
+        self._drop(x, y)
+        assert self._tabs_now() == [("T1", "g1"), ("B1", "g2"), ("B2", "g2")]
+        self._end_drag()
+
+    def test_last_group_only_tab_home_drop_noop(self):
+        # Группа с единственной карточкой ПОСЛЕДНЕЙ в списке: дроп домой (в конец) —
+        # no-op (карточка не уезжает вверх и не меняет группу)
+        groups = [{"id": "g2", "name": "G2", "spaceId": "sp1", "collapsed": False},
+                  {"id": "g1", "name": "G1", "spaceId": "sp1", "collapsed": False}]
+        tabs = [{"name": "B1", "url": "https://b1.com", "spaceId": "sp1", "groupId": "g2"},
+                {"name": "B2", "url": "https://b2.com", "spaceId": "sp1", "groupId": "g2"},
+                {"name": "T1", "url": "https://t1.com", "spaceId": "sp1", "groupId": "g1"}]
+        self._load(groups, tabs)
+        self._start_drag("T1")
+        x, y = self._home()
+        self._hover(x, y)
+        self._drop(x, y)
+        assert self._tabs_now() == [("B1", "g2"), ("B2", "g2"), ("T1", "g1")]
+        self._end_drag()
+
+    def test_middle_group_only_tab_home_drop_noop(self):
+        # Группа с единственной карточкой между двумя группами: дроп домой — no-op
+        # (раньше заглушка прыгала в конец предыдущей группы и дроп менял группу)
+        groups = [{"id": "g1", "name": "G1", "spaceId": "sp1", "collapsed": False},
+                  {"id": "g2", "name": "G2", "spaceId": "sp1", "collapsed": False},
+                  {"id": "g3", "name": "G3", "spaceId": "sp1", "collapsed": False}]
+        tabs = [{"name": "B1", "url": "https://b1.com", "spaceId": "sp1", "groupId": "g1"},
+                {"name": "B2", "url": "https://b2.com", "spaceId": "sp1", "groupId": "g1"},
+                {"name": "T1", "url": "https://t1.com", "spaceId": "sp1", "groupId": "g2"},
+                {"name": "C1", "url": "https://c1.com", "spaceId": "sp1", "groupId": "g3"}]
+        self._load(groups, tabs)
+        self._start_drag("T1")
+        x, y = self._home()
+        self._hover(x, y)
+        self._drop(x, y)
+        assert self._tabs_now() == [("B1", "g1"), ("B2", "g1"), ("T1", "g2"), ("C1", "g3")]
+        self._end_drag()
+
+    def test_loose_only_tab_home_drop_noop(self):
+        # Единственная негрупповая вкладка: дроп домой — no-op, groupId не присваивается
+        groups = [{"id": "g1", "name": "G1", "spaceId": "sp1", "collapsed": False}]
+        tabs = [{"name": "B1", "url": "https://b1.com", "spaceId": "sp1", "groupId": "g1"},
+                {"name": "B2", "url": "https://b2.com", "spaceId": "sp1", "groupId": "g1"},
+                {"name": "T1", "url": "https://t1.com", "spaceId": "sp1"}]
+        self._load(groups, tabs)
+        self._start_drag("T1")
+        x, y = self._home()
+        self._hover(x, y)
+        self._drop(x, y)
+        assert self._tabs_now() == [("B1", "g1"), ("B2", "g1"), ("T1", None)]
+        self._end_drag()
+
+    def test_only_tab_ghost_stays_home_on_dragover(self):
+        # Заглушка не уезжает в соседнюю группу в момент захвата: над слотом схваченной
+        # карточки она остаётся дома (видна, в том же месте, не ниже шапки следующей группы)
+        groups = [{"id": "g1", "name": "G1", "spaceId": "sp1", "collapsed": False},
+                  {"id": "g2", "name": "G2", "spaceId": "sp1", "collapsed": False}]
+        tabs = [{"name": "T1", "url": "https://t1.com", "spaceId": "sp1", "groupId": "g1"},
+                {"name": "B1", "url": "https://b1.com", "spaceId": "sp1", "groupId": "g2"}]
+        self._load(groups, tabs)
+        self._start_drag("T1")
+        x, y = self._home()
+        self._hover(x, y)
+        d = json.loads(self.page.evaluate("""(() => {
+          const g = document.querySelector('.tab-ghost-slot');
+          const src = window.__srcCard;
+          const gbar = document.querySelector('.gbar[data-group-id="g2"]');
+          return JSON.stringify({
+            home: src.nextElementSibling === g,
+            display: g.style.display,
+            belowG2: g.getBoundingClientRect().top >= gbar.getBoundingClientRect().bottom
+          });
+        })()"""))
+        assert d["home"] and d["display"] != "none" and not d["belowG2"], d
+        self._end_drag()
+
+    def test_only_tab_drag_to_other_group_moves(self):
+        # Драг ЕДИНСТВЕННОЙ карточки в слот другой группы (не домой) — всё ещё
+        # переезжает (карточка уходит в ту группу)
+        groups = [{"id": "g1", "name": "G1", "spaceId": "sp1", "collapsed": False},
+                  {"id": "g2", "name": "G2", "spaceId": "sp1", "collapsed": False}]
+        tabs = [{"name": "T1", "url": "https://t1.com", "spaceId": "sp1", "groupId": "g1"},
+                {"name": "B1", "url": "https://b1.com", "spaceId": "sp1", "groupId": "g2"}]
+        self._load(groups, tabs)
+        self._start_drag("T1")
+        b = self.page.evaluate("""(() => {
+          const c = [...document.querySelectorAll('#tabs-list .tab-card')]
+            .find(x => x.querySelector('.tab-name').textContent.trim() === 'B1');
+          const r = c.getBoundingClientRect();
+          return {x: r.left + r.width / 2, y: r.top + r.height / 2};
+        })()""")
+        self._hover(b["x"], b["y"])
+        self._drop(b["x"], b["y"])
+        tabs_now = self._tabs_now()
+        t1 = [t for t in tabs_now if t[0] == "T1"][0]
+        assert t1[1] == "g2", tabs_now
         self._end_drag()
 
 
@@ -3238,7 +4677,7 @@ class TestEditTab:
         assert next(t for t in self._tabs() if t["id"] == "t1")["name"] == "Через Enter"
 
     def test_background_update_tab_direct(self):
-        init = "chrome.storage._data['blattam-tabs'] = " + json.dumps(self.TABS, ensure_ascii=False) + ";"
+        init = "chrome.storage.local._data['blattam-tabs'] = " + json.dumps(self.TABS, ensure_ascii=False) + ";"
         self._load_bg(init)
         send_msg(self.page, "update-tab", index=0, name="N", url="https://n.com", comment="c")
         self.page.wait_for_timeout(30)
@@ -4944,8 +6383,630 @@ class TestGroupControlsDragGuard:
 
 
 # ==========================================
+#  VIEW.JS: ☑ «Без группы» — ВЫБОР ВСЕХ НЕГРУППОВЫХ ВКЛАДОК ПРОСТРАНСТВА
+# ==========================================
+
+class TestLooseSelectAll:
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    SP = [{"id": "sp1", "name": "Main"}]
+    GROUPS = [{"id": "g1", "name": "Dev", "spaceId": "sp1", "collapsed": False}]
+    TABS = [
+        {"name": "D1", "url": "https://d1.com", "spaceId": "sp1", "groupId": "g1"},
+        {"name": "D2", "url": "https://d2.com", "spaceId": "sp1", "groupId": "g1"},
+        {"name": "L Alpha", "url": "https://la.com", "spaceId": "sp1"},
+        {"name": "L Beta", "url": "https://lb.com", "spaceId": "sp1"},
+    ]
+
+    def _load(self):
+        load_view(self.page, spaces=self.SP, groups=self.GROUPS, tabs=self.TABS)
+
+    def _click(self):
+        self.page.evaluate("document.querySelector('.loose-label .loose-select').click()")
+
+    def test_loose_label_rendered_with_select_button(self):
+        # Подпись «Без группы» рендерится (группы И негрупповые есть) с кнопкой ☑,
+        # в неактивном состоянии
+        self._load()
+        d = self.page.evaluate("""(() => {
+          const lbl = document.querySelector('.loose-label');
+          if (!lbl) return null;
+          const btn = lbl.querySelector('.loose-select');
+          if (!btn) return null;
+          return {text: lbl.textContent, glyph: btn.textContent,
+                  on: btn.classList.contains('on')};
+        })()""")
+        assert d is not None
+        assert d["glyph"] == "\u2611"
+        assert "Без группы" in d["text"]
+        assert d["on"] is False
+
+    def test_click_selects_all_loose_tabs_only(self):
+        self._load()
+        self._click()
+        d = json.loads(self.page.evaluate("""(() => {
+          const sel = [...document.querySelectorAll('.tab-card.selected')].map(c => c.__tab.url);
+          return JSON.stringify({sel,
+            barHidden: document.getElementById('selection-bar').classList.contains('hidden'),
+            count: document.getElementById('selection-count').textContent});
+        })()"""))
+        # Выделены ТОЛЬКО негрупповые вкладки; батч-бар виден со счётчиком
+        assert sorted(d["sel"]) == ["https://la.com", "https://lb.com"], d
+        assert d["barHidden"] is False
+        assert d["count"] == "2 выбрано"
+
+    def test_second_click_deselects_all(self):
+        self._load()
+        self._click()
+        self._click()
+        assert self.page.evaluate("document.querySelectorAll('.tab-card.selected').length") == 0
+        assert self.page.evaluate("document.getElementById('selection-bar').classList.contains('hidden')") is True
+        assert not self.page.evaluate("document.querySelector('.loose-label .loose-select').classList.contains('on')")
+
+    def test_button_on_when_all_loose_selected(self):
+        # Все негрупповые выделены — кнопка в активном (заполненном) состоянии
+        self._load()
+        self._click()
+        assert self.page.evaluate("document.querySelector('.loose-label .loose-select').classList.contains('on')")
+
+    def test_selection_covers_full_loose_set_under_filter(self):
+        # Поиск сужает видимые негрупповые карточки до одной — клик по ☑ всё равно
+        # выделяет ПОЛНЫЙ набор негрупповых вкладок пространства, а не видимые
+        self._load()
+        self.page.evaluate("""(() => {
+          const inp = document.getElementById('search');
+          inp.value = 'Alpha';
+          inp.dispatchEvent(new Event('input', {bubbles: true}));
+        })()""")
+        assert self.page.evaluate("document.querySelectorAll('.tab-card').length") == 1
+        self._click()
+        assert self.page.evaluate("document.getElementById('selection-count').textContent") == "2 выбрано"
+        # Снимаем фильтр — обе негрупповые вкладки стоят выделенными
+        self.page.evaluate("""(() => {
+          const inp = document.getElementById('search');
+          inp.value = '';
+          inp.dispatchEvent(new Event('input', {bubbles: true}));
+        })()""")
+        d = json.loads(self.page.evaluate("""(() => {
+          const sel = [...document.querySelectorAll('.tab-card.selected')].map(c => c.__tab.url);
+          return JSON.stringify({sel});
+        })()"""))
+        assert sorted(d["sel"]) == ["https://la.com", "https://lb.com"], d
+
+
+
+class TestDragRowKeeper:
+    """Row keeper: невидимый placeholder в КОНЦЕ исходной секции. Пока
+    ghost-slot находится в исходной секции (дома или где ещё), сам ghost
+    занимает один слот — keeper в DOM не подключается; когда ghost уходит в
+    ДРУГУЮ секцию, row-keeper встаёт в конце исходной: карточки закрывают
+    высвобожденный слот (без «дырки»), а число строк секции не меняется —
+    список под ней не сдвигается при быстром перетаскивании. На dragend —
+    без следов."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    SP = [{"id": "sp1", "name": "Main"}]
+    TABS3 = [
+        {"name": "A", "url": "https://a.com", "spaceId": "sp1"},
+        {"name": "B", "url": "https://b.com", "spaceId": "sp1"},
+        {"name": "C", "url": "https://c.com", "spaceId": "sp1"},
+    ]
+
+    def _start_drag(self, idx):
+        self.page.evaluate("""(idx) => {
+          const card = document.querySelectorAll('#tabs-list .tab-card')[idx];
+          window.__srcCard = card;
+          const dt = new DataTransfer();
+          window.__dt = dt;
+          card.dispatchEvent(new DragEvent('dragstart',
+            {dataTransfer: dt, bubbles: true, cancelable: true}));
+        }""", idx)
+        self.page.wait_for_timeout(50)  # отложенное скрытие карточки + ghost-slot
+
+    def _dragover_card(self, idx):
+        self.page.evaluate("""(idx) => {
+          const card = document.querySelectorAll('#tabs-list .tab-card')[idx];
+          const r = card.getBoundingClientRect();
+          card.dispatchEvent(new DragEvent('dragover', {
+            dataTransfer: window.__dt, bubbles: true, cancelable: true,
+            clientX: r.left + r.width / 2, clientY: r.top + r.height / 2
+          }));
+        }""", idx)
+
+    def _end_drag(self):
+        self.page.evaluate("""(() => {
+          const card = window.__srcCard;
+          if (card) card.dispatchEvent(new DragEvent('dragend',
+            {bubbles: true, cancelable: true}));
+        })()""")
+
+    def _anchor_top(self):
+        return self.page.evaluate(
+            "document.getElementById('add-group-btn').getBoundingClientRect().top")
+
+    def _inject_css(self):
+        css = load_file("theme.css")
+        html = load_file("view.html")
+        style_block = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate("""(css) => {
+          const s = document.createElement('style');
+          s.textContent = css;
+          document.head.appendChild(s);
+        }""", css + style_block)
+
+    def test_no_keeper_and_refill_when_ghost_stays_in_section(self):
+        # Ghost ушёл от дома, но остаётся В СЕКЦИИ: .tab-row-keeper в DOM нет,
+        # слот скрытой карточки закрыт reflow (B встаёт в слот C), якорь под
+        # списком не сдвинулся
+        load_view(self.page, spaces=self.SP, tabs=self.TABS3)
+        self._inject_css()  # реальная сетка: 3 карточки = одна строка
+        self.page.set_viewport_size({"width": 1280, "height": 800})
+        self.page.wait_for_timeout(50)
+        pre = self._anchor_top()
+        c_before = json.loads(self.page.evaluate("""(() => {
+          const b = document.querySelectorAll('#tabs-list .tab-card')[2].getBoundingClientRect();
+          return JSON.stringify({left: b.left, top: b.top});
+        })()"""))
+        self._start_drag(2)
+        self._dragover_card(0)
+        d = json.loads(self.page.evaluate("""(() => {
+          const src = window.__srcCard;
+          const slot = document.querySelector('.tab-ghost-slot');
+          const b = document.querySelectorAll('#tabs-list .tab-card')[1];
+          const bb = b.getBoundingClientRect();
+          return JSON.stringify({
+            keepers: document.querySelectorAll('.tab-row-keeper').length,
+            srcDisplay: src.style.display,
+            slotAtStart: document.getElementById('tabs-list').firstElementChild === slot,
+            bLeft: bb.left, bTop: bb.top,
+            top: document.getElementById('add-group-btn').getBoundingClientRect().top
+          });
+        })()"""))
+        assert d["keepers"] == 0, d
+        assert d["srcDisplay"] == "none", d
+        assert d["slotAtStart"], d  # заглушка в начале списка (до A)
+        assert abs(d["bLeft"] - c_before["left"]) < 2 and abs(d["bTop"] - c_before["top"]) < 2, (c_before, d)
+        assert abs(d["top"] - pre) < 2, (pre, d["top"])
+        self._end_drag()
+
+    def test_dragend_removes_keeper_and_restores_card(self):
+        # Drag без drop: keeper и ghost-заглушка сняты, карточка снова в слоте
+        load_view(self.page, spaces=self.SP, tabs=self.TABS3)
+        self._start_drag(2)
+        self._dragover_card(0)
+        self._end_drag()
+        d = json.loads(self.page.evaluate("""(() => JSON.stringify({
+          keepers: document.querySelectorAll('.tab-row-keeper').length,
+          slots: document.querySelectorAll('.tab-ghost-slot').length,
+          srcDisplay: window.__srcCard.style.display,
+          srcConnected: window.__srcCard.isConnected,
+          cards: document.querySelectorAll('#tabs-list .tab-card').length
+        }))()"""))
+        assert d["keepers"] == 0 and d["slots"] == 0, d
+        assert d["srcDisplay"] == "" and d["srcConnected"] and d["cards"] == 3, d
+
+    def test_no_keeper_while_ghost_at_home(self):
+        # Ghost-заглушка стоит СРАЗУ ПОСЛЕ скрытой карточки (дом) — keeper
+        # в DOM не подключается
+        load_view(self.page, spaces=self.SP, tabs=self.TABS3)
+        self._start_drag(0)
+        self._dragover_card(0)  # over своей карточке — слот остался дома
+        d = json.loads(self.page.evaluate("""(() => JSON.stringify({
+          keepers: document.querySelectorAll('.tab-row-keeper').length,
+          slotAtHome: window.__srcCard.nextElementSibling ===
+            document.querySelector('.tab-ghost-slot')
+        }))()"""))
+        assert d["keepers"] == 0, d
+        assert d["slotAtHome"], d
+        self._end_drag()
+
+    def test_cross_section_keeper_at_source_tail_real_grid(self):
+        # Реальная сетка (theme.css + стили view.html), 1280 → 6 колонок:
+        # группа (2 вкладки) сверху + 13 негрупповых (6+6+1). Последняя вкладка
+        # в одиночестве в последней строке перетаскивается в группу: keeper
+        # стоит в КОНЦЕ исходной (loose) секции (после последней видимой
+        # карточки, не за захваченной), строка не схлопывается — якорь под
+        # списком стоит на месте
+        tabs = [
+            {"name": "M1", "url": "https://m1.com", "spaceId": "sp1", "groupId": "g1"},
+            {"name": "M2", "url": "https://m2.com", "spaceId": "sp1", "groupId": "g1"},
+        ] + [
+            {"name": f"T{i}", "url": f"https://t{i}.com", "spaceId": "sp1"}
+            for i in range(1, 14)
+        ]
+        load_view(self.page, spaces=self.SP,
+                  groups=[{"id": "g1", "name": "G", "spaceId": "sp1", "collapsed": False}],
+                  tabs=tabs, last_space="sp1")
+        self._inject_css()
+        self.page.set_viewport_size({"width": 1280, "height": 800})
+        self.page.wait_for_timeout(50)
+        pre = self._anchor_top()
+        self._start_drag(14)  # последняя негрупповая (одинокая в последней строке)
+        self._dragover_card(0)  # карточка группы — за пределами секции
+        d = json.loads(self.page.evaluate("""(() => {
+          const k = document.querySelector('.tab-row-keeper');
+          const tail = document.querySelectorAll('#tabs-list .tab-card')[13];  // T12 — последняя видимая loose
+          return JSON.stringify({
+            keeperExists: !!k,
+            keeperAfterSectionTail: !!k && tail.nextElementSibling === k,
+            notAfterSource: !!k && window.__srcCard.nextElementSibling !== k,
+            srcHidden: window.__srcCard.style.display === 'none',
+            opacity: k ? k.style.opacity : null,
+            pointerEvents: k ? k.style.pointerEvents : null,
+            top: document.getElementById('add-group-btn').getBoundingClientRect().top
+          });
+        })()"""))
+        assert d["keeperExists"] and d["keeperAfterSectionTail"] and d["notAfterSource"] and d["srcHidden"], d
+        assert d["opacity"] == "0" and d["pointerEvents"] == "none", d
+        assert abs(d["top"] - pre) < 2, (pre, d["top"])
+        self._end_drag()
+
+
+class TestEmptyGroupAutoCollapse:
+    """Автосворачивание: группа, потерявшая ПОСЛЕДНЮЮ вкладку (перенос в
+    «Без группы» или удаление ✕), сворачивается сама — вместо шапки с
+    «Перетащите вкладку сюда» — свёрнутая шапка «0 вкладок». Пустая группа,
+    только что созданная или раскрытая вручную, остаётся развёрнутой
+    (слот = цель дропа)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    SP = [{"id": "sp1", "name": "Main"}]
+    G1 = {"id": "g1", "name": "Dev", "spaceId": "sp1", "collapsed": False}
+
+    def _collapsed(self):
+        return read_storage_raw(self.page, "blattam-groups")[0]["collapsed"]
+
+    def test_last_tab_moved_out_collapses_group(self):
+        # Единственная вкладка группы уезжает в «Без группы» (place-tab,
+        # groupId null) — группа сворачивается: ▸ + «0 вкладок», слота нет
+        load_view(self.page, spaces=self.SP, groups=[dict(self.G1)],
+                  tabs=[{"name": "D1", "url": "https://d1.com",
+                         "spaceId": "sp1", "groupId": "g1"}])
+        self.page.evaluate("""chrome.runtime.sendMessage({action: 'place-tab',
+            index: 0, anchorIndex: 1, side: 'after', groupId: null})""")
+        self.page.wait_for_timeout(100)
+        assert self.page.evaluate("document.querySelector('.gbar .chev').textContent") == "▸"
+        assert self.page.evaluate("document.querySelectorAll('.group-empty-slot').length") == 0
+        assert self.page.evaluate("document.querySelector('.gbar .gcount').textContent") == "0 вкладок"
+        assert self._collapsed() is True
+
+    def test_group_with_two_tabs_stays_expanded(self):
+        # Две вкладки: одна уезжает в «Без группы» — группа остаётся
+        # развёрнутой (член ещё есть): ▾, пустого слота нет
+        load_view(self.page, spaces=self.SP, groups=[dict(self.G1)], tabs=[
+            {"name": "D1", "url": "https://d1.com", "spaceId": "sp1", "groupId": "g1"},
+            {"name": "D2", "url": "https://d2.com", "spaceId": "sp1", "groupId": "g1"},
+        ])
+        self.page.evaluate("""chrome.runtime.sendMessage({action: 'place-tab',
+            index: 0, anchorIndex: 1, side: 'before', groupId: null})""")
+        self.page.wait_for_timeout(100)
+        assert self.page.evaluate("document.querySelector('.gbar .chev').textContent") == "▾"
+        assert self.page.evaluate("document.querySelectorAll('.group-empty-slot').length") == 0
+        assert self.page.evaluate("document.querySelector('.gbar .gcount').textContent") == "1 вкладка"
+        assert self._collapsed() is False
+
+    def test_last_tab_deleted_collapses_group(self):
+        # ✕ на карточке удаляет единственную вкладку группы — группа
+        # сворачивается: ▸ + «0 вкладок», слота нет, вкладки пустые
+        load_view(self.page, spaces=self.SP, groups=[dict(self.G1)], confirm=True,
+                  tabs=[{"name": "D1", "url": "https://d1.com",
+                         "spaceId": "sp1", "groupId": "g1"}])
+        self.page.evaluate("document.querySelector('.tab-card .tab-remove').click()")
+        self.page.wait_for_timeout(100)
+        assert self.page.evaluate("document.querySelector('.gbar .chev').textContent") == "▸"
+        assert self.page.evaluate("document.querySelectorAll('.group-empty-slot').length") == 0
+        assert self.page.evaluate("document.querySelector('.gbar .gcount').textContent") == "0 вкладок"
+        assert self._collapsed() is True
+        assert read_storage_raw(self.page, "blattam-tabs") == []
+
+    def test_fresh_empty_group_stays_expanded(self):
+        # Пустая группа без членов (свежесозданная) остаётся развёрнутой:
+        # ▾ + слот-подсказка «Перетащите вкладку сюда» (цель дропа)
+        load_view(self.page, spaces=self.SP, groups=[dict(self.G1)], tabs=[])
+        assert self.page.evaluate("document.querySelector('.gbar .chev').textContent") == "▾"
+        slots = self.page.evaluate("""[...document.querySelectorAll(
+            '.group-empty-slot')].map(s => s.textContent)""")
+        assert slots == ["Перетащите вкладку сюда"]
+        assert self._collapsed() is False
+
+
+
+# ==========================================
 #  ЗАПУСК
 # ==========================================
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])
+class TestGhostOverExpandedGbar:
+    """Драг карточки над шапкой РАЗВЁРНУТОЙ группы (есть видимые карточки):
+    дроп карточки на любую шапку уводит вкладку В группу, поэтому над шапкой
+    заглушка ПРЯЧЕТСЯ ЦЕЛИКОМ (display:none — её ячейка сетки освобождается:
+    ни «тёплая» заглушка на старом месте, ни дырки); row-keeper держит число
+    строк исходной секции. Когда курсор снова попадает в список, заглушка
+    возвращается к видимости (display:'') в честном слоте. Dragend из состояния
+    «спрятанная» — без следов."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self._errors = []
+        page.on("pageerror", self._on_err)
+        yield
+        assert not self._errors, self._errors
+        page.remove_listener("pageerror", self._on_err)
+
+    def _on_err(self, err):
+        self._errors.append(str(err))
+
+    SP = [{"id": "sp1", "name": "Main"}]
+
+    def _load(self):
+        tabs = [{"name": "A%d" % i, "url": "https://a%d.com" % i, "spaceId": "sp1", "groupId": "gA"}
+                for i in range(1, 11)]
+        tabs.append({"name": "B1", "url": "https://b1.com", "spaceId": "sp1", "groupId": "gB"})
+        load_view(self.page, spaces=self.SP,
+                  groups=[{"id": "gA", "name": "A", "spaceId": "sp1", "collapsed": False},
+                          {"id": "gB", "name": "B", "spaceId": "sp1", "collapsed": False}],
+                  tabs=tabs, last_space="sp1")
+        css = load_file("theme.css")
+        html = load_file("view.html")
+        style_block = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate("""(css) => {
+          const s = document.createElement('style');
+          s.textContent = css;
+          document.head.appendChild(s);
+        }""", css + style_block)
+        self.page.set_viewport_size({"width": 1280, "height": 900})
+        self.page.wait_for_timeout(50)
+        self._maps()
+
+    def _maps(self):
+        self.page.evaluate("""(() => {
+          window.__cards = {};
+          document.querySelectorAll('#tabs-list .tab-card').forEach(c => {
+            const n = c.querySelector('.tab-name').textContent.trim();
+            window.__cards[n] = c;
+          });
+          window.__bars = {};
+          document.querySelectorAll('#tabs-list .gbar').forEach(b => {
+            window.__bars[b.dataset.groupId] = b;
+          });
+        })()""")
+
+    def _start_drag(self, name):
+        self.page.evaluate("""(name) => {
+          const card = window.__cards[name];
+          window.__srcCard = card;
+          const dt = new DataTransfer();
+          window.__dt = dt;
+          card.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true, cancelable: true}));
+        }""", name)
+        self.page.wait_for_timeout(50)
+
+    def _hover(self, name, frac=0.75):
+        self.page.evaluate("""([name, frac]) => {
+          const c = window.__cards[name];
+          const r = c.getBoundingClientRect();
+          document.getElementById('tabs-list').dispatchEvent(new DragEvent('dragover', {
+            dataTransfer: window.__dt, bubbles: true, cancelable: true,
+            clientX: r.left + r.width * frac, clientY: r.top + r.height * 0.5
+          }));
+        }""", [name, frac])
+
+    def _over_gbar(self, gid):
+        self.page.evaluate("""(gid) => {
+          const bar = window.__bars[gid];
+          const r = bar.getBoundingClientRect();
+          bar.dispatchEvent(new DragEvent('dragover', {
+            dataTransfer: window.__dt, bubbles: true, cancelable: true,
+            clientX: r.left + r.width / 2, clientY: r.top + r.height / 2
+          }));
+        }""", gid)
+
+    def _drop_on_gbar(self, gid):
+        self.page.evaluate("""(gid) => {
+          const bar = window.__bars[gid];
+          const r = bar.getBoundingClientRect();
+          bar.dispatchEvent(new DragEvent('drop', {
+            dataTransfer: window.__dt, bubbles: true, cancelable: true,
+            clientX: r.left + r.width / 2, clientY: r.top + r.height / 2
+          }));
+        }""", gid)
+
+    def _end_drag(self):
+        self.page.evaluate("""(() => {
+          const card = window.__srcCard;
+          if (card) card.dispatchEvent(new DragEvent('dragend', {bubbles: true, cancelable: true}));
+        })()""")
+
+    def _ghost_state(self):
+        return json.loads(self.page.evaluate("""(() => {
+          const slot = document.querySelector('.tab-ghost-slot');
+          return JSON.stringify({
+            exists: !!slot,
+            visible: !slot || getComputedStyle(slot).display !== 'none',
+            keepers: document.querySelectorAll('.tab-row-keeper').length
+          });
+        })()"""))
+
+    def _names(self):
+        return self.page.evaluate("""(async () => {
+          const d = await chrome.storage.get('blattam-tabs');
+          return JSON.stringify((d['blattam-tabs'] || []).map(t => t.name));
+        })()""")
+
+    def _rows_of_group(self, gid):
+        return self.page.evaluate("""(gid) => {
+          const bar = document.querySelector('#tabs-list .gbar[data-group-id="' + gid + '"]');
+          const tops = [];
+          for (let el = bar.nextElementSibling; el; el = el.nextElementSibling) {
+            if (el.classList.contains('gbar') || el.classList.contains('loose-label') || el.id === 'add-group-btn') break;
+            if (el.classList.contains('tab-ghost-slot') || el.classList.contains('tab-card') || el.classList.contains('tab-row-keeper') || el.classList.contains('group-empty-slot')) {
+              const r = el.getBoundingClientRect();
+              if (r.height > 0 && !tops.some(t => Math.abs(t - r.top) < 1)) tops.push(r.top);
+            }
+          }
+          return tops.length;
+        }""", gid)
+
+    def test_ghost_hidden_over_own_expanded_gbar(self):
+        # (a) драг A1, курсор над шапкой СОБСТВЕННОЙ развёрнутой gA: заглушка
+        # спрятана ЦЕЛИКОМ (display:none — её ячейка сетки освобождена, дырки
+        # нет), остаётся на месте (не в хвосте, не дома), не удаляется; row-keeper
+        # подключён держит число строк секции; возврат к видимости — при попадании
+        # курсора в список; дроп на развёрнутую (с видимыми карточками) шапку —
+        # no-op, вкладка не переезжает
+        self._load()
+        self._start_drag("A1")
+        self._hover("A3")                       # заглушка — посреди gA (не в хвосте)
+        self._over_gbar("gA")                   # курсор над шапкой развёрнутой gA
+        d = json.loads(self.page.evaluate("""(() => {
+          const slot = document.querySelector('.tab-ghost-slot');
+          const a10 = window.__cards['A10'];
+          return JSON.stringify({
+            exists: !!slot,
+            hidden: slot ? getComputedStyle(slot).display === 'none' : false,
+            notAtTail: a10.nextElementSibling !== slot,
+            notHome: window.__srcCard.nextElementSibling !== slot,
+            keepers: document.querySelectorAll('.tab-row-keeper').length
+          });
+        })()"""))
+        assert d == {"exists": True, "hidden": True, "notAtTail": True, "notHome": True, "keepers": 1}, d
+        self._hover("A5")                       # курсор снова в список
+        st = self._ghost_state()
+        assert st["visible"] is True, st
+        self._over_gbar("gA")                   # спрятана снова
+        self._drop_on_gbar("gA")                # дроп на развёрнутую шапку
+        names = json.loads(self._names())
+        assert names == ["A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9", "A10", "B1"], names
+        self._end_drag()
+
+    def test_ghost_hidden_over_other_expanded_gbar_then_visible(self):
+        # (b) драг A1 (gA), ниже развёрнутая gB: над шапкой gB заглушка
+        # спрятана; над первой карточкой gB (B1) — видимая в НАЧАЛЕ gB
+        self._load()
+        self._start_drag("A1")
+        self._hover("A3")
+        self._over_gbar("gB")
+        st = self._ghost_state()
+        assert st["exists"] is True and st["visible"] is False, st
+        self._hover("B1", frac=0.25)            # над первой карточкой gB (левее центра)
+        d = json.loads(self.page.evaluate("""(() => {
+          const slot = document.querySelector('.tab-ghost-slot');
+          const b1 = window.__cards['B1'];
+          return JSON.stringify({
+            visible: getComputedStyle(slot).display !== 'none',
+            atGBarStart: b1.previousElementSibling === slot,
+            keeperExists: !!document.querySelector('.tab-row-keeper')
+          });
+        })()"""))
+        assert d["visible"] is True and d["atGBarStart"] is True, d
+        self._end_drag()
+
+    def test_row_count_invariant_while_ghost_hidden(self):
+        # (d) пока заглушка спрятана над развёрнутой gA, число строк исходной
+        # секции не меняется; после возврата к видимости — без «осиротевшего»
+        # keeper (ghost в исходной секции)
+        self._load()
+        rows_before = self._rows_of_group("gA")
+        self._start_drag("A1")
+        self._hover("A3")
+        self._over_gbar("gA")
+        st = self._ghost_state()
+        assert st["visible"] is False, st
+        rows_mid = self._rows_of_group("gA")
+        assert rows_mid == rows_before, (rows_before, rows_mid)
+        self._hover("A5")
+        st2 = self._ghost_state()
+        assert st2["visible"] is True and st2["keepers"] == 0, st2
+        rows_after = self._rows_of_group("gA")
+        assert rows_after == rows_before, (rows_before, rows_after)
+        self._end_drag()
+
+    def test_dragend_after_hidden_no_leftovers(self):
+        # (e) dragend из состояния «спрятанная над развёрнутой gA»: без
+        # заглушки и keeper в DOM, карточка возвращена в слот
+        self._load()
+        self._start_drag("A1")
+        self._hover("A3")
+        self._over_gbar("gA")
+        self._end_drag()
+        d = json.loads(self.page.evaluate("""(() => JSON.stringify({
+          slots: document.querySelectorAll('.tab-ghost-slot').length,
+          keepers: document.querySelectorAll('.tab-row-keeper').length,
+          srcDisplay: window.__srcCard.style.display,
+          srcConnected: window.__srcCard.isConnected
+        }))()"""))
+        assert d["slots"] == 0 and d["keepers"] == 0 and d["srcDisplay"] == "" and d["srcConnected"], d
+
+    def test_ghost_hidden_over_empty_group_gbar_and_slot(self):
+        # (f) пустая развёрнутая группа (0 вкладок): над её шапкой И над слотом
+        # «Перетащите вкладку сюда» заглушка ПРЯЧЕТСЯ ЦЕЛИКОМ (display:none) —
+        # не «тёплая» заглушка на старом месте, не дырка; row-keeper держит число
+        # строк исходной секции; возврат к видимости — при попадании курсора в список
+        tabs = [{"name": "A1", "url": "https://a1.com", "spaceId": "sp1", "groupId": "gA"},
+                {"name": "A2", "url": "https://a2.com", "spaceId": "sp1", "groupId": "gA"}]
+        load_view(self.page, spaces=self.SP,
+                  groups=[{"id": "gA", "name": "A", "spaceId": "sp1", "collapsed": False},
+                          {"id": "gE", "name": "E", "spaceId": "sp1", "collapsed": False}],
+                  tabs=tabs, last_space="sp1")
+        css = load_file("theme.css")
+        html = load_file("view.html")
+        style_block = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate("""(css) => {
+          const s = document.createElement('style');
+          s.textContent = css;
+          document.head.appendChild(s);
+        }""", css + style_block)
+        self.page.set_viewport_size({"width": 1280, "height": 900})
+        self.page.evaluate("""(() => {
+          const card = document.querySelector('#tabs-list .tab-card');
+          window.__srcCard = card;
+          const dt = new DataTransfer();
+          window.__dt = dt;
+          card.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true, cancelable: true}));
+        })()""")
+        self.page.wait_for_timeout(50)
+
+        def state():
+            return json.loads(self.page.evaluate("""(() => {
+              const slot = document.querySelector('.tab-ghost-slot');
+              return JSON.stringify({
+                exists: !!slot,
+                hidden: slot ? getComputedStyle(slot).display === 'none' : false,
+                keepers: document.querySelectorAll('.tab-row-keeper').length
+              });
+            })()"""))
+
+        def over(selector, name=None, xfrac=0.5, yfrac=0.5):
+            self.page.evaluate("""([sel, name, x, y]) => {
+              const el = name
+                ? [...document.querySelectorAll('#tabs-list .tab-card')].find(c => c.querySelector('.tab-name').textContent.trim() === name)
+                : document.querySelector(sel);
+              const r = el.getBoundingClientRect();
+              el.dispatchEvent(new DragEvent('dragover', {
+                dataTransfer: window.__dt, bubbles: true, cancelable: true,
+                clientX: r.left + r.width * x, clientY: r.top + r.height * y}));
+            }""", [selector, name, xfrac, yfrac])
+
+        # над шапкой пустой gE — заглушка спрятана (не «домой»), keeper держит строки
+        over("#tabs-list .gbar[data-group-id='gE']")
+        st = state()
+        assert st["exists"] is True and st["hidden"] is True and st["keepers"] == 1, st
+        # над слотом «Перетащите вкладку сюда» — тоже спрятана
+        over("#tabs-list .group-empty-slot")
+        st = state()
+        assert st["exists"] is True and st["hidden"] is True and st["keepers"] == 1, st
+        # возврат в список — снова видна
+        over("", name="A2", xfrac=0.75, yfrac=0.5)
+        st = state()
+        assert st["exists"] is True and st["hidden"] is False, st
+        self._end_drag()

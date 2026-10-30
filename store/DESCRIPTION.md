@@ -8,7 +8,7 @@
 
 **BlattamToby** — менеджер сохранённых вкладок для Chrome. Расширение заменяет пустую страницу новой вкладки: **Ctrl+T** (или кнопка «+») открывает вашу собственную стартовую страницу — сетку карточек со всеми сохранёнными ссылками.
 
-Сохраняйте вкладки одним кликом из popup или горячей клавишей **Ctrl+Shift+S** — и мгновенно возвращайтесь к ним на любом устройстве: данные синхронизируются через `chrome.storage.sync`.
+Сохраняйте вкладки одним кликом из popup или горячей клавишей **Ctrl+Shift+S** — и мгновенно возвращайтесь к ним на новой вкладке (Ctrl+T). Пространства и группы синхронизируются между устройствами через `chrome.storage.sync`.
 
 Дизайн — минималистичный монохром в духе Vercel: чёрный/белый/серый, шрифт Geist, тонкие 1px-границы; тёмная тема одним кликом.
 
@@ -24,7 +24,7 @@
 - **Клавиатурная навигация** — стрелки по карточкам (с зацикливанием), Enter — открыть, Delete — удалить, Esc — сброс.
 - **Тёмная тема** — переключатель 🌙/☀️ в шапке, выбор сохраняется.
 - **Горячая клавиша** — Ctrl+Shift+S сохраняет текущую вкладку.
-- **Синхронизация** — вкладки и папки — в `chrome.storage.sync` (синхронизация между устройствами).
+- **Хранилище** — список вкладок — в `chrome.storage.local` (per-device, до ~10 МБ — влезает большая коллекция); пространства и группы — в `chrome.storage.sync` (синхронизация между устройствами).
 - **Экспорт / импорт JSON** — перенос коллекции с папками.
 
 ### Превью
@@ -37,7 +37,7 @@
 
 **BlattamToby** is a saved-tabs manager for Chrome. It replaces the empty new-tab page: **Ctrl+T** (or the «+» button) opens your own start page — a grid of cards with all your saved links.
 
-Save tabs with one click from the popup or the **Ctrl+Shift+S** hotkey — and jump back to them on any device: data is synchronized via `chrome.storage.sync`.
+Save tabs with one click from the popup or the **Ctrl+Shift+S** hotkey — and jump back to them instantly on the new-tab page (Ctrl+T). Spaces and groups are synchronized across devices via `chrome.storage.sync`.
 
 The design is minimal monochrome, Vercel-style: black/white/grey, Geist font, crisp 1px borders; dark theme in one click.
 
@@ -52,5 +52,5 @@ The design is minimal monochrome, Vercel-style: black/white/grey, Geist font, cr
 - **Keyboard navigation** — arrow keys across cards (wrapping), Enter to open, Delete to remove, Esc to reset.
 - **Dark theme** — 🌙/☀️ toggle in the header, choice is persisted.
 - **Hotkey** — Ctrl+Shift+S saves the current tab.
-- **Sync** — tabs and folders live in `chrome.storage.sync` (across devices).
+- **Storage** — the tab list lives in `chrome.storage.local` (per device, up to ~10 MB — large collections fit); spaces and groups live in `chrome.storage.sync` (across devices).
 - **JSON export / import** — migrate your collection with folders.

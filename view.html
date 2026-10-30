@@ -177,8 +177,19 @@
     }
     .loose-label {
       grid-column: 1 / -1;
+      display: flex; align-items: center; gap: 8px;
       font: 500 10.5px/1 var(--font-mono); color: var(--text-faint); text-transform: uppercase; letter-spacing: .08em;
     }
+    /* ☑ — выбрать/снять выбор всех негрупповых вкладок пространства (аналог ☑ шапки группы) */
+    .loose-select {
+      flex: none; width: 18px; height: 18px; border: 0; border-radius: 50%; padding: 0;
+      display: grid; place-items: center; background: transparent;
+      font: 400 11px/1 var(--font-ui); color: var(--text-faint);
+      opacity: 0; transition: opacity .12s, background .1s, color .1s;
+    }
+    .loose-label:hover .loose-select { opacity: 1; }
+    .loose-select:hover { background: var(--bg); box-shadow: 0 0 0 1px var(--line); color: var(--text); }
+    .loose-select.on { opacity: 1; background: var(--ink); color: var(--on-ink); box-shadow: none; }
     /* Слот-заглушка пустой развёрнутой группы: полноширинная строка высотой
     // с карточкой (.tab-card min-height), пунктир --dashed, радиус карточки;
     // армед-вид (.drop-over) — тёплый тон. Drop-цель карточки (view.js) */

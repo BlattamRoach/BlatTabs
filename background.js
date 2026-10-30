@@ -15,13 +15,40 @@ const DEFAULT_SPACE_NAME = 'Мои вкладки';
 
 // === Хелперы ===
 
+// === Миграция: вкладки sync → local (идемпотентная) ===
+// blattam-tabs — большой ключ (~10 МБ), поэтому живёт в chrome.storage.local
+// (per-device; лимит sync-хранилища 8 КБ/ключ ломал запись ~20+ вкладок).
+// При загрузке: если local пуст (нет/пусто), а sync непуст — копируем ключ
+// из sync в local и удаляем sync-ключ. Если local уже заполнен — только
+// гарантируем удаление stale-sync-ключа. Запускать можно из любого контекста
+// (background.js и view.js) — идемпотентно и детерминированно.
+let tabsMigrated = null;
+function migrateTabsToLocalStorage() {
+  if (tabsMigrated) return tabsMigrated;
+  tabsMigrated = (async () => {
+    const localData = await chrome.storage.local.get(STORAGE_KEY);
+    const syncData = await chrome.storage.sync.get(STORAGE_KEY);
+    const localTabs = Array.isArray(localData[STORAGE_KEY]) ? localData[STORAGE_KEY] : [];
+    const syncTabs = Array.isArray(syncData[STORAGE_KEY]) ? syncData[STORAGE_KEY] : [];
+    if (localTabs.length === 0 && syncTabs.length > 0) {
+      await chrome.storage.local.set({ [STORAGE_KEY]: syncTabs });
+    }
+    if (syncData[STORAGE_KEY] !== undefined) {
+      await chrome.storage.sync.remove(STORAGE_KEY);
+    }
+  })();
+  return tabsMigrated;
+}
+
 async function loadTabs() {
-  const data = await chrome.storage.sync.get(STORAGE_KEY);
+  await migrateTabsToLocalStorage();
+  const data = await chrome.storage.local.get(STORAGE_KEY);
   return data[STORAGE_KEY] || [];
 }
 
 async function saveTabs(tabs) {
-  await chrome.storage.sync.set({ [STORAGE_KEY]: tabs });
+  await migrateTabsToLocalStorage();
+  await chrome.storage.local.set({ [STORAGE_KEY]: tabs });
 }
 
 async function loadSpaces() {
@@ -80,8 +107,10 @@ function migrateFoldersToSpaces(tabs, spaces, folders) {
 // Гарантирует существование пространств: миграция legacy (если нужна) +
 // по умолчанию «Мои вкладки». Возвращает актуальный массив.
 async function ensureSpaces() {
-  const data = await chrome.storage.sync.get([SPACES_KEY, FOLDERS_KEY, STORAGE_KEY]);
-  const tabs = Array.isArray(data[STORAGE_KEY]) ? data[STORAGE_KEY] : [];
+  await migrateTabsToLocalStorage(); // вкладки — в local (ДО чтения/записи)
+  const data = await chrome.storage.sync.get([SPACES_KEY, FOLDERS_KEY]);
+  const localData = await chrome.storage.local.get(STORAGE_KEY);
+  const tabs = Array.isArray(localData[STORAGE_KEY]) ? localData[STORAGE_KEY] : [];
   const folders = data[FOLDERS_KEY];
   let spaces = data[SPACES_KEY];
 
@@ -90,7 +119,8 @@ async function ensureSpaces() {
     // Legacy: нет blattam-spaces, но есть blattam-folders или вкладки с folderId
     if (folders !== undefined || tabs.some(t => t && t.folderId != null)) {
       migrateFoldersToSpaces(tabs, spaces, folders);
-      await chrome.storage.sync.set({ [STORAGE_KEY]: tabs, [SPACES_KEY]: spaces });
+      await chrome.storage.local.set({ [STORAGE_KEY]: tabs });
+      await chrome.storage.sync.set({ [SPACES_KEY]: spaces });
       if (folders !== undefined) await chrome.storage.sync.remove(FOLDERS_KEY);
     }
   }
@@ -307,6 +337,33 @@ async function placeTab(tabIndex, anchorIndex, side, groupId) {
   await saveTabs(tabs);
 }
 
+// Поставить группу ВЫДЕЛЕННЫХ вкладок в позицию слота DnD (перенос батча):
+// все вкладки из `urls` (порядок между ними — исходный) вырезаются из
+// ПОЛНОГО массива и вставляются блоком на позицию слота — перед/после
+// якорной вкладки (anchorUrl null — в конец списка); у всех задаётся groupId
+// секции слота (null — «Без группы»). spaceId не меняется.
+async function placeTabs(urls, anchorUrl, side, groupId) {
+  const tabs = await loadTabs();
+  const urlsSet = new Set(Array.isArray(urls) ? urls : []);
+  const moved = tabs.filter(t => urlsSet.has(t.url));
+  if (!moved.length) return;
+  let at;
+  if (anchorUrl === null || anchorUrl === undefined) {
+    at = tabs.length - moved.length; // конец списка после вырезания
+  } else {
+    const a = tabs.findIndex(t => t.url === anchorUrl);
+    if (a === -1) return;
+    let removedBefore = 0;
+    for (let i = 0; i < a; i++) if (urlsSet.has(tabs[i].url)) removedBefore++;
+    at = side === 'after' ? a - removedBefore + 1 : a - removedBefore;
+  }
+  at = Math.max(0, Math.min(tabs.length - moved.length, at));
+  for (const tab of moved) if (groupId !== undefined) tab.groupId = groupId;
+  const rest = tabs.filter(t => !urlsSet.has(t.url));
+  rest.splice(at, 0, ...moved);
+  await saveTabs(rest);
+}
+
 // Переименовать вкладку
 async function renameTab(tabIndex, newName) {
   const tabs = await loadTabs();
@@ -372,6 +429,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     case 'place-tab':
       placeTab(msg.index, msg.anchorIndex, msg.side, msg.groupId);
       break;
+    case 'place-tabs':
+      placeTabs(msg.urls, msg.anchorUrl, msg.side, msg.groupId);
+      break;
     case 'update-tab':
       updateTab(msg.index, msg.name, msg.url, msg.comment);
       break;
@@ -418,7 +478,8 @@ chrome.commands.onCommand.addListener((command) => {
   });
 });
 
-// Автомиграция legacy-папок при загрузке расширения
+// Автомиграция при загрузке расширения: вкладки sync → local + legacy-папки
+migrateTabsToLocalStorage();
 ensureSpaces();
 
 // === Чистка: скриншоты вырезаны из проекта ===

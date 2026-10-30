@@ -66,7 +66,26 @@ let selectedUrls = new Set(); // выбор вкладок для массово
 let dragSourceUrl = null; // URL перетаскиваемой карточки (для reorder; индексы в payload могут устареть)
 let dragSourceCardEl = null; // DOM-элемент перетаскиваемой карточки (исключается из расчёта зазора)
 let dragGhostSlot = null; // ghost-slot: пустая заглушка размера карточки на её месте в сетке
+let dragRowKeeper = null; // invisible card-sized placeholder: holds the source
+                          // section's row count while the ghost slot is in ANOTHER
+                          // section — attaches at the section's TAIL (after its last
+                          // visible card / its gbar / before «+ Группа»), so the grid
+                          // reflows into the vacated slot (no hole) and nothing below
+                          // shifts when quickly dragging tabs
 let dragSourceGroupId = null; // id перетаскиваемой группы (reorder шапок внутри пространства)
+let dragBatchUrls = null; // все вкладки, уезжающие с перетаскиваемой карточкой:
+                          // выделенный батч (порядок — исходный, из allTabs) или [dragSourceUrl]
+let dragOverTarget = null; // последний target dragover — чтобы отложенное создание
+                           // заглушки (dragstart setTimeout) повторило состояние, если
+                           // первый dragover уже попал на шапку/слот ПЕРЕД таймером
+let lastDragEndAt = 0; // время последнего dragend (карточки или шапки): клик по шапке
+                        // сразу после дропа — не действие пользователя, не сворачиваем группу
+let pendingGbarClickAfterDrag = false; // one-shot: ложный клик по шапке рождается в момент
+                        // дропа — реальный Chrome генерирует его на drop-цели ДО dragend
+                        // источника (замер: drop → click → dragend), а не только после;
+                        // поэтому флаг вооружаем на dragstart карточки и на drop по шапке
+                        // (не только на dragend) — гасим ровно ОДИН такой клик; новое
+                        // нажатие мыши (mousedown) раньше его клика сбрасывает флаг
 let activeUrl = null; // карточка, выбранная клавиатурой (по URL — переживает перерисовку)
 let openModalId = null; // id открытой модалки — чтобы глобальный keydown её не перехватывал
 
@@ -116,22 +135,49 @@ function migrateFoldersToSpaces(tabs, spaces, folders) {
   });
 }
 
+// === Миграция: вкладки sync → local (идемпотентная) ===
+// blattam-tabs — большой ключ (~10 МБ), живёт в chrome.storage.local
+// (per-device; лимит sync 8 КБ/ключ ломал запись ~20+ вкладок). ДО первого
+// рендера: если local пуст (нет/пусто), а sync непуст — копируем ключ из sync
+// в local и удаляем sync-ключ. Если local заполнен — только чистим stale-sync.
+let tabsMigrated = null;
+function migrateTabsToLocalStorage() {
+  if (tabsMigrated) return tabsMigrated;
+  tabsMigrated = (async () => {
+    const localData = await chrome.storage.local.get('blattam-tabs');
+    const syncData = await chrome.storage.sync.get('blattam-tabs');
+    const localTabs = Array.isArray(localData['blattam-tabs']) ? localData['blattam-tabs'] : [];
+    const syncTabs = Array.isArray(syncData['blattam-tabs']) ? syncData['blattam-tabs'] : [];
+    if (localTabs.length === 0 && syncTabs.length > 0) {
+      await chrome.storage.local.set({ 'blattam-tabs': syncTabs });
+    }
+    if (syncData['blattam-tabs'] !== undefined) {
+      await chrome.storage.sync.remove('blattam-tabs');
+    }
+  })();
+  return tabsMigrated;
+}
+
 // === Загрузка данных ===
 
 function loadData() {
-  chrome.storage.sync.get(['blattam-tabs', 'blattam-spaces', 'blattam-groups', 'blattam-last-space', 'blattam-folders'], (result) => {
-    const tabs = result['blattam-tabs'] || [];
+  (async () => {
+    await migrateTabsToLocalStorage(); // ДО первого рендера: вкладки — из local
+    const localData = await chrome.storage.local.get(['blattam-tabs']);
+    const result = await chrome.storage.sync.get(['blattam-spaces', 'blattam-groups', 'blattam-last-space', 'blattam-folders']);
+    const tabs = Array.isArray(localData['blattam-tabs']) ? localData['blattam-tabs'] : [];
     const spaces = Array.isArray(result['blattam-spaces']) ? result['blattam-spaces'] : [];
     const groups = Array.isArray(result['blattam-groups']) ? result['blattam-groups'] : [];
     const folders = result['blattam-folders'];
 
-    const updates = {};
+    const updates = {};       // sync (пространства/группы/last-space)
+    const localUpdates = {};  // local (вкладки)
 
     // Миграция legacy (ДО первого рендера): нет 'blattam-spaces', но есть
     // 'blattam-folders' или вкладки с folderId
     if (!Array.isArray(result['blattam-spaces']) && (folders !== undefined || tabs.some(t => t && t.folderId != null))) {
       migrateFoldersToSpaces(tabs, spaces, folders);
-      updates['blattam-tabs'] = tabs;
+      localUpdates['blattam-tabs'] = tabs;
       updates['blattam-spaces'] = spaces;
     }
 
@@ -146,7 +192,7 @@ function loadData() {
     tabs.forEach(t => {
       if (t && !t.spaceId) { t.spaceId = spaces[0].id; tabsChanged = true; }
     });
-    if (tabsChanged) updates['blattam-tabs'] = tabs;
+    if (tabsChanged) localUpdates['blattam-tabs'] = tabs;
 
     // Активное пространство: последнее посещённое (blattam-last-space),
     // если оно ещё существует, иначе первое
@@ -162,9 +208,12 @@ function loadData() {
       if (folders !== undefined) chrome.storage.sync.remove('blattam-folders');
       chrome.storage.sync.set(updates);
     }
+    if (Object.keys(localUpdates).length) {
+      chrome.storage.local.set(localUpdates);
+    }
     renderSpaces();
     renderTabs();
-  });
+  })();
 }
 
 // === Пространства (чипы) ===
@@ -517,6 +566,8 @@ function appendGroupBar(g, memberCount) {
     bar.classList.add('dragging');
   });
   bar.addEventListener('dragend', () => {
+    lastDragEndAt = Date.now();
+    pendingGbarClickAfterDrag = true;
     dragSourceGroupId = null;
     bar.classList.remove('dragging');
     clearGroupReorderIndicators();
@@ -543,15 +594,31 @@ function appendGroupBar(g, memberCount) {
   bar.addEventListener('drop', (e) => {
     e.preventDefault();
     bar.classList.remove('drop-over', 'drop-before', 'drop-after');
+    // Ложный клик по шапке рождается в этот момент (до dragend источника):
+    // вооружаем one-shot-подавление и уводим тёплую заглушку — собственный
+    // drop шапки не проходит через глобальный removeGhostSlot
+    pendingGbarClickAfterDrag = true;
+    removeGhostSlot();
     if (dragSourceGroupId) {
       reorderGroups(dragSourceGroupId, g.id, reorderSide(bar, e.clientY));
       return;
     }
     // Пустая/свёрнутая группа: карточка уходит в группу — в конец списка
-    // (anchorIndex null); карточка своей группы — no-op
+    // (anchorIndex null); карточка своей группы — no-op. Выделенный батч —
+    // целиком (place-tabs), если хотя бы одна его вкладка не в этой группе.
     if (dragSourceUrl && !groupVisibleCardCount(g.id)) {
       const src = allTabs.find(t => t.url === dragSourceUrl);
-      if (src && src.groupId !== g.id) {
+      if (!src) return;
+      const batch = dragBatchUrls && dragBatchUrls.length > 1 ? dragBatchUrls : null;
+      if (batch) {
+        if (batch.some(u => {
+          const t = allTabs.find(x => x.url === u);
+          return !t || tabGroupOf(t) !== g.id;
+        })) {
+          chrome.runtime.sendMessage({ action: 'place-tabs', urls: batch,
+            anchorUrl: null, side: 'after', groupId: g.id });
+        }
+      } else if (src.groupId !== g.id) {
         chrome.runtime.sendMessage({ action: 'place-tab', index: allTabs.indexOf(src),
           anchorIndex: null, side: 'after', groupId: g.id });
       }
@@ -560,6 +627,15 @@ function appendGroupBar(g, memberCount) {
 
   bar.addEventListener('click', () => {
     if (bar.dataset.pressBtn) return; // press начался на кнопке и сошёл на шапку — не сворачиваем
+    if (pendingGbarClickAfterDrag) {
+      // Ложный клик по шапке: браузер генерирует его в момент дропа —
+      // до dragend источника, либо позже (медленная перерисовка — за
+      // 500ms-окном lastDragEndAt) — гасим ровно один; реальное нажатие
+      // сначала прогонит document-mousedown, который сбросит флаг раньше клика
+      pendingGbarClickAfterDrag = false;
+      return;
+    }
+    if (Date.now() - lastDragEndAt < 500) return; // backstop: клик сразу после дропа — не сворачиваем
     toggleGroupCollapsed(g.id);
   });
   tabsList.appendChild(bar);
@@ -598,9 +674,21 @@ function appendEmptyGroupSlot(g) {
     slot.classList.remove('drop-over');
     if (dragSourceGroupId) return;
     const src = allTabs.find(t => t.url === dragSourceUrl);
-    if (!src || src.groupId === g.id) return;
-    chrome.runtime.sendMessage({ action: 'place-tab', index: allTabs.indexOf(src),
-      anchorIndex: null, side: 'after', groupId: g.id });
+    if (!src) return;
+    const batch = dragBatchUrls && dragBatchUrls.length > 1 ? dragBatchUrls : null;
+    if (batch) {
+      // Выделенный батч — в группу целиком, если хоть одна его вкладка не там
+      if (batch.some(u => {
+        const t = allTabs.find(x => x.url === u);
+        return !t || tabGroupOf(t) !== g.id;
+      })) {
+        chrome.runtime.sendMessage({ action: 'place-tabs', urls: batch,
+          anchorUrl: null, side: 'after', groupId: g.id });
+      }
+    } else if (src.groupId !== g.id) {
+      chrome.runtime.sendMessage({ action: 'place-tab', index: allTabs.indexOf(src),
+        anchorIndex: null, side: 'after', groupId: g.id });
+    }
   });
   tabsList.appendChild(slot);
 }
@@ -619,6 +707,17 @@ function toggleGroupCollapsed(groupId) {
 // переживает перерисовку; перерисовка — с текущим поиском.
 function toggleGroupSelection(g) {
   const urls = allTabs.filter(t => t.spaceId === g.spaceId && t.groupId === g.id).map(t => t.url);
+  if (urls.length === 0) return;
+  const allSelected = urls.every(u => selectedUrls.has(u));
+  urls.forEach(u => allSelected ? selectedUrls.delete(u) : selectedUrls.add(u));
+  renderTabs(searchInput.value);
+}
+
+// ☑ — выбрать/снять выбор ВСЕХ негрупповых вкладок активного пространства
+// (секция «Без группы»; как у групп — независимо от поиска). Все члены уже
+// выделены — снять всех, иначе — выделить всех.
+function toggleLooseSelection() {
+  const urls = allTabs.filter(t => t.spaceId === activeSpaceId && isLooseTab(t)).map(t => t.url);
   if (urls.length === 0) return;
   const allSelected = urls.every(u => selectedUrls.has(u));
   urls.forEach(u => allSelected ? selectedUrls.delete(u) : selectedUrls.add(u));
@@ -751,7 +850,7 @@ function appendCard(tab) {
     e.stopPropagation();
     if (confirm(`Удалить вкладку "${tab.name}"?`)) {
       allTabs.splice(allTabs.indexOf(tab), 1);
-      chrome.storage.sync.set({ 'blattam-tabs': allTabs });
+      chrome.storage.local.set({ 'blattam-tabs': allTabs });
       renderTabs(searchInput.value);
     }
   });
@@ -861,26 +960,56 @@ function appendCard(tab) {
     e.dataTransfer.effectAllowed = 'move';
     dragSourceUrl = tab.url;
     dragSourceCardEl = card;
+    dragRowKeeper = null;
+    dragOverTarget = null; // свежий драг — целевой dragover ещё не приходил
+    // Вооружаем подавление ложного клика по шапке уже на dragstart: реальный
+    // Chrome генерирует его на drop-цели ДО dragend источника — флаг, поставленный
+    // только на dragend, его не поймаешь
+    pendingGbarClickAfterDrag = true;
+    // Выделенный батч: перетаскивая ЛЮБУЮ выделенную карточку, переезжают ВСЕ
+    // выделенные вкладки (батч — в исходном порядке). В рендере — как одна:
+    // скрывается только эта карточка, заглушка одна.
+    dragBatchUrls = (selectedUrls.size > 1 && selectedUrls.has(tab.url))
+      ? allTabs.filter(t => selectedUrls.has(t.url)).map(t => t.url)
+      : [tab.url];
     card.classList.add('dragging');
     // Оригинал исчезает из слота (нативный drag-образ браузера следует за
     // курсором); место занимает тёплая заглушка (ghost-slot) — отложенно:
     // display:none в самом dragstart «залипает» HTML5-drag в Chrome
     setTimeout(() => {
-      if (dragSourceUrl !== tab.url) return;
+      // Перерисовка во время драга уносит карточку из DOM, а поздний drop/dragend
+      // уже решил драг — заглушку для отсоединённой карточки не вставляем
+      if (dragSourceUrl !== tab.url || !card.isConnected) return;
       if (!dragGhostSlot) {
         // Меряем ДО display:none (у скрытой карточки offsetWidth/Height = 0)
         dragGhostSlot = makeGhostSlot(card);
         card.insertAdjacentElement('afterend', dragGhostSlot);
+        // row keeper — created while card still visible (for its size); it attaches
+        // in syncRowKeeper when the ghost slot leaves the SOURCE SECTION
+        dragRowKeeper = makeRowKeeper(card);
       }
       card.style.display = 'none';
+      // Гонка: первый dragover мог попасть на шапку/слот ПЕРЕД этим таймером
+      // (заглушки ещё не существовало). Повторяем состояние по dragOverTarget,
+      // иначе свежая заглушка неверно «замигает» дома.
+      if (dragOverTarget && dragOverTarget.closest &&
+          (dragOverTarget.closest('.gbar') || dragOverTarget.closest('.group-empty-slot'))) {
+        setGhostDisplay('none');
+        ensureSourceRowKeeper();
+      }
     }, 0);
   });
   card.addEventListener('dragend', () => {
+    lastDragEndAt = Date.now();
+    pendingGbarClickAfterDrag = true;
     dragSourceUrl = null;
     dragSourceCardEl = null;
+    dragBatchUrls = null;
+    dragOverTarget = null; // не держим ссылку на DOM-узел после драга
     card.classList.remove('dragging');
+    removeGhostSlot(); // заглушка + row keeper снимаются первыми, затем карточка
+                       // возвращается в свой слот
     if (card.isConnected) card.style.display = ''; // drag без drop — вернуть карточку в слот
-    removeGhostSlot();
     document.querySelectorAll('.space-chip.drag-over').forEach(c => c.classList.remove('drag-over'));
   });
 
@@ -924,6 +1053,7 @@ function renderTabs(filter = '') {
   // Перерисовка во время перетаскивания уносит заглушку (и заменяет карточку) —
   // сбрасываем ссылку, чтобы ghost-slot не «воскрес» после dragend
   if (dragGhostSlot && !dragGhostSlot.isConnected) dragGhostSlot = null;
+  dragRowKeeper = null; // DOM списка пересоздан — элемент keeper унесён
 
   const sTabs = spaceTabs();
   const sGroups = spaceGroups();
@@ -977,7 +1107,25 @@ function renderTabs(filter = '') {
   if (sGroups.length > 0 && loose.length > 0) {
     const lbl = document.createElement('div');
     lbl.className = 'loose-label';
-    lbl.textContent = 'Без группы';
+
+    const lname = document.createElement('span');
+    lname.className = 'loose-name';
+    lname.textContent = 'Без группы';
+    lbl.appendChild(lname);
+
+    // ☑ — выбрать/снять выбор ВСЕХ негрупповых вкладок пространства
+    // (аналог ☑ шапки группы; проверяет ПОЛНЫЙ набор, а не видимые)
+    const looseAllUrls = sTabs.filter(t => isLooseTab(t)).map(t => t.url);
+    const lselect = document.createElement('button');
+    lselect.className = 'loose-select';
+    lselect.textContent = '\u2611';
+    lselect.title = 'Выбрать все вкладки без группы';
+    if (looseAllUrls.length > 0 && looseAllUrls.every(u => selectedUrls.has(u))) lselect.classList.add('on');
+    lselect.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleLooseSelection();
+    });
+    lbl.appendChild(lselect);
     tabsList.appendChild(lbl);
   }
   loose.forEach(t => {
@@ -1021,6 +1169,15 @@ function attachSpaceDrop(chip, spaceId) {
     e.preventDefault();
     chip.classList.remove('drag-over');
     if (dragSourceGroupId) return;
+    const batch = dragBatchUrls;
+    if (batch && batch.length > 1) {
+      // Выделенный батч: уезжают все выделенные вкладки (в пространство, без группы)
+      for (const u of batch) {
+        const tab = allTabs.find(t => t.url === u);
+        if (tab) moveTabTo(tab, spaceId, undefined);
+      }
+      return;
+    }
     const idx = parseInt(e.dataTransfer.getData('text/plain'), 10);
     const tab = allTabs[idx];
     if (tab) moveTabTo(tab, spaceId, undefined);
@@ -1057,6 +1214,21 @@ function makeGhostSlot(card) {
   return slot;
 }
 
+// Row keeper: НЕВИДИМЫЙ placeholder (размер карточки) в КОНЦЕ исходной секции.
+// syncRowKeeper подключает его, когда ghost-slot УХОДИТ ИЗ исходной секции:
+// карточки закрывают высвобожденный слот (без дырки), а число строк секции не
+// меняется — список под ней не сдвигается при быстром перетаскивании.
+// Инлайн-стили — в тестах head-стили view.html не грузятся.
+function makeRowKeeper(card) {
+  const slot = document.createElement('div');
+  slot.className = 'tab-row-keeper';
+  slot.draggable = false;
+  slot.style.cssText =
+    'pointer-events:none;opacity:0;box-sizing:border-box;' +
+    'width:' + card.offsetWidth + 'px;height:' + card.offsetHeight + 'px';
+  return slot;
+}
+
 // Переносит заглушку в потенциальный слот вставки: anchor — {el, side} из
 // slotAnchor(); соседи сдвигаются естественным reflow сетки. Своя (отложенная)
 // точка создания — в dragstart; перерисовка во время перетаскивания уносит
@@ -1068,11 +1240,57 @@ function moveGhostSlot(anchor) {
   if (!dragGhostSlot.isConnected) { dragGhostSlot = null; return; }
   if (anchor.side === 'before') anchor.el.before(dragGhostSlot);
   else anchor.el.after(dragGhostSlot);
+  syncRowKeeper();
 }
 
 function removeGhostSlot() {
   if (dragGhostSlot && dragGhostSlot.isConnected) dragGhostSlot.remove();
   dragGhostSlot = null;
+  if (dragRowKeeper && dragRowKeeper.isConnected) dragRowKeeper.remove();
+  dragRowKeeper = null;
+}
+
+// Секция, где ghost-slot стоит сейчас (по его DOM-позиции): ближайшая
+// предыдущая .gbar — её группа; .loose-label или шапки нет — null («Без группы»).
+function ghostDomSection() {
+  if (!dragGhostSlot || !dragGhostSlot.isConnected) return null;
+  return headerSection(sectionHeaderBefore(dragGhostSlot));
+}
+
+// Элемент, за который подключается row keeper (конец исходной секции):
+// последняя видимая карточка секции; без видимых карточек — её .gbar (группа)
+// или #add-group-btn (негрупповая секция).
+function rowKeeperAnchorEl() {
+  const section = tabGroupOf(dragSourceCardEl.__tab);
+  let last = null;
+  for (const c of visibleCards()) if (tabGroupOf(c.__tab) === section) last = c;
+  if (last) return last;
+  if (section !== null) {
+    const bar = document.querySelector('#tabs-list .gbar[data-group-id="' + CSS.escape(section) + '"]');
+    if (bar) return bar;
+  }
+  return document.getElementById('add-group-btn');
+}
+
+// Row keeper держит ЧИСЛО СТРОК исходной секции ровно тогда, когда ghost-slot
+// УШЁЛ ИЗ неё (заглушка в другой секции): сам ghost в исходной секции — дома
+// или где ещё — занимает один слот, keeper не нужен (секция рендерит K мест:
+// K-1 видимых карточек + ghost или keeper → число строк не меняется, а сетка
+// закрывает высвобожденный слот — без дырки на месте карточки). Keeper
+// вставляется в КОНЦЕ исходной секции. Вызывается из moveGhostSlot.
+function syncRowKeeper() {
+  if (!dragRowKeeper || !dragSourceCardEl || !dragGhostSlot) return;
+  if (ghostDomSection() === tabGroupOf(dragSourceCardEl.__tab)) {
+    if (dragRowKeeper.isConnected) dragRowKeeper.remove();
+    return;
+  }
+  if (!dragRowKeeper.isConnected) {
+    const anchorEl = rowKeeperAnchorEl();
+    if (anchorEl) {
+      if (anchorEl.id === 'add-group-btn') anchorEl.before(dragRowKeeper);
+      else anchorEl.insertAdjacentElement('afterend', dragRowKeeper);
+    }
+  }
 }
 
 // Видимые карточки для расчёта зазора: перетаскиваемая карточка
@@ -1114,6 +1332,26 @@ function headerSection(header) {
   return header && header.classList.contains('gbar') ? (header.dataset.groupId || null) : null;
 }
 
+// Слот самой исходной карточки (домой): в исходной секции НЕТ других видимых
+// карточек (скрытая карточка читается как «пусто»), а курсор в полосе исходной
+// секции (от низа её шапки до верха шапки следующей секции). Без проверки
+// геометрия прыгает через полосу исходной секции в соседнюю — заглушка
+// уезжает, и единственную вкладку нельзя вернуть на место.
+function slotIsSourceHome(clientY) {
+  const card = dragSourceCardEl;
+  if (!card || !card.isConnected) return false;
+  const srcGroup = tabGroupOf(card.__tab);
+  for (const c of visibleCards())
+    if (tabGroupOf(c.__tab) === srcGroup) return false;
+  const header = sectionHeaderBefore(card);
+  let n = card.nextElementSibling;
+  while (n && !n.classList.contains('gbar') && !n.classList.contains('loose-label'))
+    n = n.nextElementSibling;
+  const top = header ? header.getBoundingClientRect().bottom : 0;
+  const bottom = n ? n.getBoundingClientRect().top : Infinity;
+  return clientY != null && clientY >= top && clientY < bottom;
+}
+
 // Позиция заглушки с учётом секций: плоский gap-индекс + Y курсора →
 // {el, side}. На границе секций (карточка — первая своей секции, перед ней
 // шапка): курсор НИЖЕ середины шапки — начало этой секции (заглушка после
@@ -1122,6 +1360,9 @@ function headerSection(header) {
 function slotAnchor(idx, clientY) {
   const cards = visibleCards();
   if (!cards.length) return null;
+  // Домашний слот исходной карточки: заглушка остаётся в слоте схваченной
+  // карточки, пока курсор в полосе исходной секции (дроп туда — no-op)
+  if (slotIsSourceHome(clientY)) return { el: dragSourceCardEl, side: 'after' };
   if (idx <= 0) return { el: cards[0], side: 'before' };
   if (idx >= cards.length) return { el: cards[cards.length - 1], side: 'after' };
   const card = cards[idx];
@@ -1129,7 +1370,12 @@ function slotAnchor(idx, clientY) {
   if (header && tabGroupOf(card.__tab) !== tabGroupOf(cards[idx - 1].__tab)) {
     const r = header.getBoundingClientRect();
     const below = clientY == null || clientY > r.top + r.height / 2;
-    return { el: header, side: below ? 'after' : 'before' };
+    if (below) return { el: header, side: 'after' };
+    // «до» целевой шапки — в конец ПРЕДЫДУЩЕЙ секции (после её последней видимой
+    // карточки), а не перед шапкой: между секциями могут стоять свёрнутые группы,
+    // и перед шапкой заглушка встала бы в пространство НИЗКОЙ свёрнутой группы
+    // (она «раскрывается» с призрачной вкладкой)
+    return { el: cards[idx - 1], side: 'after' };
   }
   return { el: card, side: 'before' };
 }
@@ -1179,22 +1425,97 @@ function placeCardToSlot(src, anchor) {
   }
   const anchorIndex = allTabs.findIndex(t => t.url === anchorUrl);
   if (anchorIndex === -1) return;
+  const batch = dragBatchUrls;
+  if (batch && batch.length > 1) return placeBatchToSlot(batch, anchorUrl, side, section);
+  // Дроп в СВОЁ место исходной карточки (якорь — сама исходная, сторона
+  // «после»): no-op — позиция и группа не меняются
+  if (anchorUrl === src.url && side === 'after') return;
   let a = anchorIndex > from ? anchorIndex - 1 : anchorIndex;
   const finalAt = side === 'before' ? a : Math.min(a + 1, allTabs.length - 1);
   if (finalAt === from && section === tabGroupOf(src)) return;
   chrome.runtime.sendMessage({ action: 'place-tab', index: from, anchorIndex, side, groupId: section });
 }
 
+// Перенос выделенного батча в слот: ВСЕ вкладки `batch` (порядок между ними —
+// исходный) встают на позицию слота блоком и получают группу секции слота.
+// Симуляция по allTabs: если порядок И группы батча не меняются — no-op
+// (сообщение не шлётся, перерисовки нет).
+function placeBatchToSlot(batch, anchorUrl, side, section) {
+  const urlsSet = new Set(batch);
+  const moved = allTabs.filter(t => urlsSet.has(t.url));
+  if (!moved.length) return;
+  const a = allTabs.findIndex(t => t.url === anchorUrl);
+  if (a === -1) return;
+  let removedBefore = 0;
+  for (let i = 0; i < a; i++) if (urlsSet.has(allTabs[i].url)) removedBefore++;
+  const at = Math.max(0, Math.min(allTabs.length - moved.length,
+    side === 'after' ? a - removedBefore + 1 : a - removedBefore));
+  const rest = allTabs.filter(t => !urlsSet.has(t.url));
+  const next = rest.slice();
+  next.splice(at, 0, ...moved);
+  let changed = false;
+  for (let i = 0; i < next.length; i++) {
+    if (next[i].url !== allTabs[i].url) { changed = true; break; }
+    if (urlsSet.has(next[i].url) && section !== tabGroupOf(allTabs[i])) { changed = true; break; }
+  }
+  if (!changed) return;
+  chrome.runtime.sendMessage({ action: 'place-tabs', urls: batch, anchorUrl, side, groupId: section });
+}
+
+// Новое нажатие мыши — реальное действие пользователя: сбрасываем one-shot
+// флаг ложного post-drop клика ДО того, как придёт его click (у ложного клика
+// после drag mousedown не было)
+document.addEventListener('mousedown', () => { pendingGbarClickAfterDrag = false; }, true);
+
 // Глобальные dragover/drop: нативный drag-образ браузера следует за курсором,
 // заглушка — в ближайшую позицию вставки (с учётом секций). Свою семантику дропа
-// карточки сохранил только чип пространства (и свой обработчик drop);
-// шапка группы — только reorder — над обоими заглушка просто стоит.
+// карточки сохранили чип пространства (заглушка над ним замирает) и шапка группы /
+// слот пустой группы (вкладка уходит В группу) — над последними заглушку прячем
+// целиком: ни «тёплая» заглушка на старом месте, ни дырка на её месте не остаётся.
+// Прячет/показывает заглушку по display: display:none освобождает её ячейку
+// сетки (сетка перетекает — дырки нет), display:'' возвращает слот. Элемент НЕ
+// удаляем из DOM, чтобы moveGhostSlot мог вернуть его в позицию вставки.
+function setGhostDisplay(v) {
+  if (dragGhostSlot) dragGhostSlot.style.display = v;
+}
+
+// Подключает row-keeper в конец исходной секции, если он ещё не подключён:
+// когда заглушка скрыта, секция теряет один слот — keeper держит число строк,
+// а список под ней не сдвигается.
+function ensureSourceRowKeeper() {
+  if (!dragRowKeeper || !dragSourceCardEl) return;
+  if (dragRowKeeper.isConnected) return;
+  const a = rowKeeperAnchorEl();
+  if (!a) return;
+  if (a.id === 'add-group-btn') a.before(dragRowKeeper);
+  else a.insertAdjacentElement('afterend', dragRowKeeper);
+}
+
 document.addEventListener('dragover', (e) => {
   if (!dragSourceUrl || dragSourceGroupId || !e.dataTransfer) return;
   const t = e.target;
-  const overSpecial = t && t.closest && (t.closest('.gbar') || t.closest('.space-chip') || t.closest('.group-empty-slot'));
-  if (overSpecial || !tabsList.contains(t)) return;
-  moveGhostSlot(slotAnchor(cardGapIndex(e.clientX, e.clientY), e.clientY));
+  dragOverTarget = t;
+  // Над ЛЮБОЙ шапкой группы (.gbar — развёрнутой, свёрнутой или пустой) и над
+  // слотом пустой группы (.group-empty-slot) карточка дропается ВНУТРЬ этой
+  // группы (свой обработчик drop на этом элементе). Прячем заглушку ЦЕЛИКОМ
+  // (display:none — её ячейка сетки освобождается, сетка перетекает: ни «тёплая»
+  // заглушка на старом месте, ни дырка на её месте), а row-keeper держит число
+  // строк исходной секции. Заглушка вернётся, когда курсор снова попадёт в список
+  // (list-путь ниже). НЕ removeGhostSlot: отложенное создание заглушки — только в
+  // dragstart, удалённая заглушка больше не появится.
+  if (t && t.closest && (t.closest('.gbar') || t.closest('.group-empty-slot'))) {
+    setGhostDisplay('none');
+    ensureSourceRowKeeper();
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    return;
+  }
+  // Чип пространства: заглушка замирает на месте (поведение без изменений).
+  if (t && t.closest && t.closest('.space-chip')) return;
+  if (!tabsList.contains(t)) return;
+  const anchor = slotAnchor(cardGapIndex(e.clientX, e.clientY), e.clientY);
+  setGhostDisplay('');
+  moveGhostSlot(anchor);
   e.preventDefault();
   e.dataTransfer.dropEffect = 'move';
 });
@@ -1324,7 +1645,7 @@ function deleteActiveTab() {
   if (!t) return;
   if (!confirm(`Удалить вкладку "${t.name}"?`)) return;
   allTabs.splice(allTabs.indexOf(t), 1);
-  chrome.storage.sync.set({ 'blattam-tabs': allTabs });
+  chrome.storage.local.set({ 'blattam-tabs': allTabs });
   renderTabs(searchInput.value); // onChanged-обработчик обнулит activeUrl, если карточки не осталось
 }
 
@@ -1376,19 +1697,35 @@ document.addEventListener('keydown', (e) => {
 // === Автообновление ===
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName === 'local') {
+    // Вкладки — в local (migrate sync → local): в local реагируем только на blattam-tabs
+    if (changes['blattam-tabs']) {
+      const newTabs = changes['blattam-tabs'].newValue || [];
+      const oldTabs = changes['blattam-tabs'].oldValue || [];
+      // Группа потеряла последнюю вкладку — автосворачивание: вместо строки
+      // «Перетащите вкладку сюда» — свёрнутая шапка с «0 вкладок» (свежесозданная
+      // или вручную раскрытая пустая группа остаются раскрытыми — слот = цель дропа)
+      let groupsEmptied = false;
+      allGroups.forEach(g => {
+        if (g.collapsed) return;
+        const isMember = (t) => t && t.spaceId === g.spaceId && t.groupId === g.id;
+        const before = oldTabs.filter(isMember).length;
+        const after = newTabs.filter(isMember).length;
+        if (before > 0 && after === 0) { g.collapsed = true; groupsEmptied = true; }
+      });
+      if (groupsEmptied) chrome.storage.sync.set({ 'blattam-groups': allGroups });
+      // Реордер (набор URL тот же, изменился только порядок) — выбор и активная
+      // карточка завязаны на URL, поэтому переживают перерисовку
+      const sameUrlSet = oldTabs.length === newTabs.length &&
+        oldTabs.map(t => t.url).sort().join('|') === newTabs.map(t => t.url).sort().join('|');
+      allTabs = newTabs;
+      if (!sameUrlSet) selectedUrls.clear(); // набор вкладок изменился — сброс выбора
+      renderTabs(searchInput.value);
+    }
+    return;
+  }
   if (areaName !== 'sync') return;
 
-  if (changes['blattam-tabs']) {
-    const newTabs = changes['blattam-tabs'].newValue || [];
-    const oldTabs = changes['blattam-tabs'].oldValue || [];
-    // Реордер (набор URL тот же, изменился только порядок) — выбор и активная
-    // карточка завязаны на URL, поэтому переживают перерисовку
-    const sameUrlSet = oldTabs.length === newTabs.length &&
-      oldTabs.map(t => t.url).sort().join('|') === newTabs.map(t => t.url).sort().join('|');
-    allTabs = newTabs;
-    if (!sameUrlSet) selectedUrls.clear(); // набор вкладок изменился — сброс выбора
-    renderTabs(searchInput.value);
-  }
   if (changes['blattam-spaces']) {
     const newSpaces = changes['blattam-spaces'].newValue || [];
     allSpaces = newSpaces;
@@ -1516,8 +1853,8 @@ document.getElementById('import-input').addEventListener('change', (e) => {
         allTabs.push(t);
       });
 
+      chrome.storage.local.set({ 'blattam-tabs': allTabs });
       chrome.storage.sync.set({
-        'blattam-tabs': allTabs,
         'blattam-spaces': allSpaces,
         'blattam-groups': allGroups
       });
