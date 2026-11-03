@@ -68,11 +68,19 @@
       background: var(--bg); box-shadow: 0 0 0 1px var(--line);
       font: 500 12.5px/1 var(--font-ui); color: var(--text-muted); letter-spacing: -.1px;
       transition: background .1s, color .1s, box-shadow .1s;
-      user-select: none;
+      user-select: none; position: relative;
     }
     .chip:hover { background: var(--hover); }
     .chip.active { background: var(--ink); color: var(--on-ink); box-shadow: none; }
     .chip.drag-over { background: var(--drop-over); color: var(--on-drop); box-shadow: none; }
+    /* Индикатор reorder чипа: 2px вертикальная линия на левой/правой
+       кромке целевого чипа; обе темы — var(--ink) */
+    .space-chip.drop-before::before, .space-chip.drop-after::after {
+      content: ''; position: absolute; top: 0; bottom: 0; width: 2px; background: var(--ink); z-index: 2;
+    }
+    .space-chip.drop-before::before { left: 0; }
+    .space-chip.drop-after::after { right: 0; }
+    .space-chip.dragging { opacity: 0.4; }
     .chip-add {
       height: 26px; padding: 0 11px; border: 1px dashed var(--dashed); border-radius: 9999px;
       display: inline-flex; align-items: center; gap: 5px;
@@ -80,8 +88,8 @@
       transition: background .1s, border-color .1s; white-space: nowrap;
     }
     .chip-add:hover { background: var(--hover); border-color: var(--dashed-hover); }
-    /* «+ Пространство» — в левом краю ряда пространств (над
-       «+ Группа» в мета-строке), бледный текст в стиле «+ Группа» */
+    /* «+ Пространство» — в правом краю ряда пространств (после чипов),
+       бледный текст в стиле «+ Группа» */
     #add-space-btn {
       height: 26px; padding: 0; border: 0; border-radius: 0;
       display: inline-flex; align-items: center; gap: 0;
@@ -376,8 +384,8 @@
   <div class="main">
     <!-- Пространства -->
     <nav class="chip-row" id="spaces-bar">
-      <button class="chip-add" id="add-space-btn" title="Новое пространство">+ Пространство</button>
       <span id="space-chips" style="display:contents"></span>
+      <button class="chip-add" id="add-space-btn" title="Новое пространство">+ Пространство</button>
     </nav>
 
     <!-- Meta -->
@@ -406,6 +414,7 @@
     <i class="seldiv"></i>
     <button id="open-selected-btn" class="btn btn-ink">Открыть</button>
     <button id="clear-selection-btn" class="btn btn-ghost">Сбросить</button>
+    <button id="delete-selected-btn" class="btn btn-ghost" title="Удалить выбранные вкладки">✕ Удалить</button>
   </div>
 
   <!-- Modal: create/rename space, create group -->

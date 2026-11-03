@@ -55,6 +55,7 @@ const selectionCount = document.getElementById('selection-count');
 const selectBtn = document.getElementById('select-btn');
 const openSelectedBtn = document.getElementById('open-selected-btn');
 const clearSelectionBtn = document.getElementById('clear-selection-btn');
+const deleteSelectedBtn = document.getElementById('delete-selected-btn');
 
 let allTabs = [];
 let allSpaces = [];   // { id, name } — плоский список (без вложенности)
@@ -73,11 +74,19 @@ let dragRowKeeper = null; // invisible card-sized placeholder: holds the source
                           // reflows into the vacated slot (no hole) and nothing below
                           // shifts when quickly dragging tabs
 let dragSourceGroupId = null; // id перетаскиваемой группы (reorder шапок внутри пространства)
+let dragSourceSpaceId = null; // id перетаскиваемого чипа (reorder пространств в ряду чипов)
+let pendingChipClickAfterDrag = false; // one-shot: ложный клик по чипу-цели рождается
+                        // в момент дропа (реальный Chrome: drop → click → dragend) —
+                        // вооружаем на dragstart чипа и на drop; гасим ровно ОДИН;
+                        // настоящее нажатие (mousedown) сбрасывает флаг раньше клика
 let dragBatchUrls = null; // все вкладки, уезжающие с перетаскиваемой карточкой:
                           // выделенный батч (порядок — исходный, из allTabs) или [dragSourceUrl]
 let dragOverTarget = null; // последний target dragover — чтобы отложенное создание
                            // заглушки (dragstart setTimeout) повторило состояние, если
                            // первый dragover уже попал на шапку/слот ПЕРЕД таймером
+let dragOverTargetXY = null; // координаты этого dragover (clientX/clientY) —
+                             // пустая зона карт.области группы повторяется по ГЕОМЕТРИИ,
+                             // а не по элементу цели
 let lastDragEndAt = 0; // время последнего dragend (карточки или шапки): клик по шапке
                         // сразу после дропа — не действие пользователя, не сворачиваем группу
 let pendingGbarClickAfterDrag = false; // one-shot: ложный клик по шапке рождается в момент
@@ -268,8 +277,39 @@ function renderSpaces() {
     // DnD: чип принимает перетаскиваемую карточку
     attachSpaceDrop(chip, sp.id);
 
-    // Клик — переключение пространства
-    chip.addEventListener('click', () => switchSpace(sp.id));
+    // DnD-источник: чип тянем на другой чип — reorder пространств (порядок
+    // чипов = порядок массива blattam-spaces). Пейлоад: id пространства
+    // (у карточки — индекс вкладки). Кнопки ✎/✕ не стартуют drag:
+    // guardDragOverButtons снимает draggable на время press
+    chip.draggable = true;
+    guardDragOverButtons(chip, '.chip-icon-btn');
+    chip.addEventListener('dragstart', (e) => {
+      if (!chip.draggable) { e.preventDefault(); return; } // press начался на кнопке
+      e.dataTransfer.setData('text/plain', sp.id);
+      e.dataTransfer.effectAllowed = 'move';
+      dragSourceSpaceId = sp.id;
+      chip.classList.add('dragging');
+      // Ложный клик вооружаем уже на dragstart: реальный Chrome генерирует
+      // его на drop-цели ДО dragend источника
+      pendingChipClickAfterDrag = true;
+    });
+    chip.addEventListener('dragend', () => {
+      lastDragEndAt = Date.now();
+      pendingChipClickAfterDrag = true;
+      dragSourceSpaceId = null;
+      chip.classList.remove('dragging');
+      clearSpaceReorderIndicators();
+      document.querySelectorAll('.space-chip.drag-over')
+        .forEach(c => c.classList.remove('drag-over'));
+    });
+
+    // Клик — переключение пространства. Ложный post-drop клик (без mousedown)
+    // гасим ровно один: настоящий press всегда проходит через
+    // document-mousedown, сбрасывающий флаг раньше клика
+    chip.addEventListener('click', () => {
+      if (pendingChipClickAfterDrag) { pendingChipClickAfterDrag = false; return; }
+      switchSpace(sp.id);
+    });
     spaceChips.appendChild(chip);
   });
 }
@@ -461,6 +501,15 @@ function pluralVkladok(n) {
   if (a > 10 && a < 20) return 'вкладок';
   if (d > 1 && d < 5) return 'вкладки';
   if (d === 1) return 'вкладка';
+  return 'вкладок';
+}
+
+// Винительный падеж для «Удалить N …?»: 1 — «вкладку», 2–4 — «вкладки»,
+// 5+ и 11–14 — «вкладок»
+function pluralVkladki(n) {
+  const a = Math.abs(n) % 100, d = a % 10;
+  if (d === 1 && a !== 11) return 'вкладку';
+  if (d > 1 && d < 5 && (a < 11 || a > 14)) return 'вкладки';
   return 'вкладок';
 }
 
@@ -781,6 +830,29 @@ function clearGroupReorderIndicators() {
     .forEach(b => b.classList.remove('drop-before', 'drop-after'));
 }
 
+// Reorder пространств: вырезаем перетаскиваемое пространство из глобального
+// allSpaces и вставляем до/после цели (side — по половине целевого чипа).
+// Порядок чипов = порядок массива blattam-spaces. Drop на себя — no-op.
+// Активное пространство и blattam-last-space НЕ меняются. Запись в
+// blattam-spaces → onChanged → перерисовка чипов.
+function reorderSpaces(fromId, toId, side) {
+  const from = allSpaces.findIndex(x => x.id === fromId);
+  const to = allSpaces.findIndex(x => x.id === toId);
+  if (from === -1 || to === -1 || from === to) return;
+  const src = allSpaces[from];
+  allSpaces.splice(from, 1);
+  let insertAt = allSpaces.findIndex(x => x.id === toId);
+  if (side === 'after') insertAt += 1;
+  allSpaces.splice(insertAt, 0, src);
+  chrome.storage.sync.set({ 'blattam-spaces': allSpaces });
+}
+
+// Снимаем индикаторы reorder со всех чипов пространств
+function clearSpaceReorderIndicators() {
+  document.querySelectorAll('.space-chip.drop-before, .space-chip.drop-after')
+    .forEach(c => c.classList.remove('drop-before', 'drop-after'));
+}
+
 // «+ Группа» — полноширинная пунктирная строка В КОНЦЕ списка вкладок
 // (строится в renderTabs во всех ветках рендера, включая пустое
 // пространство; работает и с пустым пространством).
@@ -962,6 +1034,7 @@ function appendCard(tab) {
     dragSourceCardEl = card;
     dragRowKeeper = null;
     dragOverTarget = null; // свежий драг — целевой dragover ещё не приходил
+    dragOverTargetXY = null;
     // Вооружаем подавление ложного клика по шапке уже на dragstart: реальный
     // Chrome генерирует его на drop-цели ДО dragend источника — флаг, поставленный
     // только на dragend, его не поймаешь
@@ -989,11 +1062,15 @@ function appendCard(tab) {
         dragRowKeeper = makeRowKeeper(card);
       }
       card.style.display = 'none';
-      // Гонка: первый dragover мог попасть на шапку/слот ПЕРЕД этим таймером
-      // (заглушки ещё не существовало). Повторяем состояние по dragOverTarget,
-      // иначе свежая заглушка неверно «замигает» дома.
-      if (dragOverTarget && dragOverTarget.closest &&
-          (dragOverTarget.closest('.gbar') || dragOverTarget.closest('.group-empty-slot'))) {
+      // Гонка: первый dragover мог попасть на шапку/слот/пустую зону карт.области
+      // группы ПЕРЕД этим таймером (заглушки ещё не существовало). Повторяем
+      // состояние по dragOverTarget (зона — по её координатам), иначе свежая
+      // заглушка неверно «замигает» дома.
+      const overGbarOrSlot = dragOverTarget && dragOverTarget.closest &&
+          (dragOverTarget.closest('.gbar') || dragOverTarget.closest('.group-empty-slot'));
+      const overGroupEmptyZone = dragOverTargetXY !== null &&
+          groupCardAreaEmptyZone(dragOverTargetXY[0], dragOverTargetXY[1]) !== null;
+      if (overGbarOrSlot || overGroupEmptyZone) {
         setGhostDisplay('none');
         ensureSourceRowKeeper();
       }
@@ -1006,6 +1083,7 @@ function appendCard(tab) {
     dragSourceCardEl = null;
     dragBatchUrls = null;
     dragOverTarget = null; // не держим ссылку на DOM-узел после драга
+    dragOverTargetXY = null;
     card.classList.remove('dragging');
     removeGhostSlot(); // заглушка + row keeper снимаются первыми, затем карточка
                        // возвращается в свой слот
@@ -1157,17 +1235,35 @@ function matchFilter(tab, filter) {
 // === Drag & drop: перетаскивание карточки on чип пространства ===
 
 // Чип пространства принимает карточку (перетаскиваемая шапка группы — no-op)
+// и принимает чип-реorder: 2px-индикатор на кромке цели (левая половина —
+// вставить перед, правая — после). Семантика дропа карточки не тронута.
 function attachSpaceDrop(chip, spaceId) {
   chip.addEventListener('dragover', (e) => {
+    if (dragSourceSpaceId) {
+      if (dragSourceSpaceId === spaceId) return; // на себя — не цель
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      const side = reorderSideX(chip, e.clientX);
+      chip.classList.toggle('drop-before', side === 'before');
+      chip.classList.toggle('drop-after', side === 'after');
+      return;
+    }
     if (dragSourceGroupId) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     chip.classList.add('drag-over');
   });
-  chip.addEventListener('dragleave', () => chip.classList.remove('drag-over'));
+  chip.addEventListener('dragleave', () => chip.classList.remove('drag-over', 'drop-before', 'drop-after'));
   chip.addEventListener('drop', (e) => {
     e.preventDefault();
-    chip.classList.remove('drag-over');
+    chip.classList.remove('drag-over', 'drop-before', 'drop-after');
+    if (dragSourceSpaceId) {
+      // Ложный клик по цели генерируется в этот момент (до dragend источника):
+      // вооружаем one-shot-подавление и reorder
+      pendingChipClickAfterDrag = true;
+      reorderSpaces(dragSourceSpaceId, spaceId, reorderSideX(chip, e.clientX));
+      return;
+    }
     if (dragSourceGroupId) return;
     const batch = dragBatchUrls;
     if (batch && batch.length > 1) {
@@ -1465,7 +1561,7 @@ function placeBatchToSlot(batch, anchorUrl, side, section) {
 // Новое нажатие мыши — реальное действие пользователя: сбрасываем one-shot
 // флаг ложного post-drop клика ДО того, как придёт его click (у ложного клика
 // после drag mousedown не было)
-document.addEventListener('mousedown', () => { pendingGbarClickAfterDrag = false; }, true);
+document.addEventListener('mousedown', () => { pendingGbarClickAfterDrag = false; pendingChipClickAfterDrag = false; }, true);
 
 // Глобальные dragover/drop: нативный drag-образ браузера следует за курсором,
 // заглушка — в ближайшую позицию вставки (с учётом секций). Свою семантику дропа
@@ -1491,10 +1587,47 @@ function ensureSourceRowKeeper() {
   else a.insertAdjacentElement('afterend', dragRowKeeper);
 }
 
+// Пустая зона собственной карт.области группы: пустая строка сетки ВЫШЕ первой
+// строки видимых карточек группы (между её .gbar и первой строкой) или НИЖЕ
+// последней строки (между последней строкой и строкой заголовка следующей
+// секции). Дроп туда ставит вкладку в начало/конец группы — как над шапкой —
+// поэтому заглушка прячется целиком. Пустые ячейки СЕБЕ строки (справа от
+// последней карточки незаполненной строки) — НЕ зона: заглушка остаётся
+// видимой в потенциальном слоте. Возвращает groupId зоны под курсором или null.
+function groupCardAreaEmptyZone(clientX, clientY) {
+  if (clientX == null || clientY == null) return null;
+  const lr = tabsList.getBoundingClientRect();
+  if (clientX < lr.left || clientX > lr.right) return null;
+  const bars = document.querySelectorAll('#tabs-list .gbar');
+  for (const bar of bars) {
+    const br = bar.getBoundingClientRect();
+    if (br.height <= 0) continue;
+    const gid = bar.dataset.groupId;
+    const cards = [...document.querySelectorAll('#tabs-list .tab-card')]
+      .filter(c => c.style.display !== 'none' && c.__tab && c.__tab.groupId === gid);
+    let top = Infinity, bottom = -Infinity;
+    for (const c of cards) {
+      const r = c.getBoundingClientRect();
+      if (r.height <= 0) continue;
+      top = Math.min(top, r.top);
+      bottom = Math.max(bottom, r.bottom);
+    }
+    if (!isFinite(top)) continue; // нет видимых строк — нет пустой зоны
+    if (clientY > br.bottom && clientY < top) return gid; // выше первой строки
+    let h = cards[cards.length - 1].nextElementSibling;
+    while (h && !h.classList.contains('gbar') && !h.classList.contains('loose-label') && h.id !== 'add-group-btn')
+      h = h.nextElementSibling;
+    const hTop = h ? h.getBoundingClientRect().top : Infinity;
+    if (clientY > bottom && clientY < hTop) return gid; // ниже последней строки
+  }
+  return null;
+}
+
 document.addEventListener('dragover', (e) => {
   if (!dragSourceUrl || dragSourceGroupId || !e.dataTransfer) return;
   const t = e.target;
   dragOverTarget = t;
+  dragOverTargetXY = [e.clientX, e.clientY];
   // Над ЛЮБОЙ шапкой группы (.gbar — развёрнутой, свёрнутой или пустой) и над
   // слотом пустой группы (.group-empty-slot) карточка дропается ВНУТРЬ этой
   // группы (свой обработчик drop на этом элементе). Прячем заглушку ЦЕЛИКОМ
@@ -1512,6 +1645,18 @@ document.addEventListener('dragover', (e) => {
   }
   // Чип пространства: заглушка замирает на месте (поведение без изменений).
   if (t && t.closest && t.closest('.space-chip')) return;
+  // Пустая зона собственной карт.области группы (пустая строка ВЫШЕ первой / НИЖЕ
+  // последней строки карточек группы): дроп ставит вкладку в начало/конец группы —
+  // как над шапкой — прячем заглушку целиком; row-keeper держит число строк
+  // исходной секции. Пустые ячейки СЕБЕ строки — не зона: заглушка остаётся
+  // видимой в потенциальном слоте (list-путь ниже).
+  if (groupCardAreaEmptyZone(e.clientX, e.clientY) !== null) {
+    setGhostDisplay('none');
+    ensureSourceRowKeeper();
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    return;
+  }
   if (!tabsList.contains(t)) return;
   const anchor = slotAnchor(cardGapIndex(e.clientX, e.clientY), e.clientY);
   setGhostDisplay('');
@@ -1537,6 +1682,14 @@ document.addEventListener('drop', (e) => {
 function reorderSide(card, clientY) {
   const rect = card.getBoundingClientRect();
   return (clientY == null || clientY <= rect.top + rect.height / 2) ? 'before' : 'after';
+}
+
+// 'before'/'after' — по курсору относительно ГОРИЗОНТАЛЬНОЙ середины
+// элемента (reorder чипов пространств; вертикальная reorderSide для
+// шапок групп не тронута)
+function reorderSideX(el, clientX) {
+  const rect = el.getBoundingClientRect();
+  return (clientX == null || clientX <= rect.left + rect.width / 2) ? 'before' : 'after';
 }
 
 // Двойной клик по имени → инлайн-переименование
@@ -1592,6 +1745,19 @@ openSelectedBtn.addEventListener('click', () => {
 });
 
 clearSelectionBtn.addEventListener('click', () => {
+  selectedUrls.clear();
+  renderTabs(searchInput.value);
+});
+
+// «Удалить» — массовое удаление выделенных вкладок: один confirm
+// (русские множественные формы), одна запись в storage, выбор снимается.
+// Пустой выбор — no-op; отмена — ничего не меняется.
+deleteSelectedBtn.addEventListener('click', () => {
+  if (selectedUrls.size === 0) return;
+  const n = selectedUrls.size;
+  if (!confirm(`Удалить ${n} ${pluralVkladki(n)}?`)) return;
+  allTabs = allTabs.filter(t => !selectedUrls.has(t.url));
+  chrome.storage.local.set({ 'blattam-tabs': allTabs });
   selectedUrls.clear();
   renderTabs(searchInput.value);
 });

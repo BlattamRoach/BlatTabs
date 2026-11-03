@@ -4054,9 +4054,10 @@ class TestDragGhostOverCollapsed:
     """Ghost-заглушка над шапками групп: над ЛЮБОЙ шапкой (.gbar — развёрнутой,
     свёрнутой или пустой) заглушка ПРЯЧЕТСЯ ЦЕЛИКОМ (display:none — её ячейка
     сетки освобождается: ни «тёплая» заглушка на старом месте, ни дырки);
-    row-keeper держит число строк исходной секции. В полосе прямо над шапкой
-    свёрнутой/пустой группы (не сама шапка) — заглушка ВИДИМАЯ в хвосте
-    исходной секции (честно: дроп туда ставит вкладку в хвост той же секции).
+    row-keeper держит число строк исходной секции. В пустой полосе прямо над шапкой
+    следующей группы (не сама шапка), т.е. НИЖЕ последней строки карточек группы сверху,
+    — заглушка тоже ПРЯЧЕТСЯ ЦЕЛИКОМ (row-keeper держит число строк), а дроп в эту
+    полосу по-прежнему ставит вкладку в хвост той же (верхней) секции.
     Семантика дропа не меняется: дроп на шапку свёрнутой группы переносит
     вкладку в группу, группа остаётся свёрнутой; дроп на развёрнутую шапку —
     no-op."""
@@ -4172,30 +4173,48 @@ class TestDragGhostOverCollapsed:
         assert d == {"hidden": True, "atHome": True, "notAfterLastG1": True, "keepers": 1}, d
         self._end_drag()
 
-    def test_ghost_visible_at_tail_in_band_above_collapsed_gbar(self):
-        # Курсор в полосе МЕЖДУ последней карточкой g1 и шапкой g2: заглушка —
-        # ВИДИМАЯ в ХВОСТЕ исходной секции (после C), честно: дроп туда ставит
-        # вкладку в хвост g1. ДОМА (home-snap) заглушка уходит только над самой
-        # шапкой свёрнутой/пустой группы
+    def test_ghost_hidden_in_band_above_next_gbar_drop_at_tail(self):
+        # Курсор в полосе МЕЖДУ последней карточкой g1 и шапкой g2 (пустое
+        # пространство внутри карт.области g1 НИЖЕ её вкладок): заглушка
+        # ПРЯЧЕТСЯ ЦЕЛИКОМ (computed display:none) — как над самой шапкой;
+        # row-keeper держит число строк исходной секции g1. Семантика дропа
+        # не меняется: дроп в эту полосу ставит вкладку в хвост g1 (после C)
         self._load()
         self._start_drag("A")
         c = self._card_rect("C")
         bar = self._rect_of('.gbar[data-group-id="g2"]')
-        self._hover(bar["left"] + bar["width"] * 0.5, (c["top"] + c["height"] + bar["top"]) / 2)
+        x = bar["left"] + bar["width"] * 0.5
+        y = (c["top"] + c["height"] + bar["top"]) / 2
+        self._hover(x, y)
         d = json.loads(self.page.evaluate("""(() => {
           const slot = document.querySelector('.tab-ghost-slot');
-          const c = [...document.querySelectorAll('#tabs-list .tab-card')]
-            .find(c => c.querySelector('.tab-name').textContent.trim() === 'C');
-          const bar = document.querySelector('.gbar[data-group-id="g2"]');
+          const bar1 = document.querySelector('.gbar[data-group-id="g1"]');
+          const tops = [];
+          for (let el = bar1.nextElementSibling; el && !el.classList.contains('gbar'); el = el.nextElementSibling) {
+            if (el.classList.contains('tab-ghost-slot') || el.classList.contains('tab-card') ||
+                el.classList.contains('tab-row-keeper')) {
+              const r = el.getBoundingClientRect();
+              if (r.height > 0 && !tops.some(t => Math.abs(t - r.top) < 1)) tops.push(r.top);
+            }
+          }
           return JSON.stringify({
-            atTail: c.nextElementSibling === slot,
-            visible: slot && getComputedStyle(slot).visibility !== 'hidden',
-            notHome: window.__srcCard.nextElementSibling !== slot,
+            exists: !!slot,
+            hidden: slot && getComputedStyle(slot).display === 'none',
             keepers: document.querySelectorAll('.tab-row-keeper').length,
-            aboveBar: slot.getBoundingClientRect().top < bar.getBoundingClientRect().top
+            g1Rows: tops.length
           });
         })()"""))
-        assert d == {"atTail": True, "visible": True, "notHome": True, "keepers": 0, "aboveBar": True}, d
+        assert d == {"exists": True, "hidden": True, "keepers": 1, "g1Rows": 1}, d
+        self.page.evaluate("""([x, y]) => {
+          document.getElementById('tabs-list').dispatchEvent(
+            new DragEvent('drop', {dataTransfer: window.__dt, bubbles: true, cancelable: true, clientX: x, clientY: y}));
+        }""", [x, y])
+        names = json.loads(self.page.evaluate("""(async () => {
+          const d = await chrome.storage.get('blattam-tabs');
+          return JSON.stringify((d['blattam-tabs'] || []).map(t => t.name));
+        })()"""))
+        assert names == ["B", "C", "A", "D", "E", "F", "G"], names  # A — в хвосте g1
+        assert self.page.evaluate("document.querySelectorAll('.tab-ghost-slot').length") == 0
         self._end_drag()
 
     def test_drop_on_collapsed_gbar_moves_tab_group_stays_collapsed(self):
@@ -5848,15 +5867,20 @@ class TestSpaceChipStyles:
         assert d["textTransform"] == "uppercase"
         assert "mono" in d["fontFamily"].lower()
 
-    def test_add_space_btn_left_edge_in_spaces_bar(self):
+    def test_add_space_btn_right_edge_in_spaces_bar(self):
+        # «+ Пространство» теперь в правом краю ряда: чипы слева (у левого края),
+        # кнопка — сразу за последним чипом (flex-gap 6px)
         load_view(self.page, tabs=self.TABS)
         self._inject_real_styles()
         d = json.loads(self.page.evaluate("""(() => {
           const b = document.getElementById('add-space-btn').getBoundingClientRect();
           const bar = document.getElementById('spaces-bar').getBoundingClientRect();
-          return JSON.stringify({btnLeft: b.left, barLeft: bar.left});
+          const chip = document.querySelector('.space-chip');
+          const c = chip.getBoundingClientRect();
+          return JSON.stringify({btnLeft: b.left, chipRight: c.right, chipLeft: c.left, barLeft: bar.left});
         })()"""))
-        assert d["btnLeft"] - d["barLeft"] <= 8, d
+        assert 0 <= d["btnLeft"] - d["chipRight"] <= 10, d
+        assert d["chipLeft"] - d["barLeft"] <= 8, d
 
     def test_add_group_btn_full_width_row_in_tabs_list(self):
         # «+ Группа» больше не в мета-строке — полноширинная строка в #tabs-list
@@ -7010,3 +7034,818 @@ class TestGhostOverExpandedGbar:
         st = state()
         assert st["exists"] is True and st["hidden"] is False, st
         self._end_drag()
+
+
+# ==========================================
+#  VIEW.JS: ЗАГЛУШКА В ПУСТОЙ ЗОНЕ КАРТОЧНОЙ ОБЛАСТИ ГРУППЫ
+# ==========================================
+
+class TestGhostOverGroupEmptyArea:
+    """Драг карточки в ПУСТУЮЮ ЗОНУ собственного карт.область группы:
+    пустые строки сетки ВЫШЕ первой строки видимых карточек группы и НИЖЕ
+    последней строки (зазор между шапкой/последней строкой и следующей
+    секцией). В этих зонах дроп ставит вкладку в начало/конец группы — как
+    над шапкой, поэтому заглушка ПРЯЧЕТСЯ ЦЕЛИКОМ (display:none, как над
+    шапкой группы и слотом пустой группы); row-keeper держит число строк
+    исходной секции; возврат курсора в строку карточек — заглушка снова
+    видимая в честном слоте. Пустые ячейки СЕБЕ строки (справа от последней
+    карточки незаполненной строки) НЕ зона: заглушка остаётся видимой в
+    потенциальном слоте. Семантика дропа не меняется: дроп в эти зоны
+    ставит вкладку в начало/конец группы, как раньше."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self._errors = []
+        page.on("pageerror", self._on_err)
+        yield
+        assert not self._errors, self._errors
+        page.remove_listener("pageerror", self._on_err)
+
+    def _on_err(self, err):
+        self._errors.append(str(err))
+
+    SP = [{"id": "sp1", "name": "Main"}]
+    G10 = [{"id": "gA", "name": "A", "spaceId": "sp1", "collapsed": False}]
+
+    @staticmethod
+    def _tabs10():
+        return [{"name": "A%d" % i, "url": "https://a%d.com" % i,
+                 "spaceId": "sp1", "groupId": "gA"} for i in range(1, 11)]
+
+    def _load(self, tabs, groups):
+        load_view(self.page, spaces=self.SP, groups=groups, tabs=tabs, last_space="sp1")
+        css = load_file("theme.css")
+        html = load_file("view.html")
+        style_block = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate("""(css) => {
+          const s = document.createElement('style');
+          s.textContent = css;
+          document.head.appendChild(s);
+        }""", css + style_block)
+        self.page.set_viewport_size({"width": 1280, "height": 900})
+        self.page.wait_for_timeout(50)
+        self._maps()
+
+    def _maps(self):
+        self.page.evaluate("""(() => {
+          window.__cards = {};
+          document.querySelectorAll('#tabs-list .tab-card').forEach(c => {
+            const n = c.querySelector('.tab-name').textContent.trim();
+            window.__cards[n] = c;
+          });
+        })()""")
+
+    def _start_drag(self, name):
+        self.page.evaluate("""(name) => {
+          const card = window.__cards[name];
+          window.__srcCard = card;
+          const dt = new DataTransfer();
+          window.__dt = dt;
+          card.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true, cancelable: true}));
+        }""", name)
+        self.page.wait_for_timeout(50)
+
+    def _hover(self, name, frac=0.25):
+        self.page.evaluate("""([name, frac]) => {
+          const c = window.__cards[name];
+          const r = c.getBoundingClientRect();
+          document.getElementById('tabs-list').dispatchEvent(new DragEvent('dragover', {
+            dataTransfer: window.__dt, bubbles: true, cancelable: true,
+            clientX: r.left + r.width * frac, clientY: r.top + r.height * 0.5
+          }));
+        }""", [name, frac])
+
+    def _point(self, gid, zone):
+        # Точка пустой зоны группы: 'above' — между шапкой и первой строкой
+        # видимых карточек; 'below' — между последней строкой и следующей
+        # строкой-заголовком секции (.gbar / .loose-label / «+ Группа»).
+        return self.page.evaluate("""([gid, zone]) => {
+          const bar = document.querySelector('#tabs-list .gbar[data-group-id="' + gid + '"]');
+          const list = document.getElementById('tabs-list').getBoundingClientRect();
+          const cards = [...document.querySelectorAll('#tabs-list .tab-card')]
+            .filter(c => c.style.display !== 'none' && c.__tab && c.__tab.groupId === gid);
+          let top = Infinity, bottom = -Infinity;
+          cards.forEach(c => {
+            const r = c.getBoundingClientRect();
+            if (r.height > 0) { top = Math.min(top, r.top); bottom = Math.max(bottom, r.bottom); }
+          });
+          let y;
+          if (zone === 'above') {
+            y = (bar.getBoundingClientRect().bottom + top) / 2;
+          } else {
+            let h = cards[cards.length - 1].nextElementSibling;
+            while (h && !h.classList.contains('gbar') &&
+                   !h.classList.contains('loose-label') && h.id !== 'add-group-btn')
+              h = h.nextElementSibling;
+            const hTop = h ? h.getBoundingClientRect().top : Infinity;
+            y = (bottom + hTop) / 2;
+          }
+          return [list.left + list.width / 2, y];
+        }""", [gid, zone])
+
+    def _over_point(self, x, y):
+        self.page.evaluate("""([x, y]) => {
+          document.getElementById('tabs-list').dispatchEvent(new DragEvent('dragover', {
+            dataTransfer: window.__dt, bubbles: true, cancelable: true, clientX: x, clientY: y
+          }));
+        }""", [x, y])
+
+    def _drop_point(self, x, y):
+        self.page.evaluate("""([x, y]) => {
+          document.getElementById('tabs-list').dispatchEvent(new DragEvent('drop', {
+            dataTransfer: window.__dt, bubbles: true, cancelable: true, clientX: x, clientY: y
+          }));
+        }""", [x, y])
+
+    def _end_drag(self):
+        self.page.evaluate("""(() => {
+          const card = window.__srcCard;
+          if (card) card.dispatchEvent(new DragEvent('dragend', {bubbles: true, cancelable: true}));
+        })()""")
+
+    def _ghost(self):
+        return json.loads(self.page.evaluate("""(() => {
+          const slot = document.querySelector('.tab-ghost-slot');
+          const nm = el => el && el.querySelector && el.querySelector('.tab-name')
+            ? el.querySelector('.tab-name').textContent.trim() : null;
+          return JSON.stringify({
+            exists: !!slot,
+            hidden: slot ? getComputedStyle(slot).display === 'none' : false,
+            prevName: slot ? nm(slot.previousElementSibling) : null,
+            nextName: slot ? nm(slot.nextElementSibling) : null,
+            keepers: document.querySelectorAll('.tab-row-keeper').length
+          });
+        })()"""))
+
+    def _rows_of_group(self, gid):
+        return self.page.evaluate("""(gid) => {
+          const bar = document.querySelector('#tabs-list .gbar[data-group-id="' + gid + '"]');
+          const tops = [];
+          for (let el = bar.nextElementSibling; el; el = el.nextElementSibling) {
+            if (el.classList.contains('gbar') || el.classList.contains('loose-label') || el.id === 'add-group-btn') break;
+            if (el.classList.contains('tab-ghost-slot') || el.classList.contains('tab-card') ||
+                el.classList.contains('tab-row-keeper') || el.classList.contains('group-empty-slot')) {
+              const r = el.getBoundingClientRect();
+              if (r.height > 0 && !tops.some(t => Math.abs(t - r.top) < 1)) tops.push(r.top);
+            }
+          }
+          return tops.length;
+        }""", gid)
+
+    def test_ghost_hidden_above_first_row(self):
+        # (1) группа из 10 карточек (2 строки): курсор в пустой строке ВЫШЕ
+        # первой строки карточек — заглушка спрятана ЦЕЛИКОМ (computed
+        # display:none) и НЕ в первой позиции: остаётся там, куда курсор её
+        # поставил раньше (перед A3), а не перед первой видимой карточкой
+        self._load(self._tabs10(), self.G10)
+        self._start_drag("A5")
+        self._hover("A3")
+        pt = self._point("gA", "above")
+        self._over_point(*pt)
+        d = self._ghost()
+        assert d["exists"] is True and d["hidden"] is True, d
+        assert d["nextName"] == "A3" and d["prevName"] == "A2", d
+        self._end_drag()
+
+    def test_ghost_hidden_below_last_row(self):
+        # (2) курсор в пустой строке НИЖЕ последней строки карточек (до
+        # «+ Группа») — заглушка спрятана ЦЕЛИКОМ и НЕ в последней позиции
+        # (осталась перед A3, а не после A10)
+        self._load(self._tabs10(), self.G10)
+        self._start_drag("A5")
+        self._hover("A3")
+        pt = self._point("gA", "below")
+        self._over_point(*pt)
+        d = self._ghost()
+        assert d["exists"] is True and d["hidden"] is True, d
+        assert d["nextName"] == "A3", d
+        self._end_drag()
+
+    def test_row_count_held_while_ghost_hidden(self):
+        # (3) пока заглушка спрятана в пустой зоне, row-keeper держит число
+        # строк исходной секции (2 строки из 10 карточек); возврат в строку
+        # карточек — без «осиротевшего» keeper
+        self._load(self._tabs10(), self.G10)
+        rows_before = self._rows_of_group("gA")
+        assert rows_before == 2, rows_before
+        self._start_drag("A5")
+        self._hover("A3")
+        pt = self._point("gA", "above")
+        self._over_point(*pt)
+        d = self._ghost()
+        assert d["hidden"] is True and d["keepers"] == 1, d
+        assert self._rows_of_group("gA") == rows_before
+        pt = self._point("gA", "below")
+        self._over_point(*pt)
+        d = self._ghost()
+        assert d["hidden"] is True, d
+        assert self._rows_of_group("gA") == rows_before
+        self._hover("A3")
+        d = self._ghost()
+        assert d["hidden"] is False and d["keepers"] == 0, d
+        assert self._rows_of_group("gA") == rows_before
+        self._end_drag()
+
+    def test_ghost_visible_again_back_in_row(self):
+        # (4) из спрятанного состояния (пустая зона) курсор возвращается в
+        # строку карточек — заглушка снова видимая в честном слоте
+        self._load(self._tabs10(), self.G10)
+        self._start_drag("A5")
+        self._hover("A3")
+        pt = self._point("gA", "above")
+        self._over_point(*pt)
+        d = self._ghost()
+        assert d["hidden"] is True, d
+        self._hover("A7")
+        d = self._ghost()
+        assert d["hidden"] is False and d["nextName"] == "A7", d
+        self._end_drag()
+
+    def test_ghost_visible_in_partial_row_band(self):
+        # (5) регресс: пустая ячейка СЕБЕ строки (справа от последней
+        # карточки незаполненной строки, та же полоса Y) — заглушка
+        # ВИДИМАЯ в потенциальном слоте вставки (не зона скрытия)
+        self._load(self._tabs10(), self.G10)
+        self._start_drag("A5")
+        self._hover("A3")
+        pt = self.page.evaluate("""(() => {
+          const list = document.getElementById('tabs-list').getBoundingClientRect();
+          const cards = [...document.querySelectorAll('#tabs-list .tab-card')]
+            .filter(c => c.style.display !== 'none' && c.__tab && c.__tab.groupId === 'gA');
+          let top = Infinity;
+          cards.forEach(c => { const r = c.getBoundingClientRect(); if (r.height > 0) top = Math.min(top, r.top); });
+          const row1 = cards.filter(c => Math.abs(c.getBoundingClientRect().top - top) < 1);
+          let right = 0;
+          row1.forEach(c => { right = Math.max(right, c.getBoundingClientRect().right); });
+          const y = top + cards[0].getBoundingClientRect().height / 2;
+          return [Math.min(right + 4, list.right - 4), y];
+        })()""")
+        self._over_point(*pt)
+        d = self._ghost()
+        assert d["exists"] is True and d["hidden"] is False, d
+        assert d["nextName"] == "A7", d  # слот вставки — начало второй строки
+        self._end_drag()
+
+    def test_drop_in_above_zone_moves_tab_into_group(self):
+        # (6) дроп в пустой зоне ВЫШЕ первой строки — семантика не меняется:
+        # вкладка встаёт в НАЧАЛО группы (перед первой вкладкой, groupId
+        # группы) — в storage меняется только порядок и groupId
+        tabs = self._tabs10() + [{"name": "L1", "url": "https://l1.com", "spaceId": "sp1"}]
+        self._load(tabs, self.G10)
+        self._start_drag("L1")
+        pt = self._point("gA", "above")
+        self._over_point(*pt)
+        self._drop_point(*pt)
+        self._end_drag()
+        names = json.loads(self.page.evaluate("""(async () => {
+          const d = await chrome.storage.get('blattam-tabs');
+          return JSON.stringify(d['blattam-tabs'].map(t => [t.name, t.groupId]));
+        })()"""))
+        assert names == [["L1", "gA"]] + [[("A%d" % i), "gA"] for i in range(1, 11)], names
+
+    def test_single_card_group_both_zones(self):
+        # (7) группа из ОДНОЙ карточки (S1, первая секция): обе пустые зоны
+        # (выше/ниже её единственной строки) прячут заглушку целиком
+        tabs = [{"name": "S1", "url": "https://s1.com", "spaceId": "sp1", "groupId": "gS"},
+                {"name": "A1", "url": "https://a1.com", "spaceId": "sp1", "groupId": "gA"},
+                {"name": "A2", "url": "https://a2.com", "spaceId": "sp1", "groupId": "gA"}]
+        groups = [{"id": "gS", "name": "S", "spaceId": "sp1", "collapsed": False},
+                  {"id": "gA", "name": "A", "spaceId": "sp1", "collapsed": False}]
+        self._load(tabs, groups)
+        self._start_drag("A1")
+        pt = self._point("gS", "above")
+        self._over_point(*pt)
+        d = self._ghost()
+        assert d["exists"] is True and d["hidden"] is True, d
+        pt = self._point("gS", "below")
+        self._over_point(*pt)
+        d = self._ghost()
+        assert d["hidden"] is True, d
+        self._end_drag()
+
+    def test_dragend_after_hidden_no_leftovers(self):
+        # (8) dragend из состояния «спрятана в пустой зоне» — без следов:
+        # ни заглушки, ни keeper в DOM, карточка возвращена в свой слот
+        self._load(self._tabs10(), self.G10)
+        self._start_drag("A5")
+        self._hover("A3")
+        pt = self._point("gA", "below")
+        self._over_point(*pt)
+        d = self._ghost()
+        assert d["hidden"] is True, d
+        self._end_drag()
+        leftover = json.loads(self.page.evaluate("""JSON.stringify({
+          slots: document.querySelectorAll('.tab-ghost-slot').length,
+          keepers: document.querySelectorAll('.tab-row-keeper').length,
+          srcDisplay: window.__srcCard.style.display,
+          srcConnected: window.__srcCard.isConnected
+        })"""))
+        assert leftover["slots"] == 0 and leftover["keepers"] == 0 and \
+               leftover["srcDisplay"] == "" and leftover["srcConnected"] is True, leftover
+
+# ==========================================
+#  VIEW.JS: МАССОВОЕ УДАЛЕНИЕ ВЫДЕЛЕННЫХ ВКЛАДОК
+# ==========================================
+
+class TestBulkDeleteSelection:
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    TABS4 = [
+        {"name": "A", "url": "https://a.com"},
+        {"name": "B", "url": "https://b.com"},
+        {"name": "C", "url": "https://c.com"},
+        {"name": "D", "url": "https://d.com"},
+    ]
+
+    def _select_first(self, n):
+        self.page.evaluate("""(n) => {
+          const cbs = document.querySelectorAll('.tab-select');
+          for (let i = 0; i < n; i++) cbs[i].click();
+        }""", n)
+
+    def _confirm_recorder(self, ret):
+        self.page.evaluate("""(ret) => {
+          window.__msgs = [];
+          window.confirm = (m) => { window.__msgs.push(m); return ret; };
+        }""", ret)
+
+    def test_delete_btn_hidden_with_empty_selection(self):
+        load_view(self.page, tabs=self.TABS4)
+        d = json.loads(self.page.evaluate("""(() => {
+          const bar = document.getElementById('selection-bar');
+          const btn = document.getElementById('delete-selected-btn');
+          return JSON.stringify({
+            btnExists: !!btn,
+            barHidden: bar.classList.contains('hidden'),
+            count: document.getElementById('selection-count').textContent
+          });
+        })()"""))
+        assert d["btnExists"] is True
+        assert d["barHidden"] is True, d
+        assert d["count"] == "0 выбрано", d
+
+    def test_delete_btn_visible_after_selecting_card(self):
+        load_view(self.page, tabs=self.TABS4)
+        self.page.evaluate("document.querySelector('.tab-select').click()")
+        d = json.loads(self.page.evaluate("""(() => {
+          const bar = document.getElementById('selection-bar');
+          const btn = document.getElementById('delete-selected-btn');
+          return JSON.stringify({
+            barHidden: bar.classList.contains('hidden'),
+            pointerEvents: getComputedStyle(btn).pointerEvents,
+            label: btn.textContent,
+            title: btn.title,
+            count: document.getElementById('selection-count').textContent
+          });
+        })()"""))
+        assert d["barHidden"] is False, d
+        assert d["pointerEvents"] == "auto", d
+        assert d["label"] == "✕ Удалить", d
+        assert d["title"] == "Удалить выбранные вкладки", d
+        assert d["count"] == "1 выбрано", d
+
+    def test_bulk_delete_removes_selected_only(self):
+        load_view(self.page, tabs=self.TABS4, confirm=True)
+        self._select_first(3)
+        self.page.evaluate("document.getElementById('delete-selected-btn').click()")
+        self.page.wait_for_timeout(50)
+        tabs = read_storage_raw(self.page, "blattam-tabs")
+        assert [t["url"] for t in tabs] == ["https://d.com"]
+        assert self.page.evaluate("document.querySelectorAll('.tab-card').length") == 1
+        d = json.loads(self.page.evaluate("""(() => {
+          const bar = document.getElementById('selection-bar');
+          return JSON.stringify({
+            barHidden: bar.classList.contains('hidden'),
+            count: document.getElementById('selection-count').textContent,
+            checked: document.querySelectorAll('.tab-select:checked').length
+          });
+        })()"""))
+        assert d["barHidden"] is True, d
+        assert d["count"] == "0 выбрано", d
+        assert d["checked"] == 0, d
+
+    def test_confirm_cancel_keeps_tabs_and_selection(self):
+        load_view(self.page, tabs=self.TABS4)
+        self._confirm_recorder(False)
+        self._select_first(2)
+        self.page.evaluate("document.getElementById('delete-selected-btn').click()")
+        self.page.wait_for_timeout(50)
+        tabs = read_storage_raw(self.page, "blattam-tabs")
+        assert [t["url"] for t in tabs] == [t["url"] for t in self.TABS4]
+        d = json.loads(self.page.evaluate("""(() => {
+          const bar = document.getElementById('selection-bar');
+          return JSON.stringify({
+            barHidden: bar.classList.contains('hidden'),
+            count: document.getElementById('selection-count').textContent,
+            checked: document.querySelectorAll('.tab-select:checked').length,
+            msg: window.__msgs[0]
+          });
+        })()"""))
+        assert d["barHidden"] is False, d
+        assert d["count"] == "2 выбрано", d
+        assert d["checked"] == 2, d
+        assert d["msg"] == "Удалить 2 вкладки?", d
+
+    def test_confirm_plural_forms(self):
+        cases = [
+            (1, "Удалить 1 вкладку?"),
+            (2, "Удалить 2 вкладки?"),
+            (4, "Удалить 4 вкладки?"),
+            (5, "Удалить 5 вкладок?"),
+            (11, "Удалить 11 вкладок?"),
+        ]
+        for n, expected in cases:
+            tabs = [{"name": f"T{i}", "url": f"https://t{i}.com"} for i in range(n)]
+            load_view(self.page, tabs=tabs)
+            self._confirm_recorder(True)
+            self.page.evaluate("document.getElementById('select-btn').click()")
+            self.page.evaluate("document.getElementById('delete-selected-btn').click()")
+            self.page.wait_for_timeout(50)
+            d = json.loads(self.page.evaluate("""(() => {
+              return JSON.stringify({
+                msg: window.__msgs[0],
+                cards: document.querySelectorAll('.tab-card').length,
+                barHidden: document.getElementById('selection-bar').classList.contains('hidden')
+              });
+            })()"""))
+            assert d["msg"] == expected, (n, d)
+            assert d["cards"] == 0, (n, d)
+            assert d["barHidden"] is True, (n, d)
+            assert read_storage_raw(self.page, "blattam-tabs") == []
+
+    def test_unselected_tabs_in_same_group_survive(self):
+        tabs = [
+            {"name": "G1", "url": "https://g1.com", "spaceId": "sp1", "groupId": "g1"},
+            {"name": "G2", "url": "https://g2.com", "spaceId": "sp1", "groupId": "g1"},
+            {"name": "G3", "url": "https://g3.com", "spaceId": "sp1", "groupId": "g1"},
+            {"name": "L1", "url": "https://l1.com", "spaceId": "sp1"},
+            {"name": "L2", "url": "https://l2.com", "spaceId": "sp1"},
+        ]
+        load_view(self.page, tabs=tabs,
+                  spaces=[{"id": "sp1", "name": "Main"}],
+                  groups=[{"id": "g1", "name": "Dev", "spaceId": "sp1", "collapsed": False}],
+                  confirm=True)
+        self._select_first(3)  # 3 карточки группы (секция группы рендерится первой)
+        self.page.evaluate("document.getElementById('delete-selected-btn').click()")
+        self.page.wait_for_timeout(50)
+        tabs_left = read_storage_raw(self.page, "blattam-tabs")
+        assert [t["url"] for t in tabs_left] == ["https://l1.com", "https://l2.com"]
+        assert self.page.evaluate("document.querySelectorAll('.tab-card').length") == 2
+
+    def test_clear_selection_then_delete_is_noop(self):
+        load_view(self.page, tabs=self.TABS4)
+        self._confirm_recorder(True)
+        self._select_first(2)
+        self.page.evaluate("document.getElementById('clear-selection-btn').click()")
+        self.page.evaluate("document.getElementById('delete-selected-btn').click()")
+        self.page.wait_for_timeout(50)
+        d = json.loads(self.page.evaluate("""(() => {
+          return JSON.stringify({
+            confirms: window.__msgs.length,
+            cards: document.querySelectorAll('.tab-card').length,
+            barHidden: document.getElementById('selection-bar').classList.contains('hidden')
+          });
+        })()"""))
+        assert d["confirms"] == 0, d
+        assert d["cards"] == 4, d
+        assert d["barHidden"] is True, d
+
+
+# ==========================================
+#  VIEW.JS: «+ ПРОСТРАНСТВО» В ПРАВОМ КРАЮ РЯДА
+# ==========================================
+
+class TestSpaceBarOrder:
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    SPACES3 = [
+        {"id": "sp1", "name": "Main"},
+        {"id": "sp2", "name": "Work"},
+        {"id": "sp3", "name": "Home"},
+    ]
+
+    def _bar_order(self):
+        return json.loads(self.page.evaluate("""(() => {
+          const bar = document.getElementById('spaces-bar');
+          const btn = document.getElementById('add-space-btn');
+          const chips = [...bar.querySelectorAll('.space-chip')];
+          return JSON.stringify({
+            isLast: bar.lastElementChild === btn,
+            chipCount: chips.length,
+            allChipsBeforeBtn: chips.length > 0 && chips.every(c =>
+              (btn.compareDocumentPosition(c) & 2) === 2),
+            chipSpanFirst: bar.children[0].id === 'space-chips'
+          });
+        })()"""))
+
+    def test_add_space_btn_is_last_after_chips(self):
+        load_view(self.page, tabs=[{"name": "T", "url": "https://t.com"}], spaces=self.SPACES3)
+        d = self._bar_order()
+        assert d == {"isLast": True, "chipCount": 3,
+                     "allChipsBeforeBtn": True, "chipSpanFirst": True}, d
+
+    def test_button_stays_last_after_card_dnd_to_chip(self):
+        load_view(self.page, spaces=[
+            {"id": "sp1", "name": "Main"},
+            {"id": "sp2", "name": "Work"},
+        ], tabs=[
+            {"name": "DragMe", "url": "https://drag.com", "spaceId": "sp1"},
+        ])
+        self.page.evaluate("""(args) => {
+          const card = document.querySelector('.tab-card');
+          const dt = new DataTransfer();
+          card.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true}));
+          const chip = document.querySelector('.space-chip[data-space-id="' + args + '"]');
+          chip.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true}));
+          chip.dispatchEvent(new DragEvent('drop', {dataTransfer: dt, bubbles: true, cancelable: true}));
+          card.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        }""", "sp2")
+        self.page.wait_for_timeout(50)
+        # вкладка уехала в sp2 — чипы на месте, кнопка — по-прежнему последней
+        assert read_storage_raw(self.page, "blattam-tabs")[0]["spaceId"] == "sp2"
+        d = self._bar_order()
+        assert d["isLast"] is True and d["chipCount"] == 2 and d["allChipsBeforeBtn"] is True, d
+
+    def test_button_stays_last_after_space_created(self):
+        load_view(self.page, tabs=[{"name": "T", "url": "https://t.com"}], spaces=self.SPACES3)
+        self.page.locator("#add-space-btn").click()
+        self.page.locator("#space-name-input").fill("Extra")
+        self.page.locator("#modal-confirm").click()
+        self.page.wait_for_timeout(50)
+        d = self._bar_order()
+        assert d["isLast"] is True and d["chipCount"] == 4 and d["allChipsBeforeBtn"] is True, d
+# ==========================================
+#  VIEW.JS: DnD ПЕРЕУПОРЯДОЧЕНИЕ ЧИПОВ ПРОСТРАНСТВ (чип на чип)
+# ==========================================
+
+class TestSpaceChipReorder:
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    SP = [{"id": "sp1", "name": "Alpha"}, {"id": "sp2", "name": "Beta"},
+          {"id": "sp3", "name": "Gamma"}]
+    TABS = [{"name": "T", "url": "https://t.com", "spaceId": "sp1"}]
+
+    def _inject_real_styles(self):
+        # Харнес ставит только body.innerHTML — подгружаем настоящие стили
+        # (theme.css + <style> view.html), чтобы computed-значения были реальными
+        theme = load_file("theme.css")
+        html = load_file("view.html")
+        style = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate(
+            "(styles) => { var st = document.createElement('style'); st.textContent = styles; document.head.appendChild(st); }",
+            [theme + "\n" + style])
+
+    def _token_color(self, css_part, token):
+        # Токен цвета из theme.css (hex ИЛИ rgba()) → строка как отдаёт getComputedStyle
+        m = re.search(rf"{token}:\s*(#[0-9a-fA-F]{{3,8}}|rgba?\([^)]*\))", css_part)
+        assert m, token
+        v = m.group(1)
+        if v.startswith("#"):
+            h = v[1:]
+            if len(h) == 3:
+                h = "".join(c * 2 for c in h)
+            return "rgb({0}, {1}, {2})".format(int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+        nums = [x.strip() for x in v.split("(", 1)[1].strip().strip("()").split(",")]
+        return "rgba({0}, {1}, {2}, {3})".format(nums[0], nums[1], nums[2], nums[3])
+
+    def _spaces(self):
+        return json.loads(self.page.evaluate("""(async () => {
+          var d = await chrome.storage.get('blattam-spaces');
+          return JSON.stringify((d['blattam-spaces'] || []).map(s => s.name));
+        })()"""))
+
+    def _dom_order(self):
+        return json.loads(self.page.evaluate(
+            "JSON.stringify([...document.querySelectorAll('.space-chip .chip-name')].map(e => e.textContent))"))
+
+    def _drag_drop_chip(self, src_name, dst_name, half):
+        # dragstart источника -> dragover цели (левая/правая половина по X) ->
+        # drop -> dragend; порядок событий как в реальном Chrome
+        self.page.evaluate("""(args) => {
+          const chips = [...document.querySelectorAll('.space-chip')];
+          const src = chips.find(c => c.querySelector('.chip-name').textContent === args[0]);
+          const dst = chips.find(c => c.querySelector('.chip-name').textContent === args[1]);
+          const r = dst.getBoundingClientRect();
+          const clientX = args[2] === 'before' ? r.left + r.width * 0.25 : r.left + Math.max(r.width * 0.75, 0.001);
+          const dt = new DataTransfer();
+          src.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true}));
+          dst.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true, clientX}));
+          dst.dispatchEvent(new DragEvent('drop', {dataTransfer: dt, bubbles: true, cancelable: true, clientX}));
+          src.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        }""", [src_name, dst_name, half])
+
+    def test_all_space_chips_draggable(self):
+        load_view(self.page, spaces=self.SP, tabs=self.TABS)
+        assert self.page.evaluate(
+            "[...document.querySelectorAll('.space-chip')].every(c => c.draggable)") is True
+        # Кнопка «+ Пространство» — не чип, draggable не трогаем
+        assert self.page.evaluate("document.getElementById('add-space-btn').draggable") is False
+
+    def test_drag_to_left_half_moves_space_before(self):
+        load_view(self.page, spaces=self.SP, tabs=self.TABS)
+        assert self._spaces() == ["Alpha", "Beta", "Gamma"]
+        self._drag_drop_chip("Alpha", "Gamma", "before")
+        # Alpha вырезан и вставлен перед Gamma; DOM перестроен onChanged'ом
+        assert self._spaces() == ["Beta", "Alpha", "Gamma"]
+        assert self._dom_order() == ["Beta", "Alpha", "Gamma"]
+
+    def test_drag_to_right_half_moves_space_after(self):
+        load_view(self.page, spaces=self.SP, tabs=self.TABS)
+        self._drag_drop_chip("Alpha", "Beta", "after")
+        assert self._spaces() == ["Beta", "Alpha", "Gamma"]
+        assert self._dom_order() == ["Beta", "Alpha", "Gamma"]
+
+    def test_drop_on_self_noop(self):
+        load_view(self.page, spaces=self.SP, tabs=self.TABS)
+        self._drag_drop_chip("Alpha", "Alpha", "before")
+        self._drag_drop_chip("Alpha", "Alpha", "after")
+        assert self._spaces() == ["Alpha", "Beta", "Gamma"]
+        assert self._dom_order() == ["Alpha", "Beta", "Gamma"]
+        # Вкладки не тронуты
+        assert read_storage_raw(self.page, "blattam-tabs")[0]["spaceId"] == "sp1"
+
+    def test_dragover_indicator_line_resolves_ink_both_themes(self):
+        # Индикатор — 2px вертикальная линия var(--ink) на кромке цели;
+        # computed-цвет равен токену theme.css в обеих темах; индикаторы
+        # снимаются на dragleave и dragend; dragover на себя — не цель
+        css = load_file("theme.css")
+        dark_at = css.index('[data-theme="dark"] {')
+        parts = {"light": css[:dark_at], "dark": css[dark_at:]}
+        for theme in ("light", "dark"):
+            load_view(self.page, theme=theme, spaces=self.SP, tabs=self.TABS)
+            self._inject_real_styles()
+            state = json.loads(self.page.evaluate("""(() => {
+              const chips = [...document.querySelectorAll('.space-chip')];
+              const src = chips.find(c => c.querySelector('.chip-name').textContent === 'Alpha');
+              const dst = chips.find(c => c.querySelector('.chip-name').textContent === 'Gamma');
+              const dt = new DataTransfer();
+              src.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true}));
+              const r = dst.getBoundingClientRect();
+              dst.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true, clientX: r.left + r.width * 0.25}));
+              const topLine = dst.classList.contains('drop-before');
+              const csLeft = getComputedStyle(dst, '::before');
+              const lineLeft = csLeft.width === '2px' && csLeft.content !== 'none' && csLeft.position === 'absolute';
+              const lineColor = csLeft.backgroundColor;
+              dst.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true, clientX: r.left + Math.max(r.width * 0.75, 0.001)}));
+              const bottomLine = dst.classList.contains('drop-after');
+              const csRight = getComputedStyle(dst, '::after');
+              const lineRight = csRight.width === '2px' && csRight.content !== 'none';
+              const noOverBg = !dst.classList.contains('drag-over');
+              src.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true, clientX: r.left + r.width * 0.25}));
+              const selfNoInd = !src.classList.contains('drop-before') && !src.classList.contains('drop-after');
+              dst.dispatchEvent(new DragEvent('dragleave', {dataTransfer: dt, bubbles: true}));
+              const afterLeave = !dst.classList.contains('drop-before') && !dst.classList.contains('drop-after');
+              dst.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true, clientX: r.left + r.width * 0.25}));
+              src.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+              const afterEnd = !dst.classList.contains('drop-before') && !dst.classList.contains('drop-after');
+              return JSON.stringify({topLine, lineLeft, lineColor, bottomLine, lineRight, noOverBg, selfNoInd, afterLeave, afterEnd});
+            })()"""))
+            ink = self._token_color(parts[theme], "--ink")
+            assert state["topLine"] and state["lineLeft"] and state["bottomLine"] and state["lineRight"], (theme, state)
+            assert state["noOverBg"] and state["selfNoInd"] and state["afterLeave"] and state["afterEnd"], (theme, state)
+            assert state["lineColor"] == ink, (theme, state["lineColor"], ink)
+
+    def test_fake_postdrop_click_does_not_switch_space(self):
+        # Реальный Chrome генерирует ложный click по drop-цели в момент дропа,
+        # ДО dragend источника. Ложный клик НЕ должен переключать пространство;
+        # настоящее нажатие (mousedown+click) — переключает
+        load_view(self.page, spaces=self.SP, tabs=self.TABS, last_space="sp1")
+        assert self.page.evaluate(
+            "document.querySelector('.chip.active .chip-name').textContent") == "Alpha"
+        self.page.evaluate("""() => {
+          const chips = [...document.querySelectorAll('.space-chip')];
+          const src = chips.find(c => c.querySelector('.chip-name').textContent === 'Alpha');
+          const dst = chips.find(c => c.querySelector('.chip-name').textContent === 'Gamma');
+          const r = dst.getBoundingClientRect();
+          const clientX = r.left + r.width * 0.25;
+          const dt = new DataTransfer();
+          src.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true}));
+          dst.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true, clientX}));
+          dst.dispatchEvent(new DragEvent('drop', {dataTransfer: dt, bubbles: true, cancelable: true, clientX}));
+          // ложный клик по ЦЕЛИ — сразу после drop, ДО dragend источника
+          dst.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+          src.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        }""")
+        # Порядок поменялся, активное пространство и blattam-last-space — нет
+        assert self._spaces() == ["Beta", "Alpha", "Gamma"]
+        assert self.page.evaluate(
+            "document.querySelector('.chip.active .chip-name').textContent") == "Alpha"
+        last = json.loads(self.page.evaluate(
+            "(async () => { var d = await chrome.storage.get('blattam-last-space'); return JSON.stringify(d['blattam-last-space']); })()"))
+        assert last == "sp1"
+        # Настоящее нажатие переключает: mousedown (capture) сбрасывает флаг
+        self.page.evaluate("""() => {
+          const beta = [...document.querySelectorAll('.space-chip')]
+            .find(c => c.querySelector('.chip-name').textContent === 'Beta');
+          beta.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
+          beta.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+        }""")
+        assert self.page.evaluate(
+            "document.querySelector('.chip.active .chip-name').textContent") == "Beta"
+
+    def test_chip_drag_creates_no_ghost_slot(self):
+        load_view(self.page, spaces=self.SP, tabs=[
+            {"name": "T1", "url": "https://t1.com", "spaceId": "sp1"},
+            {"name": "T2", "url": "https://t2.com", "spaceId": "sp1"},
+        ])
+        self.page.evaluate("""() => {
+          const chips = [...document.querySelectorAll('.space-chip')];
+          const src = chips[0], dst = chips[2];
+          const r = dst.getBoundingClientRect();
+          const dt = new DataTransfer();
+          src.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true}));
+          // курсор над списком вкладок: глобальные dragover/drop (dragSourceUrl
+          // null) early-return — заглушка/keeper не создаются
+          const list = document.getElementById('tabs-list');
+          const lr = list.getBoundingClientRect();
+          list.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true, clientX: lr.left + 10, clientY: lr.top + 10}));
+          dst.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true, clientX: r.left + r.width * 0.25}));
+          dst.dispatchEvent(new DragEvent('drop', {dataTransfer: dt, bubbles: true, cancelable: true, clientX: r.left + r.width * 0.25}));
+          src.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        }""")
+        self.page.wait_for_timeout(50)  # отложенное создание заглушки — setTimeout(0)
+        assert self.page.evaluate("document.querySelectorAll('.tab-ghost-slot').length") == 0
+        assert self.page.evaluate("document.querySelectorAll('.tab-row-keeper').length") == 0
+        tabs = read_storage_raw(self.page, "blattam-tabs")
+        assert all(t["spaceId"] == "sp1" for t in tabs)
+
+    def test_card_and_batch_drop_on_chip_move_tabs(self):
+        # Регрессия: карточка на чип — перенос в пространство; выделенный
+        # батч — все выделенные вкладки; порядок чипов не меняется
+        load_view(self.page, spaces=self.SP, groups=[
+            {"id": "g1", "name": "G", "spaceId": "sp1", "collapsed": False},
+        ], tabs=[
+            {"name": "B1", "url": "https://b1.com", "spaceId": "sp1", "groupId": "g1"},
+            {"name": "B2", "url": "https://b2.com", "spaceId": "sp1", "groupId": "g1"},
+            {"name": "B3", "url": "https://b3.com", "spaceId": "sp2"},
+        ])
+        self.page.hover(".gbar")
+        self.page.locator(".gbar .gselect").click()
+        assert self.page.evaluate("document.querySelectorAll('.tab-card.selected').length") == 2
+        self.page.evaluate("""(args) => {
+          const card = document.querySelector('.tab-card'); // B1 — выделенная
+          const dt = new DataTransfer();
+          card.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true}));
+          const chip = document.querySelector('.space-chip[data-space-id="' + args + '"]');
+          chip.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true}));
+          chip.dispatchEvent(new DragEvent('drop', {dataTransfer: dt, bubbles: true, cancelable: true}));
+          card.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        }""", "sp3")
+        self.page.wait_for_timeout(50)
+        tabs = read_storage_raw(self.page, "blattam-tabs")
+        by = {t["name"]: t for t in tabs}
+        assert by["B1"]["spaceId"] == "sp3" and by["B2"]["spaceId"] == "sp3"
+        assert by["B3"]["spaceId"] == "sp2"
+        assert self._spaces() == ["Alpha", "Beta", "Gamma"]
+        # Одиночная карточка без батча: переключаемся на sp2 (карточка B3
+        # рендерится только в активном пространстве), тянем B3 на чип Alpha
+        self.page.evaluate("""() => {
+          document.querySelector('.space-chip[data-space-id=\"sp2\"]').click();
+        }""")
+        self.page.evaluate("""(args) => {
+          const card = [...document.querySelectorAll('.tab-card')]
+            .find(c => c.__tab && c.__tab.name === 'B3');
+          const dt = new DataTransfer();
+          card.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true}));
+          const chip = document.querySelector('.space-chip[data-space-id="' + args + '"]');
+          chip.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true}));
+          chip.dispatchEvent(new DragEvent('drop', {dataTransfer: dt, bubbles: true, cancelable: true}));
+          card.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        }""", "sp1")
+        self.page.wait_for_timeout(50)
+        tabs = read_storage_raw(self.page, "blattam-tabs")
+        by = {t["name"]: t for t in tabs}
+        assert by["B3"]["spaceId"] == "sp1"
+        assert self._spaces() == ["Alpha", "Beta", "Gamma"]
+
+    def test_chip_icon_btn_press_no_drag_and_opens_rename(self):
+        # Нажатие на ✎ + движение ≥5px: drag чипа НЕ стартует (draggable снят
+        # guard'ом), клик по кнопке работает — открывается модалка rename
+        load_view(self.page, spaces=self.SP, tabs=self.TABS)
+        self.page.evaluate("window.__chipDragStarts = 0; document.addEventListener('dragstart', () => { window.__chipDragStarts++; }, true);")
+        self.page.hover(".space-chip")
+        box = self.page.evaluate("(() => { const r = document.querySelector('.space-chip .chip-icon-btn').getBoundingClientRect(); return {x: r.x + r.width/2, y: r.y + r.height/2}; })()")
+        self.page.mouse.move(box["x"], box["y"], steps=2)
+        self.page.wait_for_timeout(60)
+        self.page.mouse.down()
+        self.page.wait_for_timeout(40)
+        self.page.evaluate("window.__during = document.querySelector('.space-chip').draggable")
+        self.page.mouse.move(box["x"] - 5, box["y"] - 4, steps=2)
+        self.page.wait_for_timeout(50)
+        self.page.mouse.up()
+        self.page.wait_for_timeout(200)
+        assert self.page.evaluate("window.__during") is False
+        assert self.page.evaluate("document.querySelector('.space-chip').draggable") is True
+        assert self.page.evaluate("window.__chipDragStarts") == 0
+        # Клик по ✎ открывает модалку переименования
+        assert self.page.evaluate("document.getElementById('modal-title').textContent") == "Переименовать пространство"
+        assert self.page.evaluate("document.getElementById('space-modal').classList.contains('open')")
+        # Чип без «застрявших» классов после press
+        assert self.page.evaluate("document.querySelector('.space-chip').className") == "chip space-chip active"
