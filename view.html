@@ -16,22 +16,55 @@
       font-feature-settings: 'liga';
       background: var(--bg); color: var(--text);
       font-size: 14px; line-height: 1.5;
-      min-height: 100vh; display: flex; flex-direction: column;
+      height: 100vh; overflow: hidden;
     }
     ::selection { background: var(--ink); color: var(--on-ink); }
     button { font-family: inherit; cursor: pointer; }
 
-    /* ---------- top bar ---------- */
-    .header {
-      position: sticky; top: 0; z-index: 50;
-      background: var(--bg);
-      box-shadow: 0 1px 0 var(--line2);
+    /* ---------- каркас: три колонки, рейки на всю высоту страницы ---------- */
+    .workspace { display: grid; grid-template-columns: 220px minmax(0, 1fr) 190px; width: 100%; height: 100%; }
+
+    /* ---------- левая рейка: меню/настройки (hover-reveal) + аккаунт внизу ---------- */
+    .rail-left {
+      position: relative; min-height: 0; background: var(--rail-bg);
+      display: flex; flex-direction: column; padding: 22px 14px 18px;
+    }
+    .rail-controls { display: flex; flex-direction: column; gap: 2px; }
+    .rail-item { position: relative; display: flex; align-items: center; gap: 11px; width: 100%; padding: 9px 10px 9px 14px; border: 0; border-radius: 8px; background: transparent; text-align: left; cursor: pointer; transition: background .14s; }
+    .rail-item .ico { width: 18px; height: 18px; flex: none; display: grid; place-items: center; color: var(--text-faint); font-size: 13px; line-height: 1; transition: color .14s; }
+    .rail-item .ico svg { display: block; }
+    .rail-item .lbl { display: flex; flex-direction: column; min-width: 0; }
+    .rail-item .t { font: 500 12.5px/1.15 var(--font-ui); color: var(--text-muted); letter-spacing: -.1px; transition: color .14s; }
+    .rail-item .s { font: 400 9.5px/1.3 var(--font-mono); color: var(--text-faint); letter-spacing: .02em; max-height: 0; opacity: 0; overflow: hidden; margin-top: 0; transition: opacity .18s ease, max-height .18s ease, margin-top .18s ease; }
+    .rail-item .go { margin-left: auto; flex: none; color: var(--text-faint); opacity: 0; transform: translateX(-5px); transition: opacity .18s, transform .18s; font-size: 12px; }
+    .rail-item::before { content: ''; position: absolute; left: 4px; top: 50%; transform: translate(0, -50%); width: 2px; height: 0; border-radius: 2px; background: var(--ink); transition: height .18s ease; }
+    .rail-item:hover, .rail-item:focus-within, .rail-item:focus-visible { background: var(--hover); outline: none; }
+    .rail-item:hover::before, .rail-item:focus-within::before, .rail-item:focus-visible::before { height: 58%; }
+    .rail-item:hover .ico, .rail-item:focus-within .ico, .rail-item:focus-visible .ico { color: var(--text); }
+    .rail-item:hover .t, .rail-item:focus-within .t, .rail-item:focus-visible .t { color: var(--text); }
+    .rail-item:hover .s, .rail-item:focus-within .s, .rail-item:focus-visible .s { opacity: 1; max-height: 22px; margin-top: 3px; }
+    .rail-item:hover .go, .rail-item:focus-within .go, .rail-item:focus-visible .go { opacity: 1; transform: translateX(0); }
+
+    /* нижний зарезервированный блок — аккаунт (единственный, только внизу) */
+    .rail-accounts { margin-top: auto; padding-top: 16px; }
+    .rail-accounts .slot { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 8px; box-shadow: inset 0 0 0 1px var(--line); background: var(--bg); }
+    .rail-accounts .avatar { width: 28px; height: 28px; border-radius: 50%; flex: none; display: grid; place-items: center; box-shadow: inset 0 0 0 1px var(--line2); color: var(--text-faint); }
+    .rail-accounts .avatar svg { display: block; }
+    .rail-accounts .a-txt { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+    .rail-accounts .a-t { font: 500 12px/1.15 var(--font-ui); color: var(--text-soft); letter-spacing: -.1px; }
+    .rail-accounts .a-s { font: 400 9.5px/1.2 var(--font-mono); color: var(--text-faint); letter-spacing: .02em; }
+    .rail-accounts .tag { margin-left: auto; font: 500 8.5px/1 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--text-faint); border-radius: 4px; box-shadow: inset 0 0 0 1px var(--line2); padding: 3px 5px; white-space: nowrap; }
+
+    /* ---------- центральная колонка: in-column header (wordmark only — поиск переехал в левую рейку) ---------- */
+    .center { min-height: 0; overflow-y: auto; background: var(--bg); }
+    .head {
+      position: relative;
       display: flex; align-items: center; justify-content: space-between;
-      height: 52px; padding: 0 20px; flex-shrink: 0;
+      height: 78px; padding: 0 44px; flex-shrink: 0;
     }
     .wordmark { font-size: 17px; font-weight: 700; letter-spacing: -.06em; user-select: none; }
 
-    .searchbox { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 440px; max-width: 46vw; }
+    .searchbox { position: relative; width: 100%; }
     .searchbox svg { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text-faint); pointer-events: none; }
     .search-box {
       width: 100%; height: 32px; border: 0; border-radius: 6px; background: var(--bg);
@@ -48,17 +81,6 @@
       border-radius: 4px; box-shadow: 0 0 0 1px var(--line2);
     }
 
-    .top-actions { display: flex; gap: 6px; }
-    .action-btn {
-      height: 28px; padding: 0 10px; display: inline-flex; align-items: center; gap: 6px;
-      border: 0; border-radius: 6px; background: var(--bg); box-shadow: 0 0 0 1px var(--line);
-      font: 500 12.5px/1 var(--font-ui); color: var(--text-muted); letter-spacing: -.1px;
-      transition: background .1s, color .1s, box-shadow .1s;
-    }
-    .action-btn:hover { background: var(--hover); }
-    .action-btn.on { background: var(--ink); color: var(--on-ink); box-shadow: none; }
-    .action-btn .glyph { font-size: 12px; line-height: 1; }
-
     /* ---------- chips ---------- */
     .chip-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 14px 0 2px; }
     .chip-row .sep { width: 1px; height: 16px; background: var(--line2); margin: 0 6px; flex: none; }
@@ -73,13 +95,12 @@
     .chip:hover { background: var(--hover); }
     .chip.active { background: var(--ink); color: var(--on-ink); box-shadow: none; }
     .chip.drag-over { background: var(--drop-over); color: var(--on-drop); box-shadow: none; }
-    /* Индикатор reorder чипа: 2px вертикальная линия на левой/правой
-       кромке целевого чипа; обе темы — var(--ink) */
-    .space-chip.drop-before::before, .space-chip.drop-after::after {
-      content: ''; position: absolute; top: 0; bottom: 0; width: 2px; background: var(--ink); z-index: 2;
-    }
-    .space-chip.drop-before::before { left: 0; }
-    .space-chip.drop-after::after { right: 0; }
+    /* Ghost-slot чипа: тёплая заглушка размера чипа (26px, радиус чипа) в ряду
+       пространств — единственный индикатор вставки при reorder чипов (2px-линия
+       на кромке цели убрана); тон — как у ghost-slot карточек: фон --ghost-bg,
+       пунктирный контур --ghost-ring (обе темы). Инлайн-меры чипа задаёт JS */
+    .space-ghost-slot { pointer-events: none; height: 26px; border-radius: 9999px;
+      background: var(--ghost-bg); border: 1px dashed var(--ghost-ring); }
     .space-chip.dragging { opacity: 0.4; }
     .chip-add {
       height: 26px; padding: 0 11px; border: 1px dashed var(--dashed); border-radius: 9999px;
@@ -108,10 +129,11 @@
     .chip-icon-btn:hover { background: rgba(127, 127, 127, 0.3); }
 
     /* ---------- meta row ---------- */
-    .main { padding: 0 20px; flex: 1; overflow-y: auto; }
+    .main { padding: 0 44px; }
     .metarow { display: flex; align-items: baseline; gap: 12px; padding: 16px 0 12px; }
     .metatitle { font-size: 15px; font-weight: 600; letter-spacing: -.2px; display: flex; align-items: baseline; gap: 8px; }
     .metatitle .n { font: 500 11px/1 var(--font-mono); color: var(--text-faint); letter-spacing: 0; }
+
     /* «+ Группа» — полноширинная пунктирная строка в конце списка вкладок
        (все ветки рендера, включая пустое пространство) */
     #add-group-btn {
@@ -129,16 +151,23 @@
     }
 
     /* ---------- группы (сворачиваемые секции) ---------- */
-    /* «Штрих»: шапка без заливки — 1px-линия сверху (--line2) + приглушённое
-       имя; hover — лёгкий фон (--hover) + контролы */
+    /* «Штрих»: шапка без заливки — 1px-линия сверху (::before-оверлей,
+       --gbar-top-line; тёмная — градиент, тускнеет к краям) + приглушённое имя;
+       hover — лёгкий фон (--gbar-hover) + контролы */
     .gbar {
       position: relative;
       grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 2px;
-      background: transparent; border-top: 1px solid var(--line2);
+      background: transparent;
       cursor: pointer; user-select: none; transition: background .1s;
     }
-    .gbar:hover { background: var(--hover); }
+    .gbar:hover { background: var(--gbar-hover); }
     .gbar.dragging { opacity: 0.4; }
+    /* 1px-линия сверху — оверлей ::before (без border-top — layout-neutral);
+       ниже drop-индикаторы (.drop-before/.drop-after) перекрывают её при драге */
+    .gbar::before {
+      content: ''; position: absolute; left: 0; right: 0; top: 0; height: 1px;
+      background: var(--gbar-top-line); pointer-events: none; z-index: 1;
+    }
     /* Индикатор reorder групп: 2px линия на верхней/нижней кромке целевой шапки */
     .gbar.drop-before::before, .gbar.drop-after::after {
       content: ''; position: absolute; left: 0; right: 0; height: 2px; background: var(--ink); z-index: 2;
@@ -223,9 +252,8 @@
     .tab-card.dragging { opacity: 0.4; }
     /* Ghost-slot: тёплая пустая заглушка размера карточки на месте вставки (единственный индикатор дропа) */
     .tab-ghost-slot { pointer-events: none; background: var(--ghost-bg); border: 1px dashed var(--ghost-ring); }
-    .tab-card.selected { box-shadow: 0 0 0 1.5px var(--ink); }
+    .tab-card.selected { background: var(--selected-bg); box-shadow: 0 0 0 1px var(--selected-ring); }
     .tab-card.kbd-active { box-shadow: 0 0 0 1px var(--ink), 0 0 0 5px var(--kbd-ring); }
-    .tab-card.kbd-active.selected { box-shadow: 0 0 0 1.5px var(--ink), 0 0 0 5px var(--kbd-ring); }
 
     /* Hover-контролы: чекбокс (слева) + ✕ (справа) — появляются на hover */
     .tab-select, .tab-remove {
@@ -248,14 +276,14 @@
     .tab-remove:hover { background: var(--hover); color: var(--text); }
     .tab-card:hover .tab-select, .tab-card:hover .tab-remove,
     .tab-card.selected .tab-select { opacity: 1; }
-    .tab-card.selected .tab-select { background: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
+    .tab-card.selected .tab-select { background: var(--surface); box-shadow: 0 0 0 1px var(--selected-check); }
     /* При hover / на выбранной карточке фавикон заменяется на месте чекбоксом
        (visibility: hidden — слот сохраняет место, имя не сдвигается) */
     .tab-card:hover .tab-favicon, .tab-card.selected .tab-favicon,
     .tab-card:hover .tab-favicon-fallback, .tab-card.selected .tab-favicon-fallback { visibility: hidden; }
-    .tab-card.selected .tab-select::after { opacity: 1; }
-    /* Редактирование вкладки: hover-иконка снизу-справа + меню + комментарий
-       внизу внутри карточки */
+    .tab-card.selected .tab-select::after { opacity: 1; border-left-color: var(--selected-check); border-bottom-color: var(--selected-check); }
+    /* Редактирование вкладки: hover-иконка снизу-справа (клик — сразу модалка,
+       промежуточное меню убрано) + комментарий внизу внутри карточки */
     .tab-edit {
       position: absolute; right: 6px; bottom: 6px; width: 18px; height: 18px;
       border: 0; border-radius: 50%; padding: 0; display: grid; place-items: center;
@@ -264,39 +292,35 @@
     }
     .tab-card:hover .tab-edit { opacity: 1; }
     .tab-edit:hover { background: var(--bg); box-shadow: 0 0 0 1px var(--line); color: var(--text); }
-    .tab-card-menu {
-      position: absolute; right: 6px; bottom: 28px; z-index: 20; min-width: 110px; padding: 4px 0;
-      background: var(--surface); border-radius: 6px; box-shadow: 0 0 0 1px var(--line), var(--shadow-xl);
-    }
-    .tab-card-menu button {
-      display: block; width: 100%; padding: 6px 12px; border: 0; background: none; cursor: pointer;
-      font: 400 12.5px/1.2 var(--font-ui); color: var(--text); text-align: left;
-    }
-    .tab-card-menu button:hover { background: var(--hover); }
     .tab-comment {
       position: absolute; left: 10px; right: 30px; bottom: 8px;
-      font: 400 10px/1.3 var(--font-mono); color: var(--text-faint);
+      font: 400 9px/1.3 var(--font-mono); color: var(--text-faint);
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
 
     .cbody { flex: 1; display: flex; align-items: flex-start; padding: 8px 10px 9px; }
-    .cname { display: flex; align-items: center; gap: 5px; }
-    .cname img { width: 13px; height: 13px; border-radius: 3px; flex: none; }
+    /* align-items: flex-start — фавикон стоит на первой строке имени */
+    .cname { display: flex; align-items: flex-start; gap: 5px; }
+    .cname img { width: 13px; height: 13px; border-radius: 3px; flex: none; margin-top: 2px; }
     /* Фавикон вкладки — перед именем */
     .tab-favicon {
-      width: 15px; height: 15px; flex: none; object-fit: contain;
+      width: 15px; height: 15px; flex: none; object-fit: contain; margin-top: 2px;
       border-radius: 3px; box-shadow: 0 0 0 1px var(--line); background: var(--surface);
     }
     /* Буквенный fallback (нет фавикона / он не загрузился) — монохромная плитка */
     .tab-favicon-fallback {
-      width: 15px; height: 15px; flex: none; display: grid; place-items: center;
+      width: 15px; height: 15px; flex: none; display: grid; place-items: center; margin-top: 2px;
       font: 500 9px/1 var(--font-mono); color: var(--text-muted);
       background: var(--hover); border-radius: 3px; box-shadow: 0 0 0 1px var(--line);
       user-select: none;
     }
+    /* Имя вкладки: длинное имя переносится на 2-ю строку; если не влезает —
+       обрезается многоточием в конце 2-й строки. Короткое имя — одна строка. */
     .tab-name {
       font-size: var(--card-name-size); font-weight: 500; letter-spacing: -.1px;
-      color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0;
+      color: var(--card-name); flex: 1; min-width: 0;
+      white-space: normal; display: -webkit-box; -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical; overflow: hidden; text-overflow: ellipsis;
     }
     .tab-name-input {
       flex: 1; min-width: 0; font-size: var(--card-name-size); font-weight: 500; color: var(--text);
@@ -304,6 +328,24 @@
       box-shadow: 0 0 0 1.5px var(--ink); outline: none; background: var(--surface-soft);
     }
 
+
+    /* ---------- правая рейка: дубликат открытых вкладок браузера (пока пусто, watermark) ---------- */
+    .rail-right {
+      position: relative; min-height: 0; background: var(--rail-bg);
+      display: flex; flex-direction: column; align-items: center;
+      padding-top: 34px;
+    }
+    .rail-right .wm {
+      writing-mode: vertical-rl; text-orientation: mixed;
+      font: 500 9px/1 var(--font-mono); letter-spacing: .24em; text-transform: uppercase;
+      color: var(--text-faint); opacity: .45; user-select: none; pointer-events: none;
+    }
+    .rail-right .ghost-tabs { margin-top: 30px; display: flex; flex-direction: column; gap: 10px; align-items: center; opacity: .30; pointer-events: none; }
+    .rail-right .ghost-tabs i { display: block; height: 9px; border-radius: 5px; box-shadow: inset 0 0 0 1px var(--line2); background: var(--bg); }
+    .rail-right .ghost-tabs i:nth-child(1) { width: 60px; }
+    .rail-right .ghost-tabs i:nth-child(2) { width: 52px; }
+    .rail-right .ghost-tabs i:nth-child(3) { width: 44px; }
+    .rail-right .ghost-tabs i:nth-child(4) { width: 36px; }
     /* ---------- states ---------- */
     .empty-state { padding: 60px 0; text-align: center; color: var(--text-muted); font-size: 14px; }
     .empty-state span { display: block; margin-top: 6px; font-size: 12.5px; color: var(--text-faint); }
@@ -356,57 +398,115 @@
     .modal-btn.ghost:hover { background: var(--hover); }
     .modal-btn.primary { background: var(--ink); color: var(--on-ink); }
     .modal-btn.primary:hover { opacity: .88; }
+    /* Модалка редактирования вкладки — вертикальная (выше, чем шире), крупнее
+       общей .modal; тон текста полей — как у имени вкладки (--card-name).
+       Скоуп по #edit-tab-modal: модалка пространств (.modal / #space-name-input)
+       остаётся прежней */
+    #edit-tab-modal .modal { min-width: 300px; max-width: 320px; padding: 30px 24px; }
+    #edit-tab-modal .modal h3 { font-size: 15px; margin-bottom: 24px; }
+    #edit-tab-modal input[type="text"] { padding: 16px 14px; font-size: 14px; margin-bottom: 28px; color: var(--card-name); }
 
     @media (max-width: 760px) {
-      .searchbox { position: static; transform: none; width: auto; flex: 1; margin: 0 12px; max-width: none; }
-      .header { height: auto; padding: 10px 16px; flex-wrap: wrap; gap: 8px; }
-      .top-actions { width: 100%; justify-content: flex-end; }
+      .workspace { grid-template-columns: 60px minmax(0, 1fr); }
+      .rail-right { display: none; }
+      .rail-left { padding: 14px 8px; }
+      .rail-left .searchbox { display: none; }
+      .rail-item .lbl, .rail-item .go { display: none; }
+      .rail-item { justify-content: center; padding: 9px 6px; }
+      .rail-accounts .a-txt, .rail-accounts .tag { display: none; }
+      .rail-accounts .slot { justify-content: center; }
+      .head, .main { padding-left: 16px; padding-right: 16px; }
     }
   </style>
 </head>
 <body>
-  <header class="header">
-    <div class="wordmark">Toby</div>
-    <div class="searchbox">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-      <input type="text" class="search-box" placeholder="Поиск во вкладках…" id="search" autocomplete="off" spellcheck="false">
-      <kbd>/</kbd>
-    </div>
-    <div class="top-actions">
-      <button class="action-btn" id="select-btn" title="Выбрать все видимые"><span class="glyph">☑</span>Выбрать</button>
-      <button class="action-btn" id="theme-btn" title="Переключить тёмную/светлую тему"><span class="glyph">🌙</span></button>
-      <button class="action-btn" id="export-btn" title="Экспортировать JSON">↓ Экспорт</button>
-      <button class="action-btn" id="import-btn" title="Импортировать JSON">↑ Импорт</button>
-      <input type="file" id="import-input" accept=".json" style="display:none;">
-    </div>
-  </header>
+  <div class="workspace">
+    <!-- ЛЕВАЯ РЕЙКА — меню/настройки (тема, экспорт/импорт, настройки) + аккаунт внизу -->
+    <aside class="rail-left" id="rail-left" aria-label="Меню и настройки">
+      <div class="searchbox">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input type="text" class="search-box" placeholder="Поиск во вкладках…" id="search" autocomplete="off" spellcheck="false">
+        <kbd>/</kbd>
+      </div>
+      <div class="rail-controls" id="rail-controls">
+        <button class="rail-item" id="theme-btn" title="Переключить тёмную/светлую тему">
+          <span class="ico"><span class="glyph">🌙</span></span>
+          <span class="lbl"><span class="t">Тема</span><span class="s">Светлая · тёмная</span></span>
+          <span class="go">→</span>
+        </button>
+        <button class="rail-item" id="export-btn" title="Экспортировать JSON">
+          <span class="ico"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 11 5 5 5-5"/><path d="M5 21h14"/></svg></span>
+          <span class="lbl"><span class="t">Экспорт</span><span class="s">Скачать JSON</span></span>
+          <span class="go">→</span>
+        </button>
+        <button class="rail-item" id="import-btn" title="Импортировать JSON">
+          <span class="ico"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21V9"/><path d="m7 13 5-5 5 5"/><path d="M5 3h14"/></svg></span>
+          <span class="lbl"><span class="t">Импорт</span><span class="s">Загрузить JSON</span></span>
+          <span class="go">→</span>
+        </button>
+        <button class="rail-item" id="settings-btn" title="Скоро — настройки">
+          <span class="ico"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>
+          <span class="lbl"><span class="t">Настройки</span><span class="s">Параметры</span></span>
+          <span class="go">→</span>
+        </button>
+      </div>
 
-  <div class="main">
-    <!-- Пространства -->
-    <nav class="chip-row" id="spaces-bar">
-      <span id="space-chips" style="display:contents"></span>
-      <button class="chip-add" id="add-space-btn" title="Новое пространство">+ Пространство</button>
-    </nav>
+      <div class="rail-accounts">
+        <div class="slot" title="Скоро — вход и синхронизация вкладок">
+          <span class="avatar" aria-hidden="true">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+          </span>
+          <span class="a-txt">
+            <span class="a-t">Аккаунт</span>
+            <span class="a-s">Скоро · синхронизация</span>
+          </span>
+          <span class="tag">скоро</span>
+        </div>
+      </div>
+    </aside>
 
-    <!-- Meta -->
-    <div class="metarow">
-      <div class="metatitle"><span id="meta-label">Мои вкладки</span><span class="n" id="meta-count">0</span></div>
-    </div>
+    <!-- ЦЕНТР — in-column header (без кнопки темы), чипы, grid -->
+    <main class="center" id="center-pane">
+      <header class="head">
+        <div class="wordmark">Toby</div>
+      </header>
 
-    <!-- States -->
-    <div id="empty-state" class="empty-state" style="display:none;">
-      Пока пусто
-      <span>Вкладки, сохранённые в это пространство, появятся здесь</span>
-    </div>
-    <div id="no-results" class="no-results">
-      Ничего не найдено
-      <span>Попробуйте изменить запрос или сбросить фильтры</span>
-      <button id="btn-reset-filters">Сбросить фильтры</button>
-    </div>
+      <div class="main">
+        <!-- Пространства -->
+        <nav class="chip-row" id="spaces-bar">
+          <span id="space-chips" style="display:contents"></span>
+          <button class="chip-add" id="add-space-btn" title="Новое пространство">+ Пространство</button>
+        </nav>
 
-    <!-- Cards -->
-    <div id="tabs-list" class="tabs-list"></div>
+        <!-- Meta -->
+        <div class="metarow">
+          <div class="metatitle"><span id="meta-label">Мои вкладки</span><span class="n" id="meta-count">0</span></div>
+        </div>
+
+        <!-- States -->
+        <div id="empty-state" class="empty-state" style="display:none;">
+          Пока пусто
+          <span>Вкладки, сохранённые в это пространство, появятся здесь</span>
+        </div>
+        <div id="no-results" class="no-results">
+          Ничего не найдено
+          <span>Попробуйте изменить запрос или сбросить фильтры</span>
+          <button id="btn-reset-filters">Сбросить фильтры</button>
+        </div>
+
+        <!-- Cards -->
+        <div id="tabs-list" class="tabs-list"></div>
+      </div>
+    </main>
+
+    <!-- ПРАВАЯ РЕЙКА — дубликат открытых вкладок браузера (пока пусто, watermark) -->
+    <aside class="rail-right" id="rail-right" aria-label="Вкладки браузера (скоро)">
+      <span class="wm">ВКЛАДКИ&nbsp;БРАУЗЕРА</span>
+      <div class="ghost-tabs" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+    </aside>
   </div>
+
+  <input type="file" id="import-input" accept=".json" style="display:none;">
 
   <!-- Selection bar -->
   <div id="selection-bar" class="selection-bar hidden">

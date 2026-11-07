@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Toby — вкладки</title>
+  <link rel="icon" href="data:,">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    /* BlattamToby — дизайн-токены (копия из theme.css: :root + [data-theme="dark"] без изменений) */
+    :root {
+  /* Фоны */
+  --bg: #ffffff;             /* фон страницы */
+  --surface: #ffffff;        /* хедер, модалки, дропдауны, поля, гбары */
+  --card-bg: #f5f5f5;        /* фон карточки — чуть выше фона страницы (контраст) */
+  --surface-soft: #fafafa;   /* лёгкий фон (hover полей) */
+  --btn-hover: #fafafa;      /* hover кнопок/чипов */
+  --hover: #fafafa;          /* универсальный hover */
+  --gbar-hover: var(--hover);   /* hover шапки группы — светлая: как --hover */
+
+  /* Текст */
+  --text: #171717;
+  --text-soft: #4d4d4d;
+  --text-muted: #666666;
+  --text-faint: #808080;
+  --card-name: #171717;    /* имя карточки — светлая тема: как --text */
+  --on-ink: #ffffff;         /* текст на черниле (активные чипы, тёмные кнопки) */
+
+  /* Границы (1px) */
+  --line: rgba(0, 0, 0, 0.08);    /* тонкая граница: чипы, карточки, поля, дропдауны */
+  --line2: #ebebeb;               /* линия хедера, разделители, hover-границы */
+  --gbar-top-line: var(--line2);  /* линия сверху гбара — светлая: сплошная, как --line2 */
+  --dashed: #b0b0b0;              /* пунктир кнопки «+ Папка» */
+  --dashed-soft: #c8c8c8;         /* пунктир (popup) */
+  --dashed-hover: #737373;
+
+  /* Чернило — единственный акцент (dark mode: светлое чернило) */
+  --ink: #171717;
+  --ink-hover: rgba(23, 23, 23, 0.88);
+  --kbd-ring: rgba(23, 23, 23, 0.08);   /* ореол вокруг клавиатурно-активной карточки */
+  --sel-glow: rgba(23, 23, 23, 0.10);   /* ореол выбранных/активных карточек */
+  --selected-ring: rgba(107, 16, 32, 0.25);  /* кольцо выбранной карточки — бордовый тон, заметнее --line, слабее чернила */
+  --selected-bg: #efe8e9;                  /* фон выбранной карточки — темнее карточки, с бордовым оттенком */
+  --selected-check: rgba(107, 16, 32, 0.90);  /* контур + галочка чекбокса выбранной карточки */
+
+  /* Функциональные (монохром) */
+  --danger: #171717;          /* ✕ на карточках */
+  --success: #4d4d4d;
+  --drop-over: #171717;       /* чип папки под перетаскиваемой карточкой */
+  --on-drop: #ffffff;
+
+  /* Тёплый акцент: заглушка перетаскивания (фон + пунктирный контур) */
+  --ghost-bg: #fbe3b6;        /* фон призрака перетаскивания */
+  --ghost-ring: #d99a4e;      /* тёплый контур призрака */
+
+  /* Тени и оверлей */
+  --shadow-hover: 0 2px 10px rgba(0, 0, 0, 0.06);   /* hover карточки */
+  --shadow-pop: 0 2px 8px rgba(0, 0, 0, 0.15);      /* дропдауны */
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.10), 0 2px 2px rgba(0, 0, 0, 0.04); /* плавающая панель */
+  --shadow-xl: 0 4px 16px rgba(0, 0, 0, 0.2);       /* модалки */
+  --overlay: rgba(0, 0, 0, 0.3);
+
+  /* Геометрия карточек (единственная плотность — компактная) */
+  --card-min: 141px;          /* минимальная ширина карточки в сетке (176px → 141px, -20%) */
+  --card-gap: 12px;           /* зазор между карточками */
+  --card-radius: 8px;
+  --card-header-padding: 8px 10px;
+  --card-name-size: 11.5px;
+
+  /* Шрифты */
+  --font-ui: 'Geist', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+}
+[data-theme="dark"] {
+  /* Фоны */
+  --bg: #1f1c1b;
+  --surface: #2a2624;        /* хедер, модалки, дропдауны, поля */
+  --card-bg: #36312d;        /* фон карточки — выше фона страницы (контраст) */
+  --surface-soft: #282422;
+  --btn-hover: #38322f;
+  --hover: #38322f;
+  --gbar-hover: rgba(255, 255, 255, 0.05); /* hover шапки группы — тёмная: едва заметный */
+
+  /* Текст */
+  --text: #f5f2ee;
+  --text-soft: #d7d1cb;
+  --text-muted: #a8a09a;
+  --text-faint: #827c76;
+  --card-name: #b5ada6;    /* имя карточки — тусклее, ближе к --text-muted */
+  --on-ink: #1f1c1b;
+
+  /* Границы */
+  --line: rgba(255, 255, 255, 0.10);
+  --line2: rgba(255, 255, 255, 0.16);
+  --gbar-top-line: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.16) 50%, rgba(255,255,255,0) 100%);
+  --dashed: #6d655e;
+  --dashed-soft: #56504a;
+  --dashed-hover: #a8a09a;
+
+  /* Чернило */
+  --ink: #f5f2ee;
+  --ink-hover: rgba(245, 242, 238, 0.90);
+  --kbd-ring: rgba(245, 242, 238, 0.10);
+  --sel-glow: rgba(245, 242, 238, 0.10);
+  --selected-ring: rgba(222, 120, 138, 0.30);  /* кольцо выбранной карточки — бордовый тон, тёмная тема */
+  --selected-bg: #2e2325;                  /* фон выбранной карточки — темнее карточки, с бордовым оттенком */
+  --selected-check: rgba(230, 145, 160, 0.95);  /* контур + галочка чекбокса выбранной карточки */
+
+  /* Функциональные */
+  --danger: #f5f2ee;
+  --success: #a8a09a;
+  --drop-over: #f5f2ee;
+  --on-drop: #1f1c1b;
+
+  /* Тёплый акцент: заглушка перетаскивания */
+  --ghost-bg: #4c3c22;       /* фон призрака перетаскивания */
+  --ghost-ring: #d7a24d;     /* тёплый контур призрака */
+
+  /* Тени (на тёмном — глубже) */
+  --shadow-hover: 0 2px 10px rgba(0, 0, 0, 0.45);
+  --shadow-pop: 0 2px 8px rgba(0, 0, 0, 0.50);
+  --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.50), 0 2px 2px rgba(0, 0, 0, 0.30);
+  --shadow-xl: 0 6px 18px rgba(0, 0, 0, 0.55);
+  --overlay: rgba(0, 0, 0, 0.55);
+}
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; height: 100%; }
+    html, body { height: 100%; }
+    body {
+      font-family: var(--font-ui);
+      font-feature-settings: 'liga';
+      background: var(--bg); color: var(--text);
+      font-size: 14px; line-height: 1.5;
+      height: 100vh; overflow: hidden;
+      display: flex; flex-direction: column;
+    }
+    ::selection { background: var(--ink); color: var(--on-ink); }
+    button { font-family: inherit; cursor: pointer; }
+    .hairline-r { box-shadow: inset -1px 0 0 var(--line2); }
+    .hairline-l { box-shadow: inset 1px 0 0 var(--line2); }
+
+    /* ---------- шапка (full-width, sticky) ---------- */
+    .header {
+      position: sticky; top: 0; z-index: 50;
+      background: var(--bg);
+      box-shadow: 0 1px 0 var(--line2);
+      display: flex; align-items: center; justify-content: space-between;
+      height: 52px; padding: 0 20px; flex-shrink: 0;
+    }
+    .wordmark { font-size: 17px; font-weight: 700; letter-spacing: -.06em; user-select: none; }
+    .searchbox { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 440px; max-width: 40vw; }
+    .searchbox svg { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text-faint); pointer-events: none; }
+    .search-box {
+      width: 100%; height: 32px; border: 0; border-radius: 6px; background: var(--bg);
+      box-shadow: 0 0 0 1px var(--line);
+      padding: 0 32px; font: 400 13px/1 var(--font-ui); color: var(--text);
+      outline: none; transition: box-shadow .12s;
+    }
+    .search-box::placeholder { color: var(--text-faint); }
+    .search-box:focus { box-shadow: 0 0 0 1.5px var(--ink); }
+    .searchbox kbd {
+      position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+      min-width: 18px; height: 18px; padding: 0 4px; display: grid; place-items: center;
+      font: 500 10.5px/1 var(--font-mono); color: var(--text-faint);
+      border-radius: 4px; box-shadow: 0 0 0 1px var(--line2);
+    }
+    .header-right { display: flex; align-items: center; gap: 6px; }
+    .icon-btn {
+      width: 30px; height: 30px; display: grid; place-items: center;
+      border: 0; border-radius: 6px; background: var(--bg); box-shadow: 0 0 0 1px var(--line);
+      color: var(--text-muted); transition: background .1s, color .1s, box-shadow .1s;
+    }
+    .icon-btn:hover { background: var(--hover); color: var(--text); }
+    .icon-btn svg { display: block; }
+
+    /* ---------- каркас: три колонки под шапкой ---------- */
+    .workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: 68px 1fr 260px; }
+
+    /* левая колонка — будущее место строки вкладок браузера (пусто) */
+    .left {
+      min-height: 0; overflow: hidden; position: relative;
+      box-shadow: inset -1px 0 0 var(--line2);
+      background: var(--bg);
+    }
+    .left .wm {
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      display: flex; flex-direction: column; align-items: center; gap: 12px;
+      color: var(--text-faint); opacity: .38; user-select: none; pointer-events: none;
+    }
+    .left .stack { display: flex; flex-direction: column; gap: 3px; align-items: center; }
+    .left .stack i { display: block; width: 22px; height: 7px; border-radius: 3px; box-shadow: inset 0 0 0 1px currentColor; opacity: .55; }
+    .left .stack i:first-child { width: 26px; opacity: .85; }
+    .left .vlabel {
+      writing-mode: vertical-rl; text-orientation: mixed;
+      font: 500 9px/1 var(--font-mono); letter-spacing: .18em; text-transform: uppercase;
+    }
+
+    /* центральная колонка — контент */
+    .center { min-height: 0; overflow-y: auto; background: var(--bg); }
+    .main { padding: 0 20px; }
+
+    /* ---------- чипы пространств ---------- */
+    .chip-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 14px 0 2px; }
+    .chip {
+      height: 26px; padding: 0 11px; border: 0; border-radius: 9999px;
+      display: inline-flex; align-items: center; gap: 5px;
+      background: var(--bg); box-shadow: 0 0 0 1px var(--line);
+      font: 500 12.5px/1 var(--font-ui); color: var(--text-muted); letter-spacing: -.1px;
+      transition: background .1s, color .1s, box-shadow .1s; user-select: none;
+    }
+    .chip:hover { background: var(--hover); }
+    .chip.active { background: var(--ink); color: var(--on-ink); box-shadow: none; }
+    .chip-add {
+      height: 26px; padding: 0 11px; border: 1px dashed var(--dashed); border-radius: 9999px;
+      display: inline-flex; align-items: center; gap: 5px;
+      background: transparent; font: 500 12.5px/1 var(--font-ui); color: var(--text-muted); letter-spacing: -.1px;
+      transition: background .1s, border-color .1s; white-space: nowrap;
+    }
+    .chip-add:hover { background: var(--hover); border-color: var(--dashed-hover); }
+    #add-space-btn {
+      height: 26px; padding: 0; border: 0; background: transparent;
+      font: 500 10.5px/1 var(--font-mono); color: var(--text-faint);
+      text-transform: uppercase; letter-spacing: .08em; cursor: pointer;
+      transition: color .1s; white-space: nowrap;
+    }
+    #add-space-btn:hover { color: var(--text); }
+
+    /* ---------- meta строка ---------- */
+    .metarow { display: flex; align-items: baseline; gap: 12px; padding: 16px 0 12px; }
+    .metatitle { font-size: 15px; font-weight: 600; letter-spacing: -.2px; display: flex; align-items: baseline; gap: 8px; }
+    .metatitle .n { font: 500 11px/1 var(--font-mono); color: var(--text-faint); letter-spacing: 0; }
+
+    /* ---------- сетка карточек ---------- */
+    .tabs-list {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--card-min), 1fr));
+      gap: var(--card-gap); width: 100%; padding-bottom: 60px;
+    }
+    .tabs-list.swap > * { animation: cardIn .18s ease both; }
+    @keyframes cardIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+    /* ---------- группы ---------- */
+    .gbar {
+      position: relative;
+      grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 2px;
+      background: transparent; cursor: pointer; user-select: none; transition: background .1s;
+    }
+    .gbar:hover { background: var(--gbar-hover); }
+    .gbar::before {
+      content: ''; position: absolute; left: 0; right: 0; top: 0; height: 1px;
+      background: var(--gbar-top-line); pointer-events: none; z-index: 1;
+    }
+    .gbar .chev { font: 400 10px/1 var(--font-mono); color: var(--text-faint); width: 10px; flex: none; text-align: center; }
+    .gbar .gname {
+      font-size: 12px; font-weight: 500; letter-spacing: -.1px; color: var(--text-soft);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .gbar .gcount { font: 400 10.5px/1 var(--font-mono); color: var(--text-faint); white-space: nowrap; flex: none; }
+    .gbar .gdel {
+      flex: none; width: 18px; height: 18px; border: 0; border-radius: 50%; padding: 0;
+      display: grid; place-items: center; background: transparent;
+      font: 400 11px/1 var(--font-ui); color: var(--text-faint);
+      opacity: 0; transition: opacity .12s, background .1s, color .1s;
+    }
+    .gbar:hover .gdel { opacity: 1; }
+    .gbar .gdel:hover { background: var(--bg); box-shadow: 0 0 0 1px var(--line); color: var(--text); }
+    .loose-label {
+      grid-column: 1 / -1;
+      display: flex; align-items: center; gap: 8px;
+      font: 500 10.5px/1 var(--font-mono); color: var(--text-faint); text-transform: uppercase; letter-spacing: .08em;
+      padding-top: 4px;
+    }
+
+    /* ---------- карточки вкладок ---------- */
+    .tab-card {
+      position: relative; border-radius: var(--card-radius); background: var(--card-bg);
+      box-shadow: 0 0 0 1px var(--line);
+      transition: box-shadow .12s, transform .12s;
+      cursor: pointer; display: flex; flex-direction: column; overflow: hidden;
+      min-height: 74px;
+    }
+    .tab-card:hover { box-shadow: 0 0 0 1px var(--line), var(--shadow-hover); transform: translateY(-1px); }
+    .tab-card.selected { background: var(--selected-bg); box-shadow: 0 0 0 1px var(--selected-ring); }
+    .tab-select, .tab-remove {
+      position: absolute; display: grid; place-items: center;
+      background: var(--surface); box-shadow: 0 0 0 1px var(--line);
+      opacity: 0; transition: opacity .12s, background .1s; z-index: 2;
+    }
+    .tab-select {
+      top: 8px; left: 10px; width: 15px; height: 15px; border-radius: 3px; border: 0; padding: 0; cursor: pointer;
+      appearance: none; -webkit-appearance: none; margin: 0;
+    }
+    .tab-select::after {
+      content: ''; width: 8px; height: 4px; border-left: 1.5px solid var(--on-ink); border-bottom: 1.5px solid var(--on-ink);
+      transform: rotate(-45deg) translateY(-1px); opacity: 0;
+    }
+    .tab-remove {
+      top: 5px; right: 5px; width: 19px; height: 19px; border-radius: 50%; border: 0; padding: 0;
+      font: 400 12px/1 var(--font-ui); color: var(--text-muted);
+    }
+    .tab-remove:hover { background: var(--hover); color: var(--text); }
+    .tab-card:hover .tab-select, .tab-card:hover .tab-remove,
+    .tab-card.selected .tab-select { opacity: 1; }
+    .tab-card.selected .tab-select { background: var(--surface); box-shadow: 0 0 0 1px var(--selected-check); }
+    .tab-card:hover .tab-favicon-fallback, .tab-card.selected .tab-favicon-fallback { visibility: hidden; }
+    .tab-card.selected .tab-select::after { opacity: 1; border-left-color: var(--selected-check); border-bottom-color: var(--selected-check); }
+    .tab-edit {
+      position: absolute; right: 6px; bottom: 6px; width: 18px; height: 18px;
+      border: 0; border-radius: 50%; padding: 0; display: grid; place-items: center;
+      background: transparent; font: 400 11px/1 var(--font-ui); color: var(--text-faint);
+      opacity: 0; transition: opacity .12s, background .1s, color .1s; cursor: pointer;
+    }
+    .tab-card:hover .tab-edit { opacity: 1; }
+    .tab-edit:hover { background: var(--bg); box-shadow: 0 0 0 1px var(--line); color: var(--text); }
+    .cbody { flex: 1; display: flex; align-items: flex-start; padding: 8px 10px 9px; }
+    .cname { display: flex; align-items: flex-start; gap: 5px; }
+    .tab-favicon-fallback {
+      width: 15px; height: 15px; flex: none; display: grid; place-items: center; margin-top: 2px;
+      font: 500 9px/1 var(--font-mono); color: var(--text-muted);
+      background: var(--hover); border-radius: 3px; box-shadow: 0 0 0 1px var(--line);
+      user-select: none;
+    }
+    .tab-name {
+      font-size: var(--card-name-size); font-weight: 500; letter-spacing: -.1px;
+      color: var(--card-name); flex: 1; min-width: 0;
+      white-space: normal; display: -webkit-box; -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical; overflow: hidden; text-overflow: ellipsis;
+    }
+    .no-results { display: none; padding: 40px 0; text-align: center; color: var(--text-muted); font-size: 14px; }
+    .no-results span { display: block; margin-top: 6px; font-size: 12.5px; color: var(--text-faint); }
+
+    /* ---------- правая колонка: панель настроек ---------- */
+    .rail { min-height: 0; overflow-y: auto; background: var(--bg); box-shadow: inset 1px 0 0 var(--line2); display: flex; flex-direction: column; }
+    .rail-section { padding: 14px 18px 16px; box-shadow: 0 1px 0 var(--line2); flex: none; }
+    .rail-section:last-child { box-shadow: none; }
+    .rail-label {
+      font: 500 10.5px/1 var(--font-mono); color: var(--text-faint);
+      text-transform: uppercase; letter-spacing: .08em; margin-bottom: 10px;
+    }
+    .seg {
+      display: flex; gap: 2px; padding: 2px;
+      background: var(--surface-soft); box-shadow: inset 0 0 0 1px var(--line); border-radius: 6px;
+    }
+    .seg button {
+      flex: 1; height: 24px; border: 0; border-radius: 4px; background: transparent;
+      font: 500 12px/1 var(--font-ui); color: var(--text-muted); letter-spacing: -.1px;
+      transition: background .1s, color .1s, box-shadow .1s;
+    }
+    .seg button:hover { color: var(--text); }
+    .seg button.active { background: var(--bg); box-shadow: 0 0 0 1px var(--line), 0 1px 2px rgba(0,0,0,.06); color: var(--text); }
+    .rail-btn {
+      width: 100%; height: 30px; display: flex; align-items: center; gap: 8px; padding: 0 10px;
+      border: 0; border-radius: 6px; background: var(--bg); box-shadow: 0 0 0 1px var(--line);
+      font: 500 12.5px/1 var(--font-ui); color: var(--text-muted); letter-spacing: -.1px;
+      transition: background .1s, color .1s;
+    }
+    .rail-btn:hover { background: var(--hover); color: var(--text); }
+    .rail-btn + .rail-btn { margin-top: 8px; }
+    .rail-btn .glyph { font-size: 12px; line-height: 1; color: var(--text-faint); }
+    .rail-btn:hover .glyph { color: var(--text); }
+    .setrow { display: flex; align-items: center; justify-content: space-between; height: 30px; }
+    .setrow .setlabel { font-size: 12.5px; color: var(--text-muted); letter-spacing: -.1px; }
+    .toggle {
+      width: 28px; height: 16px; border-radius: 9999px; flex: none;
+      background: var(--hover); box-shadow: inset 0 0 0 1px var(--line); position: relative;
+    }
+    .toggle .knob {
+      position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%;
+      background: var(--bg); box-shadow: 0 0 0 1px var(--line2);
+      transition: transform .12s;
+    }
+    .toggle.on { background: var(--ink); box-shadow: none; }
+    .toggle.on .knob { background: var(--on-ink); transform: translateX(12px); box-shadow: none; }
+    .account { display: flex; align-items: center; gap: 10px; }
+    .avatar {
+      width: 30px; height: 30px; border-radius: 50%; flex: none;
+      background: var(--hover); box-shadow: inset 0 0 0 1px var(--line);
+      display: grid; place-items: center;
+    }
+    .avatar .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--text-faint); }
+    .account .a-text { display: flex; flex-direction: column; min-width: 0; }
+    .account .a-title { font-size: 12.5px; font-weight: 500; color: var(--text); letter-spacing: -.1px; }
+    .account .a-sub { font-size: 11px; color: var(--text-faint); }
+    .account-btn {
+      margin-left: auto; height: 26px; padding: 0 10px; border: 0; border-radius: 6px;
+      background: var(--bg); box-shadow: 0 0 0 1px var(--line);
+      font: 500 12px/1 var(--font-ui); color: var(--text-muted); letter-spacing: -.1px;
+      transition: background .1s, color .1s;
+    }
+    .account-btn:hover { background: var(--hover); color: var(--text); }
+    .rail-foot { margin-top: auto; padding: 12px 18px; font: 400 10px/1.4 var(--font-mono); color: var(--text-faint); }
+  </style>
+</head>
+<body>
+  <header class="header">
+    <div class="wordmark">Toby</div>
+    <div class="searchbox">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input type="text" class="search-box" placeholder="Поиск во вкладках…" id="search" autocomplete="off" spellcheck="false">
+      <kbd>/</kbd>
+    </div>
+    <div class="header-right">
+      <button class="icon-btn" id="theme-btn" title="Переключить тёмную/светлую тему"></button>
+    </div>
+  </header>
+
+  <div class="workspace">
+    <!-- левая колонка: будущее место строки вкладок браузера -->
+    <aside class="left" id="left-pane">
+      <div class="wm">
+        <div class="stack"><i></i><i></i><i></i></div>
+        <span class="vlabel">Вкладки</span>
+      </div>
+    </aside>
+
+    <!-- центральная колонка: карточки -->
+    <main class="center" id="center-pane">
+      <div class="main">
+        <nav class="chip-row" id="spaces-bar">
+          <span id="space-chips" style="display:contents"></span>
+          <button class="chip-add" id="add-space-btn" title="Новое пространство">+ Пространство</button>
+        </nav>
+
+        <div class="metarow">
+          <div class="metatitle"><span id="meta-label">Мои вкладки</span><span class="n" id="meta-count">0</span></div>
+        </div>
+
+        <div id="no-results" class="no-results">
+          Ничего не найдено
+          <span>Попробуйте изменить запрос</span>
+        </div>
+
+        <div id="tabs-list" class="tabs-list"></div>
+      </div>
+    </main>
+
+    <!-- правая колонка: панель управления -->
+    <aside class="rail" id="right-pane">
+      <section class="rail-section">
+        <div class="rail-label">Тема</div>
+        <div class="seg" id="theme-seg">
+          <button id="seg-light" type="button">Светлая</button>
+          <button id="seg-dark" type="button">Тёмная</button>
+        </div>
+      </section>
+
+      <section class="rail-section">
+        <div class="rail-label">Данные</div>
+        <button class="rail-btn" id="export-btn" type="button" title="Экспортировать JSON"><span class="glyph">↓</span>Экспорт</button>
+        <button class="rail-btn" id="import-btn" type="button" title="Импортировать JSON"><span class="glyph">↑</span>Импорт</button>
+      </section>
+
+      <section class="rail-section">
+        <div class="rail-label">Настройки</div>
+        <div class="setrow"><span class="setlabel">Компактный режим</span><span class="toggle on" aria-hidden="true"><span class="knob"></span></span></div>
+        <div class="setrow"><span class="setlabel">Комментарии на карточках</span><span class="toggle" aria-hidden="true"><span class="knob"></span></span></div>
+        <div class="setrow"><span class="setlabel">Автосинхронизация</span><span class="toggle on" aria-hidden="true"><span class="knob"></span></span></div>
+      </section>
+
+      <section class="rail-section">
+        <div class="rail-label">Аккаунт</div>
+        <div class="account">
+          <span class="avatar" aria-hidden="true"><span class="dot"></span></span>
+          <span class="a-text">
+            <span class="a-title">Аккаунт</span>
+            <span class="a-sub">Скоро — синхронизация вкладок</span>
+          </span>
+          <button class="account-btn" id="login-btn" type="button">Войти</button>
+        </div>
+      </section>
+
+      <div class="rail-foot">Toby · прототип 009-a</div>
+    </aside>
+  </div>
+
+  <script>
+    /* ---------- данные (прототип) ---------- */
+    const SPACES = [
+      { id: 'work', name: 'Работа', groups: [
+        { id: 'g-proj', name: 'Проекты', tabs: [
+          { title: 'GitHub — blattamtoby', url: 'https://github.com', letter: 'G' },
+          { title: 'Figma — дизайн нового таба', url: 'https://figma.com', letter: 'F' },
+          { title: 'Linear — бэклог релиза', url: 'https://linear.app', letter: 'L' },
+          { title: 'Notion — заметки по проекту', url: 'https://notion.so', letter: 'N' },
+        ]},
+        { id: 'g-tools', name: 'Инструменты', tabs: [
+          { title: 'Документы Google — отчёт', url: 'https://docs.google.com', letter: 'Д' },
+          { title: 'Gmail', url: 'https://mail.google.com', letter: 'G' },
+          { title: 'Postman — API-запросы', url: 'https://postman.com', letter: 'P' },
+        ]},
+        { id: 'g-read', name: 'Чтение', tabs: [
+          { title: 'Медуза — главные новости', url: 'https://meduza.io', letter: 'М' },
+          { title: 'Wikipedia — MV3', url: 'https://ru.wikipedia.org', letter: 'W' },
+          { title: 'Хабр — статья про WebExtensions', url: 'https://habr.com', letter: 'Х' },
+        ]},
+      ], loose: [
+        { title: 'Stack Overflow', url: 'https://stackoverflow.com', letter: 'S' },
+        { title: 'Jira — спринт', url: 'https://jira.atlassian.com', letter: 'J' },
+      ]},
+      { id: 'personal', name: 'Личное', groups: [
+        { id: 'g-fun', name: 'Развлечения', tabs: [
+          { title: 'VK Музыка — плейлист «Дом»', url: 'https://vk.com/music', letter: 'В' },
+          { title: 'Медуза — подкасты', url: 'https://meduza.io', letter: 'М' },
+        ]},
+      ], loose: [
+        { title: 'Яндекс.Карты', url: 'https://yandex.ru/maps', letter: 'Я' },
+        { title: 'Wikipedia — в выходные', url: 'https://ru.wikipedia.org', letter: 'W' },
+      ]},
+      { id: 'study', name: 'Учёба', groups: [
+        { id: 'g-courses', name: 'Курсы', tabs: [
+          { title: 'MDN — Service Workers', url: 'https://developer.mozilla.org', letter: 'M' },
+          { title: 'Wikipedia — графы', url: 'https://ru.wikipedia.org', letter: 'W' },
+        ]},
+      ], loose: [
+        { title: 'Stack Overflow — конспект', url: 'https://stackoverflow.com', letter: 'S' },
+        { title: 'Хабр — обзор курсов', url: 'https://habr.com', letter: 'Х' },
+      ]},
+      { id: 'dev', name: 'Dev', groups: [
+        { id: 'g-code', name: 'Код', tabs: [
+          { title: 'GitHub — вкладки', url: 'https://github.com', letter: 'G' },
+          { title: 'Stack Overflow', url: 'https://stackoverflow.com', letter: 'S' },
+          { title: 'MDN — Storage API', url: 'https://developer.mozilla.org', letter: 'M' },
+        ]},
+      ], loose: [
+        { title: 'Postman — сборка запросов', url: 'https://postman.com', letter: 'P' },
+        { title: 'VS Code — документация', url: 'https://code.visualstudio.com', letter: 'V' },
+      ]},
+    ];
+    let activeSpace = 'work';
+    let collapsed = new Set();
+    let query = '';
+
+    /* ---------- рендер ---------- */
+    function tabMatches(t) { return !query || t.title.toLowerCase().includes(query); }
+
+    function cardEl(t) {
+      const d = document.createElement('div');
+      d.className = 'tab-card'; d.title = t.url;
+      d.innerHTML =
+        '<input type="checkbox" class="tab-select" aria-label="Выбрать">' +
+        '<button class="tab-remove" title="Удалить">✕</button>' +
+        '<button class="tab-edit" title="Редактировать">✎</button>' +
+        '<div class="cbody"><div class="cname">' +
+        '<span class="tab-favicon-fallback">' + t.letter + '</span>' +
+        '<div class="tab-name">' + t.title + '</div></div></div>';
+      d.addEventListener('click', (e) => {
+        if (e.target.closest('.tab-select') || e.target.closest('.tab-remove') || e.target.closest('.tab-edit')) return;
+        window.open(t.url, '_blank');
+      });
+      d.querySelector('.tab-select').addEventListener('click', (e) => {
+        e.stopPropagation(); d.classList.toggle('selected');
+      });
+      d.querySelector('.tab-remove').addEventListener('click', (e) => {
+        e.stopPropagation();
+        const space = SPACES.find(s => s.id === activeSpace);
+        const hit = space.groups.find(g => g.tabs.includes(t)) || (space.loose && space.loose.includes(t) ? { tabs: space.loose } : null);
+        if (hit) hit.tabs.splice(hit.tabs.indexOf(t), 1);
+        renderTabs(false);
+      });
+      return d;
+    }
+
+    function gbarEl(g) {
+      const d = document.createElement('div');
+      d.className = 'gbar';
+      const isCol = collapsed.has(g.id);
+      d.innerHTML =
+        '<span class="chev">' + (isCol ? '▸' : '▾') + '</span>' +
+        '<span class="gname">' + g.name + '</span>' +
+        '<span class="gcount">' + g.tabs.length + '</span>' +
+        '<button class="gdel" title="Удалить группу">✕</button>';
+      d.addEventListener('click', (e) => {
+        if (e.target.closest('.gdel')) {
+          e.stopPropagation();
+          const space = SPACES.find(s => s.id === activeSpace);
+          space.groups = space.groups.filter(x => x !== g);
+          collapsed.delete(g.id);
+          renderTabs(false);
+          return;
+        }
+        if (isCol) collapsed.delete(g.id); else collapsed.add(g.id);
+        renderTabs(false);
+      });
+      return d;
+    }
+
+    function renderTabs(animate) {
+      const list = document.getElementById('tabs-list');
+      list.innerHTML = '';
+      const space = SPACES.find(s => s.id === activeSpace);
+      const items = [];
+      let visible = 0, total = 0;
+      space.groups.forEach(g => {
+        total += g.tabs.length;
+        const vis = g.tabs.filter(tabMatches);
+        visible += vis.length;
+        if (!collapsed.has(g.id) && vis.length) {
+          list.appendChild(gbarEl(g)); items.push(list.lastChild);
+          vis.forEach(t => { const c = cardEl(t); list.appendChild(c); items.push(c); });
+        } else if (collapsed.has(g.id) && g.tabs.some(tabMatches)) {
+          list.appendChild(gbarEl(g)); items.push(list.lastChild);
+        }
+      });
+      if (space.loose) {
+        total += space.loose.length;
+        const vis = space.loose.filter(tabMatches);
+        visible += vis.length;
+        if (vis.length) {
+          const lb = document.createElement('div');
+          lb.className = 'loose-label'; lb.textContent = 'Без группы';
+          list.appendChild(lb); items.push(lb);
+          vis.forEach(t => { const c = cardEl(t); list.appendChild(c); items.push(c); });
+        }
+      }
+      document.getElementById('meta-label').textContent = space.name;
+      document.getElementById('meta-count').textContent = visible + ' / ' + total;
+      const nr = document.getElementById('no-results');
+      nr.style.display = visible ? 'none' : 'block';
+      list.style.display = visible ? '' : 'none';
+      if (animate) {
+        list.classList.remove('swap');
+        void list.offsetWidth;
+        list.classList.add('swap');
+        items.forEach((el, i) => el.style.animationDelay = (i * 14) + 'ms');
+        setTimeout(() => { list.classList.remove('swap'); items.forEach(el => el.style.animationDelay = ''); }, items.length * 14 + 260);
+      }
+    }
+
+    function renderChips() {
+      const wrap = document.getElementById('space-chips');
+      wrap.innerHTML = '';
+      SPACES.forEach(s => {
+        const b = document.createElement('button');
+        b.className = 'chip' + (s.id === activeSpace ? ' active' : '');
+        b.textContent = s.name; b.type = 'button';
+        b.addEventListener('click', () => switchSpace(s.id));
+        wrap.appendChild(b);
+      });
+    }
+
+    function switchSpace(id) {
+      if (id === activeSpace) return;
+      activeSpace = id;
+      renderChips();
+      renderTabs(true);
+    }
+
+    /* ---------- тема ---------- */
+    const MOON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
+    const SUN = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>';
+    function setTheme(dark) {
+      const root = document.documentElement;
+      if (dark) root.setAttribute('data-theme', 'dark'); else root.removeAttribute('data-theme');
+      document.getElementById('theme-btn').innerHTML = dark ? SUN : MOON;
+      document.getElementById('seg-light').classList.toggle('active', !dark);
+      document.getElementById('seg-dark').classList.toggle('active', dark);
+    }
+    function toggleTheme() { setTheme(!document.documentElement.hasAttribute('data-theme')); }
+
+    document.getElementById('theme-btn').addEventListener('click', toggleTheme);
+    document.getElementById('seg-light').addEventListener('click', () => setTheme(false));
+    document.getElementById('seg-dark').addEventListener('click', () => setTheme(true));
+
+    /* ---------- поиск ---------- */
+    const search = document.getElementById('search');
+    search.addEventListener('input', () => { query = search.value.trim().toLowerCase(); renderTabs(false); });
+    document.addEventListener('keydown', (e) => {
+      const tag = (document.activeElement && document.activeElement.tagName) || '';
+      if (e.key === '/' && tag !== 'INPUT' && tag !== 'TEXTAREA') { e.preventDefault(); search.focus(); }
+      if (e.key === 'Escape' && document.activeElement === search) { search.value = ''; query = ''; search.blur(); renderTabs(false); }
+    });
+
+    /* ---------- запуск ---------- */
+    setTheme(false);
+    renderChips();
+    renderTabs(true);
+  </script>
+</body>
+</html>

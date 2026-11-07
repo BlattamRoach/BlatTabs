@@ -52,7 +52,6 @@ let editTabRef = null; // вкладка, открытая в модалке р�
 // Панель массового выбора
 const selectionBar = document.getElementById('selection-bar');
 const selectionCount = document.getElementById('selection-count');
-const selectBtn = document.getElementById('select-btn');
 const openSelectedBtn = document.getElementById('open-selected-btn');
 const clearSelectionBtn = document.getElementById('clear-selection-btn');
 const deleteSelectedBtn = document.getElementById('delete-selected-btn');
@@ -75,6 +74,15 @@ let dragRowKeeper = null; // invisible card-sized placeholder: holds the source
                           // shifts when quickly dragging tabs
 let dragSourceGroupId = null; // id перетаскиваемой группы (reorder шапок внутри пространства)
 let dragSourceSpaceId = null; // id перетаскиваемого чипа (reorder пространств в ряду чипов)
+let dragGhostChipSlot = null; // ghost-slot чипа: тёплая заглушка размера чипа (26px) в ряду
+                              // #space-chips — единственный индикатор вставки при drag чипа
+let dragOverChipTarget = null; // последний target dragover чипа — чтобы отложенное создание
+                               // заглушки (dragstart setTimeout) повторило состояние, если
+                               // первый dragover уже попал на целевой чип ПЕРЕД таймером
+let dragOverChipSide = null; // сторона этого первого dragover ('before'/'after'):
+                             // повтор применяется по ЗАПИСАННОЙ стороне — координаты
+                             // относятся к ряду ДО reflow, после вставки заглушки
+                             // пересчёт по X дал бы противоположную половину
 let pendingChipClickAfterDrag = false; // one-shot: ложный клик по чипу-цели рождается
                         // в момент дропа (реальный Chrome: drop → click → dragend) —
                         // вооружаем на dragstart чипа и на drop; гасим ровно ОДИН;
@@ -234,6 +242,9 @@ function spaceLabel() {
 
 function renderSpaces() {
   spaceChips.innerHTML = '';
+  // Перерисовка во время drag чипа уносит chip-заглушку из DOM — сбрасываем
+  // ссылку, чтобы она не «воскресла» после dragend
+  if (dragGhostChipSlot && !dragGhostChipSlot.isConnected) dragGhostChipSlot = null;
   allSpaces.forEach(sp => {
     const chip = document.createElement('button');
     chip.className = 'chip space-chip' + (sp.id === activeSpaceId ? ' active' : '');
@@ -288,17 +299,42 @@ function renderSpaces() {
       e.dataTransfer.setData('text/plain', sp.id);
       e.dataTransfer.effectAllowed = 'move';
       dragSourceSpaceId = sp.id;
+      dragOverChipTarget = null; // свежий драг — целевой dragover ещё не приходил
+      dragOverChipSide = null;
       chip.classList.add('dragging');
       // Ложный клик вооружаем уже на dragstart: реальный Chrome генерирует
       // его на drop-цели ДО dragend источника
       pendingChipClickAfterDrag = true;
+      // Исходный чип исчезает из ряда (нативный drag-образ браузера следует за
+      // курсором); место занимает тёплая заглушка чипа — отложенно:
+      // display:none в самом dragstart «залипает» HTML5-drag в Chrome
+      setTimeout(() => {
+        // Перерисовка во время драга уносит чип из DOM, а поздний drop/dragend
+        // уже решил драг — заглушку для отсоединённого чипа не вставляем
+        if (dragSourceSpaceId !== sp.id || !chip.isConnected) return;
+        if (!dragGhostChipSlot) {
+          // Меряем ДО display:none (у скрытого чипа offsetWidth/Height = 0)
+          dragGhostChipSlot = makeSpaceGhostSlot(chip);
+          chip.insertAdjacentElement('afterend', dragGhostChipSlot);
+        }
+        chip.style.display = 'none';
+        // Гонка: первый dragover мог попасть на целевой чип ПЕРЕД этим таймером
+        // (заглушки ещё не существовало). Повторяем его состояние по записанной
+        // стороне, иначе свежая заглушка неверно замирает дома.
+        if (dragOverChipTarget && dragOverChipTarget.isConnected && dragOverChipTarget !== chip) {
+          moveSpaceGhostSlot({ el: dragOverChipTarget, side: dragOverChipSide });
+        }
+      }, 0);
     });
     chip.addEventListener('dragend', () => {
       lastDragEndAt = Date.now();
       pendingChipClickAfterDrag = true;
       dragSourceSpaceId = null;
+      dragOverChipTarget = null; // не держим ссылку на DOM-узел после драга
+      dragOverChipSide = null;
       chip.classList.remove('dragging');
-      clearSpaceReorderIndicators();
+      removeSpaceGhostSlot();
+      if (chip.isConnected) chip.style.display = ''; // drag без drop — чип обратно в ряд
       document.querySelectorAll('.space-chip.drag-over')
         .forEach(c => c.classList.remove('drag-over'));
     });
@@ -840,17 +876,20 @@ function reorderSpaces(fromId, toId, side) {
   const to = allSpaces.findIndex(x => x.id === toId);
   if (from === -1 || to === -1 || from === to) return;
   const src = allSpaces[from];
+  // no-op-guard: результат сначала на КОПИИ — если последовательность id
+  // не изменилась (чип брошен в собственный слот), записи в storage не идёт
+  // (ни лишняя перерисовка, ни лишнее событие onChanged)
+  const reordered = allSpaces.slice();
+  reordered.splice(from, 1);
+  let insertAt = reordered.findIndex(x => x.id === toId);
+  if (side === 'after') insertAt += 1;
+  reordered.splice(insertAt, 0, src);
+  if (reordered.every((x, i) => x.id === allSpaces[i].id)) return;
   allSpaces.splice(from, 1);
-  let insertAt = allSpaces.findIndex(x => x.id === toId);
+  insertAt = allSpaces.findIndex(x => x.id === toId);
   if (side === 'after') insertAt += 1;
   allSpaces.splice(insertAt, 0, src);
   chrome.storage.sync.set({ 'blattam-spaces': allSpaces });
-}
-
-// Снимаем индикаторы reorder со всех чипов пространств
-function clearSpaceReorderIndicators() {
-  document.querySelectorAll('.space-chip.drop-before, .space-chip.drop-after')
-    .forEach(c => c.classList.remove('drop-before', 'drop-after'));
 }
 
 // «+ Группа» — полноширинная пунктирная строка В КОНЦЕ списка вкладок
@@ -927,37 +966,15 @@ function appendCard(tab) {
     }
   });
 
-  // Кнопка редактирования (hover-контрол, снизу-справа) — меню «Изменить»
+  // Кнопка редактирования (hover-контрол, снизу-справа) — клик СРАЗУ открывает
+  // модалку редактирования (промежуточное меню «Изменить» убрано).
   const editBtn = document.createElement('button');
   editBtn.className = 'tab-edit';
   editBtn.title = 'Редактировать вкладку';
   editBtn.textContent = '\u270E';
-  let cardMenu = null;
-  const closeCardMenu = () => {
-    if (cardMenu) { cardMenu.remove(); cardMenu = null; }
-  };
   editBtn.addEventListener('click', (e) => {
     e.stopPropagation();
-    if (cardMenu) { closeCardMenu(); return; } // повторный клик — закрыть
-    cardMenu = document.createElement('div');
-    cardMenu.className = 'tab-card-menu';
-    const changeItem = document.createElement('button');
-    changeItem.textContent = 'Изменить';
-    changeItem.addEventListener('click', (ev) => {
-      ev.stopPropagation();
-      closeCardMenu();
-      openEditTabModal(tab);
-    });
-    cardMenu.appendChild(changeItem);
-    card.appendChild(cardMenu);
-    // Клик вне меню — закрыть
-    const onOutside = (ev) => {
-      if (cardMenu && !cardMenu.contains(ev.target)) {
-        closeCardMenu();
-        document.removeEventListener('click', onOutside);
-      }
-    };
-    setTimeout(() => document.addEventListener('click', onOutside), 0);
+    openEditTabModal(tab);
   });
 
   // Hover-контролы — absolute, привязаны к карточке
@@ -1234,9 +1251,13 @@ function matchFilter(tab, filter) {
 
 // === Drag & drop: перетаскивание карточки on чип пространства ===
 
-// Чип пространства принимает карточку (перетаскиваемая шапка группы — no-op)
-// и принимает чип-реorder: 2px-индикатор на кромке цели (левая половина —
-// вставить перед, правая — после). Семантика дропа карточки не тронута.
+// Чип принимает карточку (перетаскиваемая шапка группы — no-op) и принимает
+// чип-реorder: тёплая заглушка чипа .space-ghost-slot — как ghost-slot карточек.
+// Исходный чип скрыт (display:none), заглушка ходит за курсором в ряду:
+// левая половина целевого чипа — заглушка перед целью, правая — после
+// (reorderSideX). 2px-линия на кромке цели убрана — боковых классов на чипах
+// при drag чипа нет; единственный индикатор — заглушка. Семантика дропа
+// карточки не тронута.
 function attachSpaceDrop(chip, spaceId) {
   chip.addEventListener('dragover', (e) => {
     if (dragSourceSpaceId) {
@@ -1244,8 +1265,9 @@ function attachSpaceDrop(chip, spaceId) {
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
       const side = reorderSideX(chip, e.clientX);
-      chip.classList.toggle('drop-before', side === 'before');
-      chip.classList.toggle('drop-after', side === 'after');
+      dragOverChipTarget = chip;
+      dragOverChipSide = side;
+      moveSpaceGhostSlot({ el: chip, side: side });
       return;
     }
     if (dragSourceGroupId) return;
@@ -1253,14 +1275,19 @@ function attachSpaceDrop(chip, spaceId) {
     e.dataTransfer.dropEffect = 'move';
     chip.classList.add('drag-over');
   });
-  chip.addEventListener('dragleave', () => chip.classList.remove('drag-over', 'drop-before', 'drop-after'));
+  chip.addEventListener('dragleave', () => chip.classList.remove('drag-over'));
   chip.addEventListener('drop', (e) => {
     e.preventDefault();
-    chip.classList.remove('drag-over', 'drop-before', 'drop-after');
+    chip.classList.remove('drag-over');
     if (dragSourceSpaceId) {
       // Ложный клик по цели генерируется в этот момент (до dragend источника):
-      // вооружаем one-shot-подавление и reorder
+      // вооружаем one-shot-подавление; chip-заглушка снимается СОБСТВЕННЫМ
+      // drop-хендлером (drop чипа не проходит через глобальный document drop),
+      // затем reorder
       pendingChipClickAfterDrag = true;
+      removeSpaceGhostSlot();
+      e.stopPropagation(); // дроп по чипу закоммичен здесь — хендлер ряда
+                           // #space-chips не должен коммитить повторно
       reorderSpaces(dragSourceSpaceId, spaceId, reorderSideX(chip, e.clientX));
       return;
     }
@@ -1345,6 +1372,79 @@ function removeGhostSlot() {
   if (dragRowKeeper && dragRowKeeper.isConnected) dragRowKeeper.remove();
   dragRowKeeper = null;
 }
+
+// Ghost-slot чипа: тёплая заглушка размера чипа (высота 26px, радиус чипа)
+// в ряду #space-chips — ЕДИНСТВЕННЫЙ индикатор вставки при reorder чипов
+// (2px-линия убрана), тон и механика — как у ghost-slot карточек:
+// фон --ghost-bg, пунктирный контур --ghost-ring. Инлайн-стили — в тестах
+// head-стили view.html не грузятся. pointer-events:none — курсор «видит
+// сквозь» заглушку (dragover падает на чипы; ряд reflow'ится естественно).
+function makeSpaceGhostSlot(chip) {
+  const slot = document.createElement('div');
+  slot.className = 'space-ghost-slot';
+  slot.draggable = false;
+  slot.style.cssText =
+    'pointer-events:none;box-sizing:border-box;flex:none;background:var(--ghost-bg);' +
+    'border-width:1px;border-style:dashed;border-color:var(--ghost-ring);' +
+    'border-radius:' + (getComputedStyle(chip).borderRadius || '9999px');
+  slot.style.width = chip.offsetWidth + 'px';
+  slot.style.height = chip.offsetHeight + 'px';
+  return slot;
+}
+
+// Переносит chip-заглушку в потенциальный слот вставки ряда: левая половина
+// целевого чипа — перед ним, правая — после; соседи сдвигаются естественным
+// reflow flex-ряда (заглушка занимает один слот вместо скрытого чипа —
+// число элементов ряда не меняется, хвост не дёргается).
+function moveSpaceGhostSlot(anchor) {
+  if (!dragSourceSpaceId || !anchor || !anchor.el) return;
+  if (!dragGhostChipSlot) return;
+  if (!dragGhostChipSlot.isConnected) { dragGhostChipSlot = null; return; }
+  if (anchor.side === 'before') anchor.el.before(dragGhostChipSlot);
+  else anchor.el.after(dragGhostChipSlot);
+}
+
+function removeSpaceGhostSlot() {
+  if (dragGhostChipSlot && dragGhostChipSlot.isConnected) dragGhostChipSlot.remove();
+  dragGhostChipSlot = null;
+}
+
+// Ряд пространств (#spaces-bar: span #space-chips display:contents +
+// кнопка «+ Пространство» — последний элемент ряда) — цель дропа В ЛЮБОМ
+// месте ряда (зазор между чипами, отступы ряда, кнопка «+ Пространство»):
+// заглушка чипа pointer-events:none, поэтому дроп по заглушке/фону ряда
+// промахивался мимо хендлеров чипов — dragend без дропа, чип возвращался
+// домой без reorder. Как у дропа карточек (коммит в любом месте списка):
+// позиция дропа = ТЕКУЩАЯ DOM-позиция заглушки (соседние .space-chip;
+// кнопка «+ Пространство»/null — не цель). Drag карточки/шапки группы —
+// не трогаем (dragSourceSpaceId пуст — без preventDefault, поведение
+// byte-for-byte).
+spacesBar.addEventListener('dragover', (e) => {
+  if (!dragSourceSpaceId) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  // заглушка остаётся на последнем слоте (dragover чипов её и ставят)
+});
+
+spacesBar.addEventListener('drop', (e) => {
+  if (!dragSourceSpaceId) return;
+  e.preventDefault();
+  e.stopPropagation(); // дроп по самому чипу уже закоммичен хендлером чипа
+  const slot = dragGhostChipSlot;
+  if (slot && slot.isConnected) {
+    const next = slot.nextElementSibling;
+    const prev = slot.previousElementSibling;
+    if (next && next.classList.contains('space-chip')) {
+      reorderSpaces(dragSourceSpaceId, next.dataset.spaceId, 'before');
+    } else if (prev && prev.classList.contains('space-chip')) {
+      reorderSpaces(dragSourceSpaceId, prev.dataset.spaceId, 'after');
+    }
+    // заглушка не у чипов (ряд пуст / заглушка вне ряда) — no-op
+  }
+  // заглушки нет (крайне короткий драг) — no-op: дроп по чипу закрывает
+  // собственным хендлером чипа
+  removeSpaceGhostSlot();
+});
 
 // Секция, где ghost-slot стоит сейчас (по его DOM-позиции): ближайшая
 // предыдущая .gbar — её группа; .loose-label или шапки нет — null («Без группы»).
@@ -1731,13 +1831,7 @@ function updateSelectionBar() {
   selectionCount.textContent = `${n} выбрано`;
 }
 
-// «Выбрать» — toggle: выбрать все видимые / снять выбор с видимых
-selectBtn.addEventListener('click', () => {
-  const visible = visibleTabs(searchInput.value);
-  const allSelected = visible.length > 0 && visible.every(t => selectedUrls.has(t.url));
-  visible.forEach(t => allSelected ? selectedUrls.delete(t.url) : selectedUrls.add(t.url));
-  renderTabs(searchInput.value);
-});
+
 
 openSelectedBtn.addEventListener('click', () => {
   const urls = allTabs.filter(t => selectedUrls.has(t.url)).map(t => t.url);

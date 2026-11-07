@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Toby — вкладки</title>
+  <link rel="icon" href="data:,">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    /* BlattamToby — дизайн-токены (копия theme.css: :root + [data-theme="dark"]) */
+    :root {
+  --bg: #ffffff;
+  --surface: #ffffff;
+  --card-bg: #f5f5f5;
+  --surface-soft: #fafafa;
+  --btn-hover: #fafafa;
+  --hover: #fafafa;
+  --gbar-hover: var(--hover);
+  --rail-bg: #f4f2f0;              /* боковые рейки — мягкий светлый тон (без разделителей) */
+
+  --text: #171717;
+  --text-soft: #4d4d4d;
+  --text-muted: #666666;
+  --text-faint: #808080;
+  --card-name: #171717;
+  --on-ink: #ffffff;
+
+  --line: rgba(0, 0, 0, 0.08);
+  --line2: #ebebeb;
+  --gbar-top-line: var(--line2);
+  --dashed: #b0b0b0;
+  --dashed-soft: #c8c8c8;
+  --dashed-hover: #737373;
+
+  --ink: #171717;
+  --ink-hover: rgba(23, 23, 23, 0.88);
+  --kbd-ring: rgba(23, 23, 23, 0.08);
+  --sel-glow: rgba(23, 23, 23, 0.10);
+  --selected-ring: rgba(107, 16, 32, 0.25);
+  --selected-bg: #efe8e9;
+  --selected-check: rgba(107, 16, 32, 0.90);
+
+  --danger: #171717;
+  --success: #4d4d4d;
+  --drop-over: #171717;
+  --on-drop: #ffffff;
+
+  --ghost-bg: #fbe3b6;
+  --ghost-ring: #d99a4e;
+
+  --shadow-hover: 0 2px 10px rgba(0, 0, 0, 0.06);
+  --shadow-pop: 0 2px 8px rgba(0, 0, 0, 0.15);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.10), 0 2px 2px rgba(0, 0, 0, 0.04);
+  --shadow-xl: 0 4px 16px rgba(0, 0, 0, 0.2);
+  --overlay: rgba(0, 0, 0, 0.3);
+
+  --card-min: 141px;
+  --card-gap: 12px;
+  --card-radius: 8px;
+  --card-header-padding: 8px 10px;
+  --card-name-size: 11.5px;
+
+  --font-ui: 'Geist', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+}
+[data-theme="dark"] {
+  --bg: #1f1c1b;
+  --surface: #2a2624;
+  --card-bg: #36312d;
+  --surface-soft: #282422;
+  --btn-hover: #38322f;
+  --hover: #38322f;
+  --gbar-hover: rgba(255, 255, 255, 0.05);
+  --rail-bg: #292523;             /* боковые рейки — светлее фона страницы (без разделителей) */
+
+  --text: #f5f2ee;
+  --text-soft: #d7d1cb;
+  --text-muted: #a8a09a;
+  --text-faint: #827c76;
+  --card-name: #b5ada6;
+  --on-ink: #1f1c1b;
+
+  --line: rgba(255, 255, 255, 0.10);
+  --line2: rgba(255, 255, 255, 0.16);
+  --gbar-top-line: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.16) 50%, rgba(255,255,255,0) 100%);
+  --dashed: #6d655e;
+  --dashed-soft: #56504a;
+  --dashed-hover: #a8a09a;
+
+  --ink: #f5f2ee;
+  --ink-hover: rgba(245, 242, 238, 0.90);
+  --kbd-ring: rgba(245, 242, 238, 0.10);
+  --sel-glow: rgba(245, 242, 238, 0.10);
+  --selected-ring: rgba(222, 120, 138, 0.30);
+  --selected-bg: #2e2325;
+  --selected-check: rgba(230, 145, 160, 0.95);
+
+  --danger: #f5f2ee;
+  --success: #a8a09a;
+  --drop-over: #f5f2ee;
+  --on-drop: #1f1c1b;
+
+  --ghost-bg: #4c3c22;
+  --ghost-ring: #d7a24d;
+
+  --shadow-hover: 0 2px 10px rgba(0, 0, 0, 0.45);
+  --shadow-pop: 0 2px 8px rgba(0, 0, 0, 0.50);
+  --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.50), 0 2px 2px rgba(0, 0, 0, 0.30);
+  --shadow-xl: 0 6px 18px rgba(0, 0, 0, 0.55);
+  --overlay: rgba(0, 0, 0, 0.55);
+}
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; height: 100%; }
+    html, body { height: 100%; }
+    body {
+      font-family: var(--font-ui);
+      font-feature-settings: 'liga';
+      background: var(--bg); color: var(--text);
+      font-size: 14px; line-height: 1.5;
+      height: 100vh; overflow: hidden;
+      display: flex;
+    }
+    ::selection { background: var(--ink); color: var(--on-ink); }
+    button { font-family: inherit; cursor: pointer; }
+
+    /* ---------- каркас: три колонки, рейки на всю высоту страницы ----------
+       ЛЕВАЯ = меню/настройки; ЦЕНТР = вкладки; ПРАВАЯ = дубликат открытых вкладок браузера (пока пусто) */
+    .workspace { display: grid; grid-template-columns: 220px minmax(0, 1fr) 190px; width: 100%; height: 100%; }
+
+    /* ---------- левая рейка: меню/настройки (hover-reveal) + аккаунт внизу ---------- */
+    .rail-left {
+      position: relative; min-height: 0; background: var(--rail-bg);
+      display: flex; flex-direction: column; padding: 22px 14px 18px;
+    }
+    .rail-left .eyebrow { font: 500 9px/1 var(--font-mono); letter-spacing: .22em; text-transform: uppercase; color: var(--text-faint); opacity: .55; padding: 0 9px 16px; user-select: none; }
+    .rail-controls { display: flex; flex-direction: column; gap: 2px; }
+    .rail-item { position: relative; display: flex; align-items: center; gap: 11px; width: 100%; padding: 9px 10px 9px 14px; border: 0; border-radius: 8px; background: transparent; text-align: left; cursor: pointer; transition: background .14s; }
+    .rail-item .ico { width: 18px; height: 18px; flex: none; display: grid; place-items: center; color: var(--text-faint); font-size: 13px; line-height: 1; transition: color .14s; }
+    .rail-item .ico svg { display: block; }
+    .rail-item .lbl { display: flex; flex-direction: column; min-width: 0; }
+    .rail-item .t { font: 500 12.5px/1.15 var(--font-ui); color: var(--text-muted); letter-spacing: -.1px; transition: color .14s; }
+    .rail-item .s { font: 400 9.5px/1.3 var(--font-mono); color: var(--text-faint); letter-spacing: .02em; max-height: 0; opacity: 0; overflow: hidden; margin-top: 0; transition: opacity .18s ease, max-height .18s ease, margin-top .18s ease; }
+    .rail-item .go { margin-left: auto; flex: none; color: var(--text-faint); opacity: 0; transform: translateX(-5px); transition: opacity .18s, transform .18s; font-size: 12px; }
+    .rail-item::before { content: ''; position: absolute; left: 4px; top: 50%; transform: translate(0, -50%); width: 2px; height: 0; border-radius: 2px; background: var(--ink); transition: height .18s ease; }
+    .rail-item:hover, .rail-item:focus-within, .rail-item:focus-visible { background: var(--hover); outline: none; }
+    .rail-item:hover::before, .rail-item:focus-within::before, .rail-item:focus-visible::before { height: 58%; }
+    .rail-item:hover .ico, .rail-item:focus-within .ico, .rail-item:focus-visible .ico { color: var(--text); }
+    .rail-item:hover .t, .rail-item:focus-within .t, .rail-item:focus-visible .t { color: var(--text); }
+    .rail-item:hover .s, .rail-item:focus-within .s, .rail-item:focus-visible .s { opacity: 1; max-height: 22px; margin-top: 3px; }
+    .rail-item:hover .go, .rail-item:focus-within .go, .rail-item:focus-visible .go { opacity: 1; transform: translateX(0); }
+    /* deterministic capture of the hover-reveal state (same pixels as :hover) */
+    .rail-item.is-open { background: var(--hover); }
+    .rail-item.is-open::before { height: 58%; }
+    .rail-item.is-open .ico, .rail-item.is-open .t { color: var(--text); }
+    .rail-item.is-open .s { opacity: 1; max-height: 22px; margin-top: 3px; }
+    .rail-item.is-open .go { opacity: 1; transform: translateX(0); }
+
+    /* нижний зарезервированный блок — аккаунт (единственный, только внизу) */
+    .rail-accounts { margin-top: auto; padding-top: 16px; }
+    .rail-accounts .slot { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 8px; box-shadow: inset 0 0 0 1px var(--line); background: var(--bg); }
+    .rail-accounts .avatar { width: 28px; height: 28px; border-radius: 50%; flex: none; display: grid; place-items: center; box-shadow: inset 0 0 0 1px var(--line2); color: var(--text-faint); }
+    .rail-accounts .avatar svg { display: block; }
+    .rail-accounts .a-txt { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+    .rail-accounts .a-t { font: 500 12px/1.15 var(--font-ui); color: var(--text-soft); letter-spacing: -.1px; }
+    .rail-accounts .a-s { font: 400 9.5px/1.2 var(--font-mono); color: var(--text-faint); letter-spacing: .02em; }
+    .rail-accounts .tag { margin-left: auto; font: 500 8.5px/1 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--text-faint); border-radius: 4px; box-shadow: inset 0 0 0 1px var(--line2); padding: 3px 5px; white-space: nowrap; }
+
+    /* ---------- центральная колонка ---------- */
+    .center { min-height: 0; overflow-y: auto; background: var(--bg); }
+
+    /* in-column header — wordmark + по центру поиск (кнопка темы только в левой рейке) */
+    .head {
+      position: relative;
+      display: flex; align-items: center; justify-content: space-between;
+      height: 78px; padding: 0 44px; flex-shrink: 0;
+    }
+    .wordmark { font-size: 17px; font-weight: 700; letter-spacing: -.06em; user-select: none; }
+    .searchbox { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 420px; max-width: 46vw; }
+    .searchbox svg { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text-faint); pointer-events: none; }
+    .search-box { width: 100%; height: 32px; border: 0; border-radius: 6px; background: var(--bg); box-shadow: 0 0 0 1px var(--line); padding: 0 32px; font: 400 13px/1 var(--font-ui); color: var(--text); outline: none; transition: box-shadow .12s; }
+    .search-box::placeholder { color: var(--text-faint); }
+    .search-box:focus { box-shadow: 0 0 0 1.5px var(--ink); }
+    .searchbox kbd { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); min-width: 18px; height: 18px; padding: 0 4px; display: grid; place-items: center; font: 500 10.5px/1 var(--font-mono); color: var(--text-faint); border-radius: 4px; box-shadow: 0 0 0 1px var(--line2); }
+
+    /* ---------- чипы пространств ---------- */
+    .main { padding: 0 44px; }
+    .chip-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 6px 0 2px; }
+    .chip { height: 26px; padding: 0 11px; border: 0; border-radius: 9999px; display: inline-flex; align-items: center; gap: 5px; background: var(--bg); box-shadow: 0 0 0 1px var(--line); font: 500 12.5px/1 var(--font-ui); color: var(--text-muted); letter-spacing: -.1px; transition: background .1s, color .1s, box-shadow .1s; user-select: none; }
+    .chip:hover { background: var(--hover); }
+    .chip.active { background: var(--ink); color: var(--on-ink); box-shadow: none; }
+    .chip-add { height: 26px; padding: 0 11px; border: 1px dashed var(--dashed); border-radius: 9999px; display: inline-flex; align-items: center; gap: 5px; background: transparent; font: 500 12.5px/1 var(--font-ui); color: var(--text-muted); letter-spacing: -.1px; transition: background .1s, border-color .1s; white-space: nowrap; }
+    .chip-add:hover { background: var(--hover); border-color: var(--dashed-hover); }
+    #add-space-btn { height: 26px; padding: 0; border: 0; background: transparent; font: 500 10.5px/1 var(--font-mono); color: var(--text-faint); text-transform: uppercase; letter-spacing: .08em; cursor: pointer; transition: color .1s; white-space: nowrap; }
+    #add-space-btn:hover { color: var(--text); }
+
+    /* ---------- meta строка ---------- */
+    .metarow { display: flex; align-items: baseline; gap: 12px; padding: 20px 0 14px; }
+    .metatitle { font-size: 15px; font-weight: 600; letter-spacing: -.2px; display: flex; align-items: baseline; gap: 8px; }
+    .metatitle .n { font: 500 11px/1 var(--font-mono); color: var(--text-faint); letter-spacing: 0; }
+
+    /* ---------- сетка карточек ---------- */
+    .tabs-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--card-min), 1fr)); gap: var(--card-gap); width: 100%; padding-bottom: 90px; }
+
+    /* ---------- группы ---------- */
+    .gbar { position: relative; grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 2px; background: transparent; cursor: pointer; user-select: none; transition: background .1s; }
+    .gbar:hover { background: var(--gbar-hover); }
+    .gbar::before { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 1px; background: var(--gbar-top-line); pointer-events: none; z-index: 1; }
+    .gbar .chev { font: 400 10px/1 var(--font-mono); color: var(--text-faint); width: 10px; flex: none; text-align: center; }
+    .gbar .gname { font-size: 12px; font-weight: 500; letter-spacing: -.1px; color: var(--text-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .gbar .gcount { font: 400 10.5px/1 var(--font-mono); color: var(--text-faint); white-space: nowrap; flex: none; }
+    .loose-label { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; font: 500 10.5px/1 var(--font-mono); color: var(--text-faint); text-transform: uppercase; letter-spacing: .08em; padding-top: 4px; }
+
+    /* ---------- карточки вкладок ---------- */
+    .tab-card { position: relative; border-radius: var(--card-radius); background: var(--card-bg); box-shadow: 0 0 0 1px var(--line); transition: box-shadow .12s, transform .12s; cursor: pointer; display: flex; flex-direction: column; overflow: hidden; min-height: 74px; }
+    .tab-card:hover { box-shadow: 0 0 0 1px var(--line), var(--shadow-hover); transform: translateY(-1px); }
+    .tab-card.selected { background: var(--selected-bg); box-shadow: 0 0 0 1px var(--selected-ring); }
+    .tab-select, .tab-remove { position: absolute; display: grid; place-items: center; background: var(--surface); box-shadow: 0 0 0 1px var(--line); opacity: 0; transition: opacity .12s, background .1s; z-index: 2; }
+    .tab-select { top: 8px; left: 10px; width: 15px; height: 15px; border-radius: 3px; border: 0; padding: 0; cursor: pointer; appearance: none; -webkit-appearance: none; margin: 0; }
+    .tab-select::after { content: ''; width: 8px; height: 4px; border-left: 1.5px solid var(--on-ink); border-bottom: 1.5px solid var(--on-ink); transform: rotate(-45deg) translateY(-1px); opacity: 0; }
+    .tab-remove { top: 5px; right: 5px; width: 19px; height: 19px; border-radius: 50%; border: 0; padding: 0; font: 400 12px/1 var(--font-ui); color: var(--text-muted); }
+    .tab-remove:hover { background: var(--hover); color: var(--text); }
+    .tab-card:hover .tab-select, .tab-card:hover .tab-remove, .tab-card.selected .tab-select { opacity: 1; }
+    .tab-card.selected .tab-select { background: var(--surface); box-shadow: 0 0 0 1px var(--selected-check); }
+    .tab-card:hover .tab-favicon-fallback, .tab-card.selected .tab-favicon-fallback { visibility: hidden; }
+    .tab-card.selected .tab-select::after { opacity: 1; border-left-color: var(--selected-check); border-bottom-color: var(--selected-check); }
+    .tab-edit { position: absolute; right: 6px; bottom: 6px; width: 18px; height: 18px; border: 0; border-radius: 50%; padding: 0; display: grid; place-items: center; background: transparent; font: 400 11px/1 var(--font-ui); color: var(--text-faint); opacity: 0; transition: opacity .12s, background .1s, color .1s; cursor: pointer; }
+    .tab-card:hover .tab-edit { opacity: 1; }
+    .tab-edit:hover { background: var(--bg); box-shadow: 0 0 0 1px var(--line); color: var(--text); }
+    .cbody { flex: 1; display: flex; align-items: flex-start; padding: 8px 10px 9px; }
+    .cname { display: flex; align-items: flex-start; gap: 5px; }
+    .tab-favicon-fallback { width: 15px; height: 15px; flex: none; display: grid; place-items: center; margin-top: 2px; font: 500 9px/1 var(--font-mono); color: var(--text-muted); background: var(--hover); border-radius: 3px; box-shadow: 0 0 0 1px var(--line); user-select: none; }
+    .tab-name { font-size: var(--card-name-size); font-weight: 500; letter-spacing: -.1px; color: var(--card-name); flex: 1; min-width: 0; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; text-overflow: ellipsis; }
+    .no-results { display: none; padding: 44px 0; text-align: center; color: var(--text-muted); font-size: 14px; }
+    .no-results span { display: block; margin-top: 6px; font-size: 12.5px; color: var(--text-faint); }
+
+    /* ---------- правая рейка: дубликат открытых вкладок браузера (пока пусто) ---------- */
+    .rail-right {
+      position: relative; min-height: 0; background: var(--rail-bg);
+      display: flex; flex-direction: column; align-items: center;
+      padding-top: 34px;
+    }
+    .rail-right .wm {
+      writing-mode: vertical-rl; text-orientation: mixed;
+      font: 500 9px/1 var(--font-mono); letter-spacing: .24em; text-transform: uppercase;
+      color: var(--text-faint); opacity: .45; user-select: none; pointer-events: none;
+    }
+    .rail-right .ghost-tabs { margin-top: 30px; display: flex; flex-direction: column; gap: 10px; align-items: center; opacity: .30; pointer-events: none; }
+    .rail-right .ghost-tabs i { display: block; height: 9px; border-radius: 5px; box-shadow: inset 0 0 0 1px var(--line2); background: var(--bg); }
+    .rail-right .ghost-tabs i:nth-child(1) { width: 60px; }
+    .rail-right .ghost-tabs i:nth-child(2) { width: 52px; }
+    .rail-right .ghost-tabs i:nth-child(3) { width: 44px; }
+    .rail-right .ghost-tabs i:nth-child(4) { width: 36px; }
+  </style>
+</head>
+<body>
+  <div class="workspace">
+
+    <!-- ЛЕВАЯ РЕЙКА — меню/настройки (тема, экспорт/импорт, настройки) + аккаунт внизу -->
+    <aside class="rail-left" id="rail-left" aria-label="Настройки">
+      <div class="eyebrow">Меню</div>
+      <div class="rail-controls" id="rail-controls"></div>
+
+      <div class="rail-accounts">
+        <div class="slot" title="Скоро — вход и синхронизация вкладок">
+          <span class="avatar" aria-hidden="true">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+          </span>
+          <span class="a-txt">
+            <span class="a-t">Аккаунт</span>
+            <span class="a-s">Скоро · синхронизация</span>
+          </span>
+          <span class="tag">скоро</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- ЦЕНТР — in-column header (без кнопки темы), чипы, grid -->
+    <main class="center" id="center-pane">
+      <header class="head">
+        <div class="wordmark">Toby</div>
+        <div class="searchbox">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input type="text" class="search-box" placeholder="Поиск во вкладках…" id="search" autocomplete="off" spellcheck="false">
+          <kbd>/</kbd>
+        </div>
+      </header>
+
+      <div class="main">
+        <nav class="chip-row" id="spaces-bar">
+          <span id="space-chips" style="display:contents"></span>
+          <button class="chip-add" id="add-space-btn" title="Новое пространство">+ Пространство</button>
+        </nav>
+
+        <div class="metarow">
+          <div class="metatitle"><span id="meta-label">Мои вкладки</span><span class="n" id="meta-count">0</span></div>
+        </div>
+
+        <div id="no-results" class="no-results">
+          Ничего не найдено
+          <span>Попробуйте изменить запрос</span>
+        </div>
+
+        <div id="tabs-list" class="tabs-list"></div>
+      </div>
+    </main>
+
+    <!-- ПРАВАЯ РЕЙКА — дубликат открытых вкладок браузера (пока пусто, watermark) -->
+    <aside class="rail-right" id="rail-right" aria-label="Вкладки браузера (скоро)">
+      <span class="wm">Вкладки&nbsp;браузера</span>
+      <div class="ghost-tabs" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+    </aside>
+
+  </div>
+  <script>
+    /* ---------- иконки (SVG, stroke — как в view.html) ---------- */
+    const MOON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
+    const SUN  = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>';
+    const ICONS = {
+      theme:    MOON,
+      export:   '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 11 5 5 5-5"/><path d="M5 21h14"/></svg>',
+      import:   '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21V9"/><path d="m7 13 5-5 5 5"/><path d="M5 3h14"/></svg>',
+      settings: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>'
+    };
+
+    /* ---------- данные (прототип) ---------- */
+    const SPACES = [
+      { id: 'work', name: 'Работа', groups: [
+        { id: 'g-proj', name: 'Проекты', tabs: [
+          { title: 'GitHub — blattamtoby', url: 'https://github.com', letter: 'G' },
+          { title: 'Figma — дизайн нового таба', url: 'https://figma.com', letter: 'F' },
+          { title: 'Linear — бэклог релиза', url: 'https://linear.app', letter: 'L' },
+          { title: 'Notion — заметки по проекту', url: 'https://notion.so', letter: 'N' },
+        ]},
+        { id: 'g-tools', name: 'Инструменты', tabs: [
+          { title: 'Документы Google — отчёт', url: 'https://docs.google.com', letter: 'Д' },
+          { title: 'Gmail', url: 'https://mail.google.com', letter: 'G' },
+          { title: 'Postman — API-запросы', url: 'https://postman.com', letter: 'P' },
+        ]},
+        { id: 'g-read', name: 'Чтение', tabs: [
+          { title: 'Медуза — главные новости', url: 'https://meduza.io', letter: 'М' },
+          { title: 'Wikipedia — MV3', url: 'https://ru.wikipedia.org', letter: 'W' },
+          { title: 'Хабр — статья про WebExtensions', url: 'https://habr.com', letter: 'Х' },
+        ]},
+      ], loose: [
+        { title: 'Stack Overflow', url: 'https://stackoverflow.com', letter: 'S' },
+        { title: 'Jira — спринт', url: 'https://jira.atlassian.com', letter: 'J' },
+      ]},
+      { id: 'personal', name: 'Личное', groups: [
+        { id: 'g-fun', name: 'Развлечения', tabs: [
+          { title: 'VK Музыка — плейлист «Дом»', url: 'https://vk.com/music', letter: 'В' },
+          { title: 'Медуза — подкасты', url: 'https://meduza.io', letter: 'М' },
+        ]},
+      ], loose: [
+        { title: 'Яндекс.Карты', url: 'https://yandex.ru/maps', letter: 'Я' },
+        { title: 'Wikipedia — в выходные', url: 'https://ru.wikipedia.org', letter: 'W' },
+      ]},
+      { id: 'study', name: 'Учёба', groups: [
+        { id: 'g-courses', name: 'Курсы', tabs: [
+          { title: 'MDN — Service Workers', url: 'https://developer.mozilla.org', letter: 'M' },
+          { title: 'Wikipedia — графы', url: 'https://ru.wikipedia.org', letter: 'W' },
+        ]},
+      ], loose: [
+        { title: 'Stack Overflow — конспект', url: 'https://stackoverflow.com', letter: 'S' },
+        { title: 'Хабр — обзор курсов', url: 'https://habr.com', letter: 'Х' },
+      ]},
+      { id: 'dev', name: 'Dev', groups: [
+        { id: 'g-code', name: 'Код', tabs: [
+          { title: 'GitHub — вкладки', url: 'https://github.com', letter: 'G' },
+          { title: 'Stack Overflow', url: 'https://stackoverflow.com', letter: 'S' },
+          { title: 'MDN — Storage API', url: 'https://developer.mozilla.org', letter: 'M' },
+        ]},
+      ], loose: [
+        { title: 'Postman — сборка запросов', url: 'https://postman.com', letter: 'P' },
+        { title: 'VS Code — документация', url: 'https://code.visualstudio.com', letter: 'V' },
+      ]},
+    ];
+    let activeSpace = 'work';
+    let collapsed = new Set();
+    let query = '';
+
+    /* ---------- рендер ---------- */
+    function tabMatches(t) { return !query || t.title.toLowerCase().includes(query); }
+
+    function cardEl(t) {
+      const d = document.createElement('div');
+      d.className = 'tab-card'; d.title = t.url;
+      d.innerHTML =
+        '<input type="checkbox" class="tab-select" aria-label="Выбрать">' +
+        '<button class="tab-remove" title="Удалить">✕</button>' +
+        '<button class="tab-edit" title="Редактировать">✎</button>' +
+        '<div class="cbody"><div class="cname">' +
+        '<span class="tab-favicon-fallback">' + t.letter + '</span>' +
+        '<div class="tab-name">' + t.title + '</div></div></div>';
+      d.addEventListener('click', (e) => {
+        if (e.target.closest('.tab-select') || e.target.closest('.tab-remove') || e.target.closest('.tab-edit')) return;
+        window.open(t.url, '_blank');
+      });
+      d.querySelector('.tab-select').addEventListener('click', (e) => {
+        e.stopPropagation(); d.classList.toggle('selected');
+      });
+      d.querySelector('.tab-remove').addEventListener('click', (e) => {
+        e.stopPropagation();
+        const space = SPACES.find(s => s.id === activeSpace);
+        const hit = space.groups.find(g => g.tabs.includes(t)) || (space.loose && space.loose.includes(t) ? { tabs: space.loose } : null);
+        if (hit) hit.tabs.splice(hit.tabs.indexOf(t), 1);
+        renderTabs(false);
+      });
+      return d;
+    }
+
+    function gbarEl(g) {
+      const d = document.createElement('div');
+      d.className = 'gbar';
+      const isCol = collapsed.has(g.id);
+      d.innerHTML =
+        '<span class="chev">' + (isCol ? '▸' : '▾') + '</span>' +
+        '<span class="gname">' + g.name + '</span>' +
+        '<span class="gcount">' + g.tabs.length + '</span>';
+      d.addEventListener('click', () => {
+        if (isCol) collapsed.delete(g.id); else collapsed.add(g.id);
+        renderTabs(false);
+      });
+      return d;
+    }
+
+    function renderTabs(animate) {
+      const list = document.getElementById('tabs-list');
+      list.innerHTML = '';
+      const space = SPACES.find(s => s.id === activeSpace);
+      const items = [];
+      let visible = 0, total = 0;
+      space.groups.forEach(g => {
+        total += g.tabs.length;
+        const vis = g.tabs.filter(tabMatches);
+        visible += vis.length;
+        if (!collapsed.has(g.id) && vis.length) {
+          list.appendChild(gbarEl(g)); items.push(list.lastChild);
+          vis.forEach(t => { const c = cardEl(t); list.appendChild(c); items.push(c); });
+        } else if (collapsed.has(g.id) && g.tabs.some(tabMatches)) {
+          list.appendChild(gbarEl(g)); items.push(list.lastChild);
+        }
+      });
+      if (space.loose) {
+        total += space.loose.length;
+        const vis = space.loose.filter(tabMatches);
+        visible += vis.length;
+        if (vis.length) {
+          const lb = document.createElement('div');
+          lb.className = 'loose-label'; lb.textContent = 'Без группы';
+          list.appendChild(lb); items.push(lb);
+          vis.forEach(t => { const c = cardEl(t); list.appendChild(c); items.push(c); });
+        }
+      }
+      document.getElementById('meta-label').textContent = space.name;
+      document.getElementById('meta-count').textContent = visible + ' / ' + total;
+      const nr = document.getElementById('no-results');
+      nr.style.display = visible ? 'none' : 'block';
+      list.style.display = visible ? '' : 'none';
+      if (animate) {
+        list.querySelectorAll('.tab-card, .gbar, .loose-label').forEach((el, i) => {
+          el.style.animation = 'none'; void el.offsetWidth;
+          el.style.animation = 'cardIn .2s ' + (i * 16) + 'ms both';
+        });
+        if (!document.getElementById('card-in-style')) {
+          const st = document.createElement('style');
+          st.id = 'card-in-style';
+          st.textContent = '@keyframes cardIn { from { opacity: 0; transform: translateY(4px);} to { opacity: 1; transform: none;}}';
+          document.head.appendChild(st);
+        }
+      }
+    }
+
+    function renderChips() {
+      const wrap = document.getElementById('space-chips');
+      wrap.innerHTML = '';
+      SPACES.forEach(s => {
+        const b = document.createElement('button');
+        b.className = 'chip' + (s.id === activeSpace ? ' active' : '');
+        b.textContent = s.name; b.type = 'button';
+        b.addEventListener('click', () => switchSpace(s.id));
+        wrap.appendChild(b);
+      });
+    }
+
+    function switchSpace(id) {
+      if (id === activeSpace) return;
+      activeSpace = id;
+      renderChips();
+      renderTabs(true);
+    }
+
+    /* ---------- левая рейка: строки контролов (аккаунт только внизу) ---------- */
+    const RAIL_ITEMS = [
+      { id: 'theme',    icon: 'theme',    label: 'Тема',       sub: 'Светлая · тёмная', action: 'theme' },
+      { id: 'export',   icon: 'export',   label: 'Экспорт',    sub: 'Скачать JSON',     action: 'noop' },
+      { id: 'import',   icon: 'import',   label: 'Импорт',     sub: 'Загрузить JSON',   action: 'noop' },
+      { id: 'settings', icon: 'settings', label: 'Настройки',  sub: 'Параметры',        action: 'noop' },
+    ];
+    function renderRail() {
+      const wrap = document.getElementById('rail-controls');
+      wrap.innerHTML = '';
+      RAIL_ITEMS.forEach(it => {
+        const b = document.createElement('button');
+        b.className = 'rail-item'; b.type = 'button'; b.id = 'rail-' + it.id;
+        b.innerHTML =
+          '<span class="ico">' + ICONS[it.icon] + '</span>' +
+          '<span class="lbl"><span class="t">' + it.label + '</span>' +
+          '<span class="s">' + it.sub + '</span></span>' +
+          '<span class="go">→</span>';
+        if (it.action === 'theme') b.addEventListener('click', toggleTheme);
+        wrap.appendChild(b);
+      });
+      syncThemeIcons();
+    }
+
+    /* ---------- тема (только в левой рейке) ---------- */
+    function isDark() { return document.documentElement.hasAttribute('data-theme'); }
+    function setTheme(dark) {
+      const root = document.documentElement;
+      if (dark) root.setAttribute('data-theme', 'dark'); else root.removeAttribute('data-theme');
+      syncThemeIcons();
+    }
+    function toggleTheme() { setTheme(!isDark()); }
+    function syncThemeIcons() {
+      const dark = isDark();
+      const themeIco = document.querySelector('#rail-theme .ico');
+      if (themeIco) themeIco.innerHTML = dark ? SUN : MOON;
+    }
+
+    /* ---------- поиск ---------- */
+    const search = document.getElementById('search');
+    search.addEventListener('input', () => { query = search.value.trim().toLowerCase(); renderTabs(false); });
+    document.addEventListener('keydown', (e) => {
+      const tag = (document.activeElement && document.activeElement.tagName) || '';
+      if (e.key === '/' && tag !== 'INPUT' && tag !== 'TEXTAREA') { e.preventDefault(); search.focus(); }
+      if (e.key === 'Escape' && document.activeElement === search) { search.value = ''; query = ''; search.blur(); renderTabs(false); }
+    });
+
+    /* ---------- запуск ---------- */
+    setTheme(false);
+    renderChips();
+    renderRail();
+    renderTabs(true);
+  </script>
+</body>
+</html>

@@ -2232,7 +2232,7 @@ class TestCardContrast:
 
     def test_gbar_hairline_and_drag_slot_warm_tint(self):
         # «Штрих» (обе темы): шапка группы — БЕЗ заливки (прозрачный фон) +
-        # 1px-линия сверху (border-top из токена --line2), заглушка перетаскивания
+        # 1px-линия сверху (::before-оверлей из токена --gbar-top-line), заглушка перетаскивания
         # (клон-призрака нет) — тёплый тон; computed-значения равны токенам
         # theme.css (значения парсятся из файла, не захардкожены)
         css = load_file("theme.css")
@@ -2249,15 +2249,17 @@ class TestCardContrast:
             self.page.wait_for_timeout(300)  # конец background-транзишена (.gbar, .1s)
             d = json.loads(self.page.evaluate("""(() => {
               const cs = getComputedStyle(document.querySelector('.gbar'));
+              const bf = getComputedStyle(document.querySelector('.gbar'), '::before');
               const card = document.querySelector('.tab-card');
               const dt = new DataTransfer();
               card.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true}));
               return JSON.stringify({
                 barBg: cs.backgroundColor,
                 barBorderTopWidth: cs.borderTopWidth,
-                barBorderTopStyle: cs.borderTopStyle,
-                barBorderTopColor: cs.borderTopColor,
                 barShadow: cs.boxShadow,
+                beforeHeight: bf.height,
+                beforeBgColor: bf.backgroundColor,
+                beforeBgImage: bf.backgroundImage,
                 noClone: !document.querySelector('.tab-ghost')
               });
             })()"""))
@@ -2282,10 +2284,15 @@ class TestCardContrast:
             })()"""))
             # «Штрих»: заливки нет — фон прозрачный
             assert d["barBg"] == "rgba(0, 0, 0, 0)", (theme, d)
-            # hairline: 1px-линия сверху из токена --line2
-            assert d["barBorderTopWidth"] == "1px", (theme, d)
-            assert d["barBorderTopStyle"] == "solid", (theme, d)
-            assert d["barBorderTopColor"] == self._token_color(parts[theme], "--line2"), (theme, d)
+            # hairline: border-top убран — 1px-оверлей ::before из --gbar-top-line
+            # (светлая: сплошная --line2; тёмная: градиент, тускнеет к краям)
+            assert d["barBorderTopWidth"] == "0px", (theme, d)
+            assert d["beforeHeight"] == "1px", (theme, d)
+            if theme == "light":
+                assert d["beforeBgImage"] == "none", (theme, d)
+                assert d["beforeBgColor"] == self._token_color(parts[theme], "--line2"), (theme, d)
+            else:
+                assert "linear-gradient" in d["beforeBgImage"], (theme, d)
             # Контур-линия шапки убран: тени нет (или нет 1px-контура)
             assert d["barShadow"] == "none" or "1px" not in d["barShadow"], (theme, d)
             # Клон-призрака нет; единственный индикатор — тёплая заглушка
@@ -2383,7 +2390,7 @@ class TestGroupBarHairline:
 
     def test_gbar_hairline_computed_styles(self):
         # «Штрих» (обе темы): .gbar — прозрачный фон, высота 26px, hairline сверху
-        # (--line2); имя — приглушённое 12px (--text-soft); chevron --text-faint
+        # (::before-оверлей, --gbar-top-line); имя — приглушённое 12px (--text-soft); chevron --text-faint
         parts = self._parts()
         for theme in ("light", "dark"):
             load_view(self.page, theme=theme, spaces=self.SP, groups=self.GROUPS, tabs=self.TABS)
@@ -2393,11 +2400,14 @@ class TestGroupBarHairline:
               const cs = getComputedStyle(document.querySelector('.gbar'));
               const nm = getComputedStyle(document.querySelector('.gbar .gname'));
               const ch = getComputedStyle(document.querySelector('.gbar .chev'));
+              const bf = getComputedStyle(document.querySelector('.gbar'), '::before');
               return JSON.stringify({
                 barBg: cs.backgroundColor,
                 barHeight: cs.height,
                 borderTopWidth: cs.borderTopWidth,
-                borderTopColor: cs.borderTopColor,
+                beforeHeight: bf.height,
+                beforeBgColor: bf.backgroundColor,
+                beforeBgImage: bf.backgroundImage,
                 nameSize: nm.fontSize,
                 nameColor: nm.color,
                 chevColor: ch.color
@@ -2405,8 +2415,13 @@ class TestGroupBarHairline:
             })()"""))
             assert d["barBg"] == "rgba(0, 0, 0, 0)", (theme, d)
             assert d["barHeight"] == "26px", (theme, d)
-            assert d["borderTopWidth"] == "1px", (theme, d)
-            assert d["borderTopColor"] == self._token_color(parts[theme], "--line2"), (theme, d)
+            assert d["borderTopWidth"] == "0px", (theme, d)
+            assert d["beforeHeight"] == "1px", (theme, d)
+            if theme == "light":
+                assert d["beforeBgImage"] == "none", (theme, d)
+                assert d["beforeBgColor"] == self._token_color(parts[theme], "--line2"), (theme, d)
+            else:
+                assert "linear-gradient" in d["beforeBgImage"], (theme, d)
             assert d["nameSize"] == "12px", (theme, d)
             assert d["nameColor"] == self._token_color(parts[theme], "--text-soft"), (theme, d)
             assert d["chevColor"] == self._token_color(parts[theme], "--text-faint"), (theme, d)
@@ -2436,7 +2451,10 @@ class TestGroupBarHairline:
                 delOpacity: q('.gbar .gdel')
               });
             })()"""))
-            assert d["barBg"] == self._token_color(parts[theme], "--hover"), (theme, d)
+            if theme == "light":
+                assert d["barBg"] == self._token_color(parts[theme], "--hover"), (theme, d)  # --gbar-hover = var(--hover)
+            else:
+                assert d["barBg"] == self._token_color(parts[theme], "--gbar-hover"), (theme, d)
             assert d["selOpacity"] == "1", (theme, d)
             assert d["renOpacity"] == "1", (theme, d)
             assert d["delOpacity"] == "1", (theme, d)
@@ -2558,16 +2576,26 @@ class TestViewSelection:
         assert self.page.evaluate("document.getElementById('selection-count').textContent") == "1 выбрано"
         assert self.page.evaluate("document.querySelectorAll('.tab-card.selected').length") == 1
 
-    def test_select_all_button_toggle(self):
+    def test_select_btn_removed(self):
+        # Кнопка «☑ Выбрать» удалена из мета-строки: #select-btn отсутствует,
+        # мета-строка держит #meta-label + #meta-count
         load_view(self.page, tabs=self.TABS)
-        self.page.evaluate("document.getElementById('select-btn').click()")
-        assert self.page.evaluate("document.querySelectorAll('.tab-select:checked').length") == 3
-        self.page.evaluate("document.getElementById('select-btn').click()")  # toggle off
-        assert self.page.evaluate("document.querySelectorAll('.tab-select:checked').length") == 0
+        d = json.loads(self.page.evaluate("""(() => {
+          const meta = document.querySelector('.metarow');
+          return JSON.stringify({
+            btn: !!document.getElementById('select-btn'),
+            label: !!(meta && meta.querySelector('#meta-label')),
+            count: !!(meta && meta.querySelector('#meta-count')),
+            metaText: meta && meta.querySelector('#meta-label') ? meta.querySelector('#meta-label').textContent : null
+          });
+        })()"""))
+        assert d["btn"] is False, d
+        assert d["label"] and d["count"], d
+        assert d["metaText"] == "Мои вкладки", d
 
     def test_open_selected(self):
         load_view(self.page, tabs=self.TABS)
-        self.page.evaluate("document.getElementById('select-btn').click()")
+        self.page.evaluate("document.querySelectorAll('.tab-select').forEach(c => c.click())")
         self.page.evaluate("document.getElementById('open-selected-btn').click()")
         msg = json.loads(self.page.evaluate("JSON.stringify(window.lastMessage)"))
         assert msg["action"] == "open-many"
@@ -2578,7 +2606,7 @@ class TestViewSelection:
 
     def test_clear_selection(self):
         load_view(self.page, tabs=self.TABS)
-        self.page.evaluate("document.getElementById('select-btn').click()")
+        self.page.evaluate("document.querySelectorAll('.tab-select').forEach(c => c.click())")
         self.page.evaluate("document.getElementById('clear-selection-btn').click()")
         assert self.page.evaluate("document.querySelectorAll('.tab-select:checked').length") == 0
         assert self.page.evaluate("document.getElementById('selection-bar').classList.contains('hidden')")
@@ -2664,7 +2692,7 @@ class TestKeyboardNav:
     def test_esc_resets_search_selection_active(self):
         load_view(self.page, tabs=self.TABS)
         self.page.locator("#search").fill("A")  # видима 1 карточка
-        self.page.evaluate("document.getElementById('select-btn').click()")
+        self.page.evaluate("document.querySelectorAll('.tab-select').forEach(c => c.click())")
         self._key("ArrowDown")
         self._key("Escape")
         assert self.page.locator("#search").input_value() == ""
@@ -3387,20 +3415,37 @@ class TestTabGhostSlot:
         assert "var(--ghost-bg)" in rule and "var(--ghost-ring)" in rule
         assert re.search(r"#[0-9a-fA-F]{3,8}", rule) is None
         assert ".tab-ghost {" not in html
-        # Тёплые акцентные токены — ровно по одному разу в светлой И в тёмной секциях,
-        # значения — hex
-        for tok in ("--ghost-bg", "--ghost-ring"):
+        # Тёплые акцентные токены + токен имени карточки — ровно по одному разу
+        # в светлой И в тёмной секциях, значения — hex
+        for tok in ("--ghost-bg", "--ghost-ring", "--card-name"):
             assert light_part.count(f"{tok}:") == 1, tok
             assert dark_part.count(f"{tok}:") == 1, tok
             assert re.search(rf"{tok}:\s*#[0-9a-fA-F]{{3,8}};", light_part), tok
             assert re.search(rf"{tok}:\s*#[0-9a-fA-F]{{3,8}};", dark_part), tok
-        # .gbar — «Штрих»: прозрачная строка, 1px-линия сверху из токена --line2, без hex
+        # --rail-bg — фон боковых реек: ровно по одному разу в :root и в тёмной
+        # секции, значения — hex (light #f4f2f0 / dark #292523)
+        assert light_part.count("--rail-bg:") == 1
+        assert dark_part.count("--rail-bg:") == 1
+        assert re.search(r"--rail-bg:\s*#[0-9a-fA-F]{3,8};", light_part)
+        assert re.search(r"--rail-bg:\s*#[0-9a-fA-F]{3,8};", dark_part)
+        # .gbar — «Штрих»: прозрачная строка БЕЗ border-top; 1px-линия сверху —
+        # оверлей .gbar::before из токена --gbar-top-line (без hex)
         gbar = html[html.index(".gbar {"):]
         gbar = gbar[:gbar.index("}")]
         assert "background: transparent" in gbar
-        assert "border-top: 1px solid var(--line2)" in gbar
+        assert "border-top" not in gbar
+        gbar_before = html[html.index(".gbar::before {"):]
+        gbar_before = gbar_before[:gbar_before.index("}")]
+        assert "var(--gbar-top-line)" in gbar_before
+        assert "height: 1px" in gbar_before
+        assert re.search(r"#[0-9a-fA-F]{3,8}", gbar_before) is None
         assert "var(--gbar-bg)" not in gbar
         assert re.search(r"#[0-9a-fA-F]{3,8}", gbar) is None
+        # .tab-name — цвет имени из токена --card-name (без hex в правиле)
+        tname = html[html.index(".tab-name {"):]
+        tname = tname[:tname.index("}")]
+        assert "var(--card-name)" in tname
+        assert re.search(r"#[0-9a-fA-F]{3,8}", tname) is None
 
 
 class TestDragSlotWarmNoClone:
@@ -3878,10 +3923,10 @@ class TestCollapsedRunGhostSlot:
 
 class TestDragRowReflow:
     """Reflow строк при драге (реальная сетка: theme.css + стили view.html,
-    1280x800 → 6 колонок): карточки ЗАКРЫВАЮТ слот скрытой карточки (без
-    «дырки» на её месте), а число строк исходной секции фиксировано — его
-    держит ghost-slot (ghost в секции) или невидимый row-keeper в КОНЦЕ
-    секции (ghost в другой)."""
+    1280x800 → 5 колонок: центр = 1280 − 410px рейки − 88px паддинги = 782px):
+    карточки ЗАКРЫВАЮТ слот скрытой карточки (без «дырки» на её месте), а
+    число строк исходной секции фиксировано — его держит ghost-slot (ghost в
+    секции) или невидимый row-keeper в КОНЦЕ секции (ghost в другой)."""
 
     @pytest.fixture(autouse=True)
     def _setup(self, page):
@@ -3908,7 +3953,11 @@ class TestDragRowReflow:
           document.head.appendChild(s);
         }""", css + style_block)
         self.page.set_viewport_size({"width": 1280, "height": 800})
-        self.page.wait_for_timeout(50)
+        # указатель в нейтральный угол: :hover карточки (translateY(-1px)) не
+        # должен смещать строки под измерением (физическая позиция мыши
+        # живёт между тестами на общей странице)
+        self.page.mouse.move(0, 0)
+        self.page.wait_for_timeout(200)
 
     def _start_drag(self, name):
         self.page.evaluate("""(name) => {
@@ -3945,36 +3994,36 @@ class TestDragRowReflow:
         return self.page.evaluate("document.getElementById('add-group-btn').getBoundingClientRect().top")
 
     def test_in_section_refill_no_keeper_row_fixed(self):
-        # Пример пользователя: группа на 2 строки (6 колонок: 6+1); тащим
-        # вкладку из первой строки, заглушка — в КОНЦЕ секции (всё ещё в ней):
+        # Пример пользователя: группа на 2 строки (5 колонок при 1280px: 5+1);
+        # тащим вкладку из первой строки, заглушка — в КОНЦЕ секции (всё ещё в ней):
         # одинокая вкладка последней строки поднялась в первую строку,
         # исходный слот занят другой карточкой (без дырки), keeper в DOM нет,
         # якорь под списком не сдвинулся
         tabs = [{"name": f"T{i}", "url": f"https://t{i}.com", "spaceId": "sp1", "groupId": "g1"}
-                for i in range(1, 8)]
+                for i in range(1, 7)]
         self._load([{"id": "g1", "name": "G", "spaceId": "sp1", "collapsed": False}], tabs)
         pre = self._anchor_top()
         t1 = self._card_rect("T1")
-        t7 = self._card_rect("T7")
-        assert t7["top"] > t1["top"], (t1, t7)  # T7 одинокая в последней строке
+        t9 = self._card_rect("T6")
+        assert t9["top"] > t1["top"], (t1, t9)  # T6 одинокая в последней строке
         self._start_drag("T1")
-        self._hover(t7["left"] + t7["width"] * 0.75, t7["top"] + t7["height"] * 0.75)
+        self._hover(t9["left"] + t9["width"] * 0.75, t9["top"] + t9["height"] * 0.75)
         d = json.loads(self.page.evaluate("""(() => {
           const slot = document.querySelector('.tab-ghost-slot');
           const find = (n) => [...document.querySelectorAll('#tabs-list .tab-card')]
             .find(c => c.querySelector('.tab-name').textContent.trim() === n);
           const b2 = find('T2').getBoundingClientRect();
-          const b7 = find('T7').getBoundingClientRect();
+          const b9 = find('T6').getBoundingClientRect();
           return JSON.stringify({
             keepers: document.querySelectorAll('.tab-row-keeper').length,
-            slotAtTail: find('T7').nextElementSibling === slot,
-            t7Top: b7.top, t2Left: b2.left, t2Top: b2.top,
+            slotAtTail: find('T6').nextElementSibling === slot,
+            t9Top: b9.top, t2Left: b2.left, t2Top: b2.top,
             top: document.getElementById('add-group-btn').getBoundingClientRect().top
           });
         })()"""))
         assert d["keepers"] == 0, d
-        assert d["slotAtTail"], d  # заглушка — в конце секции (после T7)
-        assert abs(d["t7Top"] - t1["top"]) < 2, (t1, d)  # T7 поднялась в первую строку
+        assert d["slotAtTail"], d  # заглушка — в конце секции (после T6)
+        assert abs(d["t9Top"] - t1["top"]) < 2, (t1, d)  # T6 поднялась в первую строку
         assert abs(d["t2Left"] - t1["left"]) < 2 and abs(d["t2Top"] - t1["top"]) < 2, (t1, d)  # исходный слот занят T2
         assert abs(d["top"] - pre) < 2, (pre, d["top"])
         self._end_drag()
@@ -4454,9 +4503,9 @@ class TestOnlyTabHomeDrop:
 
 
 class TestEditTab:
-    """Редактирование сохранённой вкладки: ✎ внизу-справа → меню «Изменить» →
-    модалка (имя/адрес/комментарий) → update-tab в background + комментарий
-    внизу карточки."""
+    """Редактирование сохранённой вкладки: ✎ внизу-справа — клик открывает модалку
+    (имя/адрес/комментарий) сразу, без промежуточного меню → update-tab в background
+    + комментарий внизу карточки."""
 
     @pytest.fixture(autouse=True)
     def _setup(self, page):
@@ -4530,27 +4579,30 @@ class TestEditTab:
         # У первой вкладки без комментария — элемента нет
         assert self.page.evaluate("document.querySelectorAll('.tab-card')[0].querySelector('.tab-comment') === null")
 
-    def test_edit_menu_opens_with_change_item(self):
+    def test_edit_icon_opens_modal_directly_no_menu(self):
+        # Клик по ✎ — модалка открывается СРАЗУ; промежуточное меню «Изменить»
+        # не появляется в DOM вообще
         load_view(self.page, tabs=self.TABS)
         self.page.evaluate("""(() => {
           document.querySelector('.tab-card .tab-edit').click();
         })()""")
         d = self.page.evaluate("""(() => {
-          const m = document.querySelector('.tab-card-menu');
           return JSON.stringify({
-            menu: !!m,
-            item: m ? m.querySelector('button').textContent : null,
+            modal: document.getElementById('edit-tab-modal').classList.contains('open'),
+            menus: document.querySelectorAll('.tab-card-menu').length,
+            name: document.getElementById('edit-name-input').value,
+            url: document.getElementById('edit-url-input').value,
           });
         })()""")
         s = json.loads(d)
-        assert s["menu"] and s["item"] == "Изменить"
+        assert s["modal"] and s["menus"] == 0
+        assert s["name"] == "GitHub" and s["url"] == "https://github.com"
 
     def test_change_opens_modal_prefilled_and_dark_bg(self):
         load_view(self.page, tabs=self.TABS)
         self._inject_real_styles()
         self.page.evaluate("""(() => {
           document.querySelector('.tab-card .tab-edit').click();
-          document.querySelector('.tab-card-menu button').click();
         })()""")
         self.page.wait_for_timeout(80)
         d = self.page.evaluate("""(() => {
@@ -4574,7 +4626,6 @@ class TestEditTab:
         load_view(self.page, tabs=self.TABS)
         self.page.evaluate("""(() => {
           document.querySelector('.tab-card .tab-edit').click();
-          document.querySelector('.tab-card-menu button').click();
         })()""")
         self.page.wait_for_timeout(60)
         self.page.fill("#edit-name-input", "GitHub — репозиторий")
@@ -4596,7 +4647,6 @@ class TestEditTab:
         load_view(self.page, tabs=self.TABS)
         self.page.evaluate("""(() => {
           document.querySelector('.tab-card .tab-edit').click();
-          document.querySelector('.tab-card-menu button').click();
         })()""")
         self.page.wait_for_timeout(60)
         self.page.fill("#edit-name-input", "")
@@ -4614,7 +4664,6 @@ class TestEditTab:
           const cards = [...document.querySelectorAll('.tab-card')];
           const card = cards.find(c => c.querySelector('.tab-comment'));
           card.querySelector('.tab-edit').click();
-          card.querySelector('.tab-card-menu button').click();
         })()""")
         self.page.wait_for_timeout(60)
         self.page.fill("#edit-comment-input", "")
@@ -4629,7 +4678,6 @@ class TestEditTab:
         load_view(self.page, tabs=self.TABS)
         self.page.evaluate("""(() => {
           document.querySelector('.tab-card .tab-edit').click();
-          document.querySelector('.tab-card-menu button').click();
         })()""")
         self.page.wait_for_timeout(60)
         self.page.fill("#edit-name-input", "X")
@@ -4639,7 +4687,6 @@ class TestEditTab:
         # Esc
         self.page.evaluate("""(() => {
           document.querySelector('.tab-card .tab-edit').click();
-          document.querySelector('.tab-card-menu button').click();
         })()""")
         self.page.wait_for_timeout(60)
         self.page.keyboard.press("Escape")
@@ -4650,7 +4697,6 @@ class TestEditTab:
         # значения в полях сохраняются
         self.page.evaluate("""(() => {
           document.querySelector('.tab-card .tab-edit').click();
-          document.querySelector('.tab-card-menu button').click();
         })()""")
         self.page.wait_for_timeout(60)
         self.page.fill("#edit-name-input", "X")
@@ -4670,7 +4716,6 @@ class TestEditTab:
         self._inject_real_styles()
         self.page.evaluate("""(() => {
           document.querySelector('.tab-card .tab-edit').click();
-          document.querySelector('.tab-card-menu button').click();
         })()""")
         self.page.wait_for_timeout(60)
         self.page.fill("#edit-name-input", "Выбор текста")
@@ -4687,7 +4732,6 @@ class TestEditTab:
         load_view(self.page, tabs=self.TABS)
         self.page.evaluate("""(() => {
           document.querySelector('.tab-card .tab-edit').click();
-          document.querySelector('.tab-card-menu button').click();
         })()""")
         self.page.wait_for_timeout(60)
         self.page.fill("#edit-name-input", "Через Enter")
@@ -4736,6 +4780,79 @@ class TestEditTab:
           window.__draggableAfter = card.draggable;
         })()""")
         assert self.page.evaluate("window.__draggableDuringPress === false && window.__draggableAfter === true")
+
+
+# ==========================================
+#  VIEW.JS: ✎ ОТКРЫВАЕТ МОДАЛКУ СРАЗУ (промежуточное меню «Изменить» убрано)
+# ==========================================
+
+class TestEditDirect:
+    """✎ на карточке открывает модалку редактирования напрямую: промежуточное меню
+    «Изменить» отсутствует и в JS, и в CSS."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    TABS = [
+        {"id": "t1", "name": "GitHub", "url": "https://github.com"},
+        {"id": "t2", "name": "Docs", "url": "https://docs.example.com",
+         "comment": "смотреть раздел API"},
+    ]
+
+    def _inject_real_styles(self):
+        theme = load_file("theme.css")
+        html = load_file("view.html")
+        style = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate(
+            "(styles) => { var st = document.createElement('style'); st.textContent = styles; document.head.appendChild(st); }",
+            [theme + "\n" + style])
+
+    def test_edit_click_opens_modal_in_dom_immediately(self):
+        load_view(self.page, tabs=self.TABS)
+        self._inject_real_styles()
+        self.page.evaluate("""(() => {
+          document.querySelector('.tab-card .tab-edit').click();
+        })()""")
+        # БЕЗ ожидания таймаутов — модалка открыта и видима сразу после клика
+        d = json.loads(self.page.evaluate("""(() => {
+          const m = document.getElementById('edit-tab-modal');
+          const cs = getComputedStyle(m);
+          return JSON.stringify({
+            open: m.classList.contains('open'),
+            hasFields: !!m.querySelector('#edit-name-input'),
+            display: cs.display,
+            visibility: cs.visibility,
+            opacity: cs.opacity,
+            name: document.getElementById('edit-name-input').value,
+            url: document.getElementById('edit-url-input').value,
+          });
+        })()"""))
+        assert d["open"] and d["hasFields"], d
+        assert d["display"] == "flex" and d["visibility"] == "visible", d
+        assert float(d["opacity"]) > 0.9, d
+        assert d["name"] == "GitHub" and d["url"] == "https://github.com", d
+
+    def test_no_card_menu_appears_after_edit_click(self):
+        load_view(self.page, tabs=self.TABS)
+        self.page.evaluate("""(() => {
+          document.querySelectorAll('.tab-card .tab-edit').forEach(b => b.click());
+        })()""")
+        # Промежуточное меню не появляется ни после первого, ни после повторного клика
+        assert self.page.evaluate("document.querySelectorAll('.tab-card-menu').length") == 0
+        self.page.evaluate("document.querySelector('.tab-card .tab-edit').click()")
+        assert self.page.evaluate("document.querySelectorAll('.tab-card-menu').length") == 0
+        assert self.page.evaluate("document.querySelectorAll('.tab-card-menu button').length") == 0
+        assert self.page.evaluate("!document.body.textContent.includes('Изменить')")
+
+    def test_edit_click_does_not_open_tab_link(self):
+        # stopPropagation: клик по ✎ не открывает вкладку (карточка не получает клик)
+        load_view(self.page, tabs=self.TABS)
+        self.page.evaluate("document.querySelector('.tab-card .tab-edit').click()")
+        opened = self.page.evaluate("chrome.runtime.messagesSent.filter(m => m.action === 'open-one').length")
+        assert opened == 0, self.page.evaluate("JSON.stringify(chrome.runtime.messagesSent)")
+        assert self.page.evaluate("chrome.tabs.createdTabs.length") == 0
+        assert self.page.evaluate("document.getElementById('edit-tab-modal').classList.contains('open')")
 
 
 # ==========================================
@@ -5942,6 +6059,125 @@ class TestTabCardHeight:
         assert d["nameTop"] <= 14, d
 
 
+
+
+# ==========================================
+#  VIEW.HTML: ИМЯ ВКЛАДКИ В КАРТОЧКЕ — ПЕРЕНОС НА 2 СТРОКИ + МНОГОТОЧИЕ
+# ==========================================
+
+class TestTabNameWrap:
+    """Длинное имя вкладки переносится на 2-ю строку; если не влезает — обрезается
+    многоточием в конце 2-й строки. Короткое имя — одна строка. Карточка — 74px,
+    фавикон стоит на первой строке, комментарий — одна строка внизу."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    SCRATCH = r"C:\Users\DI\AppData\Local\hermes\cache\scratch"
+    LONG = "Очень длинное имя вкладки которое явно не помещается в одну строку карточки"
+    SHORT = "GitHub"
+
+    def _inject_real_styles(self):
+        theme = load_file("theme.css")
+        html = load_file("view.html")
+        style = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate(
+            "(styles) => { var st = document.createElement('style'); st.textContent = styles; document.head.appendChild(st); }",
+            [theme + "\n" + style])
+
+    def _measure(self, tabs):
+        load_view(self.page, tabs=tabs)
+        self._inject_real_styles()
+        self.page.wait_for_timeout(120)
+        return json.loads(self.page.evaluate("""(() => {
+          const card = document.querySelector('.tab-card');
+          const name = document.querySelector('.tab-name');
+          const cs = getComputedStyle(name);
+          const cr = card.getBoundingClientRect(), nr = name.getBoundingClientRect();
+          // Натуральная ширина текста (без переноса) — по клону
+          const clone = name.cloneNode(true);
+          clone.style.cssText = 'position:absolute;visibility:hidden;white-space:nowrap;display:block;width:auto;flex:none';
+          document.body.appendChild(clone);
+          const natural = clone.getBoundingClientRect().width;
+          clone.remove();
+          const lh = parseFloat(cs.lineHeight);
+          const fav = card.querySelector('.tab-favicon, .tab-favicon-fallback');
+          const fr = fav ? fav.getBoundingClientRect() : null;
+          const cmt = card.querySelector('.tab-comment');
+          const mr = cmt ? cmt.getBoundingClientRect() : null;
+          return JSON.stringify({
+            clamp: cs.webkitLineClamp, display: cs.display, whiteSpace: cs.whiteSpace,
+            overflow: cs.overflow, textOverflow: cs.textOverflow,
+            nameH: nr.height, lh: lh, nameTop: nr.top - cr.top, nameBottom: nr.bottom - cr.top,
+            clientW: name.clientWidth, natural: natural,
+            cardH: cr.height, cardClientH: card.clientHeight, cardScrollH: card.scrollHeight,
+            favTop: fr ? (fr.top - cr.top) : null, favBottom: fr ? (fr.bottom - cr.top) : null,
+            cmtTop: mr ? (mr.top - cr.top) : null, cmtBottom: mr ? (mr.bottom - cr.top) : null,
+            cmtWhiteSpace: cmt ? getComputedStyle(cmt).whiteSpace : null,
+            cmtOverflow: cmt ? getComputedStyle(cmt).textOverflow : null,
+          });
+        })()"""))
+
+    def test_line_clamp_is_two_lines(self):
+        d = self._measure([{"name": self.LONG, "url": "https://github.com"}])
+        assert d["clamp"] == "2", d
+        assert d["whiteSpace"] == "normal" and d["overflow"] == "hidden", d
+        assert d["display"] in ("-webkit-box", "flow-root", "block"), d
+
+    def test_long_name_occupies_exactly_two_lines(self):
+        d = self._measure([{"name": self.LONG, "url": "https://github.com"}])
+        lh = d["lh"]
+        # ровно две строки: не одна и не три
+        assert 2 * lh - 1 <= d["nameH"] <= 2 * lh + 1, d
+        assert d["nameH"] < 3 * lh, d
+        assert d["nameH"] > d["lh"] + 1, d
+
+    def test_long_name_truncates_with_ellipsis_at_second_line(self):
+        d = self._measure([{"name": self.LONG, "url": "https://github.com"}])
+        # текст длиннее блока → клип по 2 строкам (многоточие в конце 2-й)
+        assert d["natural"] > d["clientW"] + 20, d
+        assert d["overflow"] == "hidden" and d["textOverflow"] == "ellipsis", d
+        # низ 2-й строки не уходит за нижний край карточки
+        assert d["nameBottom"] <= d["cardH"] - 4, d
+
+    def test_short_name_stays_one_line(self):
+        d = self._measure([{"name": self.SHORT, "url": "https://github.com"}])
+        assert abs(d["nameH"] - d["lh"]) < 1, d
+        assert d["natural"] <= d["clientW"] + 1, d
+
+    def test_card_74px_no_overflow_favicon_on_first_line(self):
+        tabs = [{"name": self.LONG, "url": "https://github.com",
+                 "comment": "смотреть раздел API"}]
+        d = self._measure(tabs)
+        # карточка — ровно 74px, ничего не выходит за неё
+        assert d["cardH"] == 74, d
+        assert d["cardClientH"] >= d["cardScrollH"], d
+        # фавикон — на первой строке имени, не по центру двух строк
+        assert d["favTop"] >= d["nameTop"], d
+        assert d["favBottom"] <= d["nameTop"] + d["lh"] + 2, d
+        # комментарий — одна строка с многоточием, внутри карточки, под именем
+        assert d["cmtWhiteSpace"] == "nowrap" and d["cmtOverflow"] == "ellipsis", d
+        assert d["cmtTop"] > d["nameBottom"] and d["cmtBottom"] <= d["cardH"], d
+
+    def test_harness_screenshots_long_name_light_dark(self):
+        tabs = [
+            {"name": self.LONG, "url": "https://github.com/some/very/long/path",
+             "comment": "смотреть раздел API"},
+            {"name": self.SHORT, "url": "https://github.com"},
+        ]
+        for theme in ("light", "dark"):
+            load_view(self.page, tabs=tabs, theme=theme)
+            self._inject_real_styles()
+            self.page.wait_for_timeout(200)
+            png = self.SCRATCH + "\\bt_name_wrap_" + theme + ".png"
+            self.page.screenshot(path=png)
+            assert os.path.exists(png), png
+            assert os.path.getsize(png) > 5 * 1024, png
+        # длинное имя — две строки, карточка — 74px (обе темы)
+        d = self._measure([{"name": self.LONG, "url": "https://github.com"}])
+        assert d["nameH"] > d["lh"] + 1 and d["cardH"] == 74, d
+
 # ==========================================
 #  VIEW.JS: ИНЛАЙН-РЕНЕЙМ ГРУППЫ (✎ В ШАПКЕ)
 # ==========================================
@@ -6630,11 +6866,11 @@ class TestDragRowKeeper:
         self._end_drag()
 
     def test_cross_section_keeper_at_source_tail_real_grid(self):
-        # Реальная сетка (theme.css + стили view.html), 1280 → 6 колонок:
-        # группа (2 вкладки) сверху + 13 негрупповых (6+6+1). Последняя вкладка
-        # в одиночестве в последней строке перетаскивается в группу: keeper
-        # стоит в КОНЦЕ исходной (loose) секции (после последней видимой
-        # карточки, не за захваченной), строка не схлопывается — якорь под
+        # Реальная сетка (theme.css + стили view.html), 1280 → 5 колонок:
+        # группа (2 вкладки) сверху + 13 негрупповых (5+5+3). Последнюю вкладку
+        # перетаскиваем в группу: keeper стоит в КОНЦЕ исходной (loose) секции
+        # (после последней видимой карточки, не за захваченной), число строк
+        # секции не меняется (13 ячеек = 5+5+3 и до, и после) — якорь под
         # списком стоит на месте
         tabs = [
             {"name": "M1", "url": "https://m1.com", "spaceId": "sp1", "groupId": "g1"},
@@ -6789,7 +7025,11 @@ class TestGhostOverExpandedGbar:
           document.head.appendChild(s);
         }""", css + style_block)
         self.page.set_viewport_size({"width": 1280, "height": 900})
-        self.page.wait_for_timeout(50)
+        # указатель в нейтральный угол: :hover карточки (translateY(-1px)) не
+        # должен смещать строки под измерением (физическая позиция мыши
+        # живёт между тестами на общей странице)
+        self.page.mouse.move(0, 0)
+        self.page.wait_for_timeout(200)
         self._maps()
 
     def _maps(self):
@@ -7084,7 +7324,11 @@ class TestGhostOverGroupEmptyArea:
           document.head.appendChild(s);
         }""", css + style_block)
         self.page.set_viewport_size({"width": 1280, "height": 900})
-        self.page.wait_for_timeout(50)
+        # указатель в нейтральный угол: :hover карточки (translateY(-1px)) не
+        # должен смещать строки под измерением (физическая позиция мыши
+        # живёт между тестами на общей странице)
+        self.page.mouse.move(0, 0)
+        self.page.wait_for_timeout(200)
         self._maps()
 
     def _maps(self):
@@ -7284,7 +7528,11 @@ class TestGhostOverGroupEmptyArea:
         self._over_point(*pt)
         d = self._ghost()
         assert d["exists"] is True and d["hidden"] is False, d
-        assert d["nextName"] == "A7", d  # слот вставки — начало второй строки
+        # слот вставки — начало второй строки: карточка сразу после первой
+        # строки (в первой строке = N карточек, N — число разрешённых колонок сетки)
+        cols = int(self.page.evaluate(
+            "getComputedStyle(document.getElementById('tabs-list')).gridTemplateColumns.split(' ').length"))
+        assert d["nextName"] == "A" + str(cols + 1), (cols, d)
         self._end_drag()
 
     def test_drop_in_above_zone_moves_tab_into_group(self):
@@ -7461,7 +7709,7 @@ class TestBulkDeleteSelection:
             tabs = [{"name": f"T{i}", "url": f"https://t{i}.com"} for i in range(n)]
             load_view(self.page, tabs=tabs)
             self._confirm_recorder(True)
-            self.page.evaluate("document.getElementById('select-btn').click()")
+            self.page.evaluate("document.querySelectorAll('.tab-select').forEach(c => c.click())")
             self.page.evaluate("document.getElementById('delete-selected-btn').click()")
             self.page.wait_for_timeout(50)
             d = json.loads(self.page.evaluate("""(() => {
@@ -7666,51 +7914,16 @@ class TestSpaceChipReorder:
         load_view(self.page, spaces=self.SP, tabs=self.TABS)
         self._drag_drop_chip("Alpha", "Alpha", "before")
         self._drag_drop_chip("Alpha", "Alpha", "after")
+        self.page.wait_for_timeout(50)  # отложенное создание chip-заглушки (setTimeout(0))
         assert self._spaces() == ["Alpha", "Beta", "Gamma"]
         assert self._dom_order() == ["Alpha", "Beta", "Gamma"]
+        # Заглушка убрана на drop, чипы видимы — без следов
+        assert self.page.evaluate("document.querySelectorAll('.space-ghost-slot').length") == 0
+        assert self.page.evaluate(
+            "[...document.querySelectorAll('.space-chip')]"
+            ".every(c => getComputedStyle(c).display !== 'none')") is True
         # Вкладки не тронуты
         assert read_storage_raw(self.page, "blattam-tabs")[0]["spaceId"] == "sp1"
-
-    def test_dragover_indicator_line_resolves_ink_both_themes(self):
-        # Индикатор — 2px вертикальная линия var(--ink) на кромке цели;
-        # computed-цвет равен токену theme.css в обеих темах; индикаторы
-        # снимаются на dragleave и dragend; dragover на себя — не цель
-        css = load_file("theme.css")
-        dark_at = css.index('[data-theme="dark"] {')
-        parts = {"light": css[:dark_at], "dark": css[dark_at:]}
-        for theme in ("light", "dark"):
-            load_view(self.page, theme=theme, spaces=self.SP, tabs=self.TABS)
-            self._inject_real_styles()
-            state = json.loads(self.page.evaluate("""(() => {
-              const chips = [...document.querySelectorAll('.space-chip')];
-              const src = chips.find(c => c.querySelector('.chip-name').textContent === 'Alpha');
-              const dst = chips.find(c => c.querySelector('.chip-name').textContent === 'Gamma');
-              const dt = new DataTransfer();
-              src.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true}));
-              const r = dst.getBoundingClientRect();
-              dst.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true, clientX: r.left + r.width * 0.25}));
-              const topLine = dst.classList.contains('drop-before');
-              const csLeft = getComputedStyle(dst, '::before');
-              const lineLeft = csLeft.width === '2px' && csLeft.content !== 'none' && csLeft.position === 'absolute';
-              const lineColor = csLeft.backgroundColor;
-              dst.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true, clientX: r.left + Math.max(r.width * 0.75, 0.001)}));
-              const bottomLine = dst.classList.contains('drop-after');
-              const csRight = getComputedStyle(dst, '::after');
-              const lineRight = csRight.width === '2px' && csRight.content !== 'none';
-              const noOverBg = !dst.classList.contains('drag-over');
-              src.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true, clientX: r.left + r.width * 0.25}));
-              const selfNoInd = !src.classList.contains('drop-before') && !src.classList.contains('drop-after');
-              dst.dispatchEvent(new DragEvent('dragleave', {dataTransfer: dt, bubbles: true}));
-              const afterLeave = !dst.classList.contains('drop-before') && !dst.classList.contains('drop-after');
-              dst.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true, clientX: r.left + r.width * 0.25}));
-              src.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
-              const afterEnd = !dst.classList.contains('drop-before') && !dst.classList.contains('drop-after');
-              return JSON.stringify({topLine, lineLeft, lineColor, bottomLine, lineRight, noOverBg, selfNoInd, afterLeave, afterEnd});
-            })()"""))
-            ink = self._token_color(parts[theme], "--ink")
-            assert state["topLine"] and state["lineLeft"] and state["bottomLine"] and state["lineRight"], (theme, state)
-            assert state["noOverBg"] and state["selfNoInd"] and state["afterLeave"] and state["afterEnd"], (theme, state)
-            assert state["lineColor"] == ink, (theme, state["lineColor"], ink)
 
     def test_fake_postdrop_click_does_not_switch_space(self):
         # Реальный Chrome генерирует ложный click по drop-цели в момент дропа,
@@ -7750,7 +7963,10 @@ class TestSpaceChipReorder:
         assert self.page.evaluate(
             "document.querySelector('.chip.active .chip-name').textContent") == "Beta"
 
-    def test_chip_drag_creates_no_ghost_slot(self):
+    def test_chip_drag_creates_chip_ghost_and_no_card_ghost(self):
+        # Drag чипа: в #space-chips создаётся тёплая .space-ghost-slot; карточные
+        # ghost-slot/row-keeper НЕ создаются (глобальные dragover/drop байлят при
+        # dragSourceUrl null); вкладки не тронуты; на drop заглушка убрана
         load_view(self.page, spaces=self.SP, tabs=[
             {"name": "T1", "url": "https://t1.com", "spaceId": "sp1"},
             {"name": "T2", "url": "https://t2.com", "spaceId": "sp1"},
@@ -7758,21 +7974,34 @@ class TestSpaceChipReorder:
         self.page.evaluate("""() => {
           const chips = [...document.querySelectorAll('.space-chip')];
           const src = chips[0], dst = chips[2];
-          const r = dst.getBoundingClientRect();
           const dt = new DataTransfer();
           src.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true}));
           // курсор над списком вкладок: глобальные dragover/drop (dragSourceUrl
-          // null) early-return — заглушка/keeper не создаются
+          // null) early-return — карточная заглушка/keeper не создаются
           const list = document.getElementById('tabs-list');
           const lr = list.getBoundingClientRect();
           list.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true, clientX: lr.left + 10, clientY: lr.top + 10}));
+          const r = dst.getBoundingClientRect();
           dst.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true, clientX: r.left + r.width * 0.25}));
+        }""")
+        self.page.wait_for_timeout(30)  # отложенное создание chip-заглушки — setTimeout(0)
+        assert self.page.evaluate(
+            "document.querySelectorAll('.space-ghost-slot').length") == 1
+        assert self.page.evaluate(
+            "document.querySelector('.space-ghost-slot').parentElement.id === 'space-chips'") is True
+        assert self.page.evaluate("document.querySelectorAll('.tab-ghost-slot').length") == 0
+        assert self.page.evaluate("document.querySelectorAll('.tab-row-keeper').length") == 0
+        self.page.evaluate("""() => {
+          const chips = [...document.querySelectorAll('.space-chip')];
+          const src = chips[0], dst = chips[2];
+          const r = dst.getBoundingClientRect();
+          const dt = new DataTransfer();
           dst.dispatchEvent(new DragEvent('drop', {dataTransfer: dt, bubbles: true, cancelable: true, clientX: r.left + r.width * 0.25}));
           src.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
         }""")
-        self.page.wait_for_timeout(50)  # отложенное создание заглушки — setTimeout(0)
+        self.page.wait_for_timeout(50)
+        assert self.page.evaluate("document.querySelectorAll('.space-ghost-slot').length") == 0
         assert self.page.evaluate("document.querySelectorAll('.tab-ghost-slot').length") == 0
-        assert self.page.evaluate("document.querySelectorAll('.tab-row-keeper').length") == 0
         tabs = read_storage_raw(self.page, "blattam-tabs")
         assert all(t["spaceId"] == "sp1" for t in tabs)
 
@@ -7849,3 +8078,1492 @@ class TestSpaceChipReorder:
         assert self.page.evaluate("document.getElementById('space-modal').classList.contains('open')")
         # Чип без «застрявших» классов после press
         assert self.page.evaluate("document.querySelector('.space-chip').className") == "chip space-chip active"
+
+class TestSpaceChipGhostSlot:
+    """Drag chips of spaces — warm ghost-slot, same as tab-card drag:
+    source chip display:none, .space-ghost-slot follows the mouse in the row,
+    left half of a target chip — ghost before the target, right half — after;
+    the 2px edge line on chips is removed (the ghost slot is the single indicator)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    SP = [{"id": "sp1", "name": "Alpha"}, {"id": "sp2", "name": "Beta"},
+          {"id": "sp3", "name": "Gamma"}]
+    TABS = [{"name": "T", "url": "https://t.com", "spaceId": "sp1"}]
+    SCRATCH = r"C:\Users\DI\AppData\Local\hermes\cache\scratch"
+
+    def _inject_real_styles(self):
+        theme = load_file("theme.css")
+        html = load_file("view.html")
+        style = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate(
+            "(styles) => { var st = document.createElement('style'); st.textContent = styles; document.head.appendChild(st); }",
+            [theme + "\n" + style])
+
+    def _token_color(self, css_part, token):
+        m = re.search(rf"{token}:\s*(#[0-9a-fA-F]{{3,8}}|rgba?\([^)]*\))", css_part)
+        assert m, token
+        v = m.group(1)
+        if v.startswith("#"):
+            h = v[1:]
+            if len(h) == 3:
+                h = "".join(c * 2 for c in h)
+            return "rgb({0}, {1}, {2})".format(int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+        nums = [x.strip() for x in v.split("(", 1)[1].strip().strip("()").split(",")]
+        return "rgba({0}, {1}, {2}, {3})".format(nums[0], nums[1], nums[2], nums[3])
+
+    def _spaces(self):
+        return json.loads(self.page.evaluate("""(async () => {
+          var d = await chrome.storage.get('blattam-spaces');
+          return JSON.stringify((d['blattam-spaces'] || []).map(s => s.name));
+        })()"""))
+
+    def _state(self):
+        # row #space-chips: ghosts, visible chips (display != none), hidden source
+        # chip, ghosts inside the row, side classes on chips, total row children
+        return json.loads(self.page.evaluate("""(() => {
+          const kids = [...document.getElementById('space-chips').children];
+          return JSON.stringify({
+            ghosts: kids.filter(e => e.classList.contains('space-ghost-slot')).length,
+            visibleChips: kids.filter(e => e.classList.contains('space-chip')
+              && getComputedStyle(e).display !== 'none').length,
+            srcHidden: kids.some(e => e.classList.contains('space-chip')
+              && getComputedStyle(e).display === 'none'),
+            ghostIn: [...document.querySelectorAll('.space-ghost-slot')]
+              .every(g => g.parentElement.id === 'space-chips'),
+            sideCls: [...document.querySelectorAll('.space-chip')].some(c =>
+              c.classList.contains('drop-before') || c.classList.contains('drop-after')),
+            total: kids.length});
+        })()"""))
+
+    def _adjacent(self, dst_name, side):
+        # ghost slot sits immediately before/after the target chip
+        return json.loads(self.page.evaluate("""(args) => {
+          const ghost = document.querySelector('.space-ghost-slot');
+          if (!ghost) return JSON.stringify(false);
+          const dst = [...document.querySelectorAll('.space-chip')].find(
+            c => c.querySelector('.chip-name').textContent === args[0]);
+          return JSON.stringify(args[1] === 'before'
+            ? ghost.nextElementSibling === dst : ghost.previousElementSibling === dst);
+        }""", [dst_name, side]))
+
+    def _row_seq(self):
+        # DOM order in #space-chips: chip names ('(hidden)' — display:none) + 'ghost'
+        return json.loads(self.page.evaluate(
+            "JSON.stringify([...document.querySelectorAll('#space-chips > *')].map(e => "
+            "e.classList.contains('space-ghost-slot') ? 'ghost' : "
+            "e.querySelector('.chip-name').textContent + (e.style.display === 'none' ? '(hidden)' : '')))"))
+
+    def _start(self, src_name):
+        # dragstart source chip, then the deferred timer (setTimeout(0)) creates the ghost
+        self.page.evaluate("""(args) => {
+          const chips = [...document.querySelectorAll('.space-chip')];
+          const src = chips.find(c => c.querySelector('.chip-name').textContent === args[0]);
+          window.__dt = new DataTransfer();
+          src.dispatchEvent(new DragEvent('dragstart', {dataTransfer: window.__dt, bubbles: true}));
+        }""", [src_name])
+        self.page.wait_for_timeout(30)
+
+    def _over(self, dst_name, half):
+        # dragover onto left/right half of the target chip; the target rect is fresh
+        self.page.evaluate("""(args) => {
+          const chips = [...document.querySelectorAll('.space-chip')];
+          const dst = chips.find(c => c.querySelector('.chip-name').textContent === args[0]);
+          const r = dst.getBoundingClientRect();
+          const clientX = args[1] === 'before' ? r.left + r.width * 0.25 : r.left + Math.max(r.width * 0.75, 0.001);
+          dst.dispatchEvent(new DragEvent('dragover', {dataTransfer: window.__dt, bubbles: true, cancelable: true, clientX}));
+        }""", [dst_name, half])
+
+    def _drop(self, dst_name, half):
+        self.page.evaluate("""(args) => {
+          const chips = [...document.querySelectorAll('.space-chip')];
+          const dst = chips.find(c => c.querySelector('.chip-name').textContent === args[0]);
+          const r = dst.getBoundingClientRect();
+          const clientX = args[1] === 'before' ? r.left + r.width * 0.25 : r.left + Math.max(r.width * 0.75, 0.001);
+          dst.dispatchEvent(new DragEvent('drop', {dataTransfer: window.__dt, bubbles: true, cancelable: true, clientX}));
+        }""", [dst_name, half])
+
+    def _end(self, src_name):
+        # dragend (after a storage-driven re-render the chip is a NEW element —
+        # find it by name); its handler restores display and clears the ghost
+        self.page.evaluate("""(args) => {
+          const chips = [...document.querySelectorAll('.space-chip')];
+          const src = chips.find(c => c.querySelector('.chip-name').textContent === args[0]);
+          src.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        }""", [src_name])
+        self.page.wait_for_timeout(30)
+
+    def test_dragstart_hides_source_chip_and_creates_ghost_slot(self):
+        # (a) source chip display:none, .space-ghost-slot inside #space-chips,
+        # ghost in the source slot (row children = 3 chips + 1 ghost)
+        load_view(self.page, spaces=self.SP, tabs=self.TABS)
+        s0 = self._state()
+        assert s0["ghosts"] == 0 and s0["visibleChips"] == 3 and s0["srcHidden"] is False
+        self._start("Alpha")
+        s = self._state()
+        assert s["srcHidden"] is True, s
+        assert s["ghosts"] == 1 and s["ghostIn"] is True, s
+        assert s["visibleChips"] == 2 and s["visibleChips"] + s["ghosts"] == 3, s
+        assert s["total"] == 4, s
+        # the ghost stands in the grabbed chip's slot — right after it
+        assert self._adjacent("Alpha", "after") is True
+        self._end("Alpha")
+        s = self._state()
+        assert s["ghosts"] == 0 and s["srcHidden"] is False and s["visibleChips"] == 3, s
+        assert s["total"] == 3, s
+
+    def test_ghost_size_and_warm_tone_both_themes(self):
+        # (b) ghost geometry = chip geometry (height 26px, width, radius), warm
+        # tone: --ghost-bg fill + 1px dashed --ghost-ring, computed = theme.css
+        # tokens in light AND dark
+        css = load_file("theme.css")
+        dark_at = css.index('[data-theme="dark"] {')
+        parts = {"light": css[:dark_at], "dark": css[dark_at:]}
+        for theme in ("light", "dark"):
+            load_view(self.page, theme=theme, spaces=self.SP, tabs=self.TABS)
+            self._inject_real_styles()
+            self.page.wait_for_timeout(100)
+            chip = json.loads(self.page.evaluate("""() => {
+              const chip = [...document.querySelectorAll('.space-chip')].find(
+                c => c.querySelector('.chip-name').textContent === 'Alpha');
+              const r = chip.getBoundingClientRect();
+              // offsetWidth — то, что читает makeSpaceGhostSlot (integer, border-box)
+              return JSON.stringify({h: r.height, w: chip.offsetWidth,
+                radius: getComputedStyle(chip).borderTopLeftRadius});
+            }"""))
+            assert chip["h"] == 26.0, (theme, chip)
+            self._start("Alpha")
+            g = json.loads(self.page.evaluate("""() => {
+              const ghost = document.querySelector('.space-ghost-slot');
+              const cs = getComputedStyle(ghost);
+              const r = ghost.getBoundingClientRect();
+              return JSON.stringify({height: r.height, width: r.width,
+                radius: cs.borderTopLeftRadius, bg: cs.backgroundColor,
+                bstyle: cs.borderStyle, bwidth: cs.borderLeftWidth,
+                bcolor: cs.borderLeftColor, pe: cs.pointerEvents});
+            }"""))
+            assert abs(g["height"] - 26.0) < 0.5, (theme, g, chip)
+            assert abs(g["width"] - chip["w"]) < 0.5, (theme, g, chip)
+            assert g["radius"] == chip["radius"], (theme, g, chip)
+            assert g["bg"] == self._token_color(parts[theme], "--ghost-bg"), (theme, g)
+            assert g["bstyle"] == "dashed" and g["bwidth"] == "1px", (theme, g)
+            assert g["bcolor"] == self._token_color(parts[theme], "--ghost-ring"), (theme, g)
+            assert g["pe"] == "none", (theme, g)
+            self._end("Alpha")
+
+    def test_dragover_left_half_ghost_before_target_right_half_after(self):
+        # (c) left half of the target chip — ghost immediately before the target,
+        # right half — after it
+        load_view(self.page, spaces=self.SP, tabs=self.TABS)
+        self._start("Alpha")
+        self._over("Gamma", "before")
+        assert self._adjacent("Gamma", "before") is True
+        assert self._adjacent("Gamma", "after") is False
+        assert self._row_seq() == ["Alpha(hidden)", "Beta", "ghost", "Gamma"]
+        self._over("Gamma", "after")
+        assert self._adjacent("Gamma", "after") is True
+        assert self._adjacent("Gamma", "before") is False
+        assert self._row_seq() == ["Alpha(hidden)", "Beta", "Gamma", "ghost"]
+        self._end("Alpha")
+        assert self._state()["ghosts"] == 0
+
+    def test_row_item_count_constant_during_drag(self):
+        # (d) row items (visible chips + ghost) stay the original count during the
+        # drag: the ghost occupies the one slot vacated by the hidden chip, the
+        # row tail never shifts
+        load_view(self.page, spaces=self.SP, tabs=self.TABS)
+        assert self._state()["visibleChips"] == 3
+        self._start("Alpha")
+        for dst, half in (("Gamma", "before"), ("Beta", "after"), ("Beta", "before")):
+            self._over(dst, half)
+            s = self._state()
+            assert s["ghosts"] == 1, (dst, half, s)
+            assert s["visibleChips"] + s["ghosts"] == 3, (dst, half, s)
+            assert s["total"] == 4, (dst, half, s)
+        self._end("Alpha")
+        s = self._state()
+        assert s["ghosts"] == 0 and s["total"] == 3 and s["visibleChips"] == 3, s
+
+    def test_second_dragover_moves_ghost(self):
+        # (e) second dragover onto another chip moves the ghost slot
+        load_view(self.page, spaces=self.SP, tabs=self.TABS)
+        self._start("Alpha")
+        self._over("Beta", "before")
+        assert self._adjacent("Beta", "before") is True
+        self._over("Gamma", "before")
+        assert self._adjacent("Gamma", "before") is True
+        assert self._adjacent("Beta", "before") is False
+        self._over("Beta", "after")
+        assert self._adjacent("Beta", "after") is True
+        self._end("Alpha")
+        assert self._state()["ghosts"] == 0
+
+    def test_drop_commits_order_matching_ghost_position(self):
+        # (f) drop commits blattam-spaces order matching the ghost position, the
+        # ghost is removed, active space and blattam-last-space unchanged
+        load_view(self.page, spaces=self.SP, tabs=self.TABS, last_space="sp1")
+        self._start("Alpha")
+        self._over("Gamma", "after")
+        assert self._adjacent("Gamma", "after") is True
+        self._drop("Gamma", "after")
+        assert self._spaces() == ["Beta", "Gamma", "Alpha"]
+        assert self._state()["ghosts"] == 0, self._state()
+        self._end("Alpha")
+        names = json.loads(self.page.evaluate(
+            "JSON.stringify([...document.querySelectorAll('.space-chip .chip-name')].map(e => e.textContent))"))
+        assert names == ["Beta", "Gamma", "Alpha"]
+        assert self.page.evaluate(
+            "document.querySelector('.chip.active .chip-name').textContent") == "Alpha"
+        last = json.loads(self.page.evaluate(
+            "(async () => { var d = await chrome.storage.get('blattam-last-space'); return JSON.stringify(d['blattam-last-space']); })()"))
+        assert last == "sp1"
+
+    def test_drop_on_self_noop_no_leftovers(self):
+        # (g) drop on self — no reorder, no leftovers: ghost removed, chip visible,
+        # storage order unchanged, tabs untouched
+        load_view(self.page, spaces=self.SP, tabs=self.TABS)
+        self._start("Alpha")
+        assert self._state()["ghosts"] == 1
+        self._over("Alpha", "before")  # dragover on self — not a target, ghost stays home
+        self._drop("Alpha", "before")
+        self._end("Alpha")
+        assert self._spaces() == ["Alpha", "Beta", "Gamma"]
+        s = self._state()
+        assert s["ghosts"] == 0 and s["srcHidden"] is False and s["visibleChips"] == 3, s
+        assert read_storage_raw(self.page, "blattam-tabs")[0]["spaceId"] == "sp1"
+
+    def test_dragend_without_drop_leaves_no_traces(self):
+        # (h) dragend without drop: no ghost, no side classes, chip display
+        # restored, order unchanged
+        load_view(self.page, spaces=self.SP, tabs=self.TABS)
+        self._start("Alpha")
+        self._over("Beta", "after")
+        assert self._adjacent("Beta", "after") is True
+        self._end("Alpha")
+        s = self._state()
+        assert s["ghosts"] == 0 and s["sideCls"] is False, s
+        assert s["srcHidden"] is False and s["visibleChips"] == 3, s
+        assert s["total"] == 3, s
+        assert self._spaces() == ["Alpha", "Beta", "Gamma"]
+
+    def test_chip_dragover_makes_no_side_classes_and_css_rule_is_tokens(self):
+        # (i) chip dragover adds no drop-before/drop-after classes on chips;
+        # view.html has no .space-chip.drop-before/.drop-after chip rules, the
+        # .space-ghost-slot rule uses tokens only (no hex); .gbar 2px lines intact
+        load_view(self.page, spaces=self.SP, tabs=self.TABS)
+        self._start("Alpha")
+        for dst, half in (("Beta", "before"), ("Beta", "after"), ("Gamma", "before")):
+            self._over(dst, half)
+            assert self._state()["sideCls"] is False, (dst, half)
+        html = load_file("view.html")
+        assert ".space-chip.drop-before" not in html
+        assert ".space-chip.drop-after" not in html
+        rule = html[html.index(".space-ghost-slot"):]
+        rule = rule[:rule.index("}")]
+        assert "var(--ghost-bg)" in rule and "var(--ghost-ring)" in rule
+        assert re.search(r"#[0-9a-fA-F]{3,8}", rule) is None
+        gbar = html[html.index(".gbar.drop-before::before, .gbar.drop-after::after"):]
+        gbar = gbar[:gbar.index("}")]
+        assert "var(--ink)" in gbar
+        self._end("Alpha")
+
+    def test_spurious_postdrop_click_no_switch_real_click_switches(self):
+        # (j) fake post-drop click on the target (drop -> click -> dragend) does
+        # NOT switch space; real press (mousedown + click) switches
+        load_view(self.page, spaces=self.SP, tabs=self.TABS, last_space="sp1")
+        self._start("Alpha")
+        self._over("Gamma", "before")
+        self._drop("Gamma", "before")
+        self.page.evaluate("""() => {
+          const dst = [...document.querySelectorAll('.space-chip')].find(
+            c => c.querySelector('.chip-name').textContent === 'Gamma');
+          dst.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+        }""")
+        self._end("Alpha")
+        assert self._spaces() == ["Beta", "Alpha", "Gamma"]
+        assert self.page.evaluate(
+            "document.querySelector('.chip.active .chip-name').textContent") == "Alpha"
+        last = json.loads(self.page.evaluate(
+            "(async () => { var d = await chrome.storage.get('blattam-last-space'); return JSON.stringify(d['blattam-last-space']); })()"))
+        assert last == "sp1"
+        self.page.evaluate("""() => {
+          const beta = [...document.querySelectorAll('.space-chip')].find(
+            c => c.querySelector('.chip-name').textContent === 'Beta');
+          beta.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
+          beta.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+        }""")
+        assert self.page.evaluate(
+            "document.querySelector('.chip.active .chip-name').textContent") == "Beta"
+
+    def test_first_dragover_before_deferred_creation_is_reapplied(self):
+        # Race (the card pattern): the first dragover arrives BEFORE the deferred
+        # ghost creation (dragstart setTimeout) — the state is re-applied after
+        # the timer fires
+        load_view(self.page, spaces=self.SP, tabs=self.TABS)
+        self.page.evaluate("""(args) => {
+          const chips = [...document.querySelectorAll('.space-chip')];
+          const src = chips.find(c => c.querySelector('.chip-name').textContent === args[0]);
+          const dst = chips.find(c => c.querySelector('.chip-name').textContent === args[1]);
+          const r = dst.getBoundingClientRect();
+          const dt = new DataTransfer();
+          src.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true}));
+          dst.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true, clientX: r.left + r.width * 0.25}));
+        }""", ["Alpha", "Gamma"])
+        self.page.wait_for_timeout(30)
+        s = self._state()
+        assert s["ghosts"] == 1 and s["srcHidden"] is True, s
+        assert self._adjacent("Gamma", "before") is True
+        self._end("Alpha")
+        assert self._state()["ghosts"] == 0
+        assert self._spaces() == ["Alpha", "Beta", "Gamma"]
+
+    def test_harness_screenshots_chip_ghost_light_dark(self):
+        for theme in ("light", "dark"):
+            load_view(self.page, theme=theme, spaces=self.SP, tabs=self.TABS)
+            self._inject_real_styles()
+            self.page.wait_for_timeout(100)
+            self._start("Alpha")
+            self._over("Gamma", "before")
+            png = self.SCRATCH + "\\bt_chip_ghost_" + theme + ".png"
+            self.page.screenshot(path=png)
+            assert os.path.exists(png), png
+            assert os.path.getsize(png) > 5 * 1024, png
+            self._end("Alpha")
+
+
+class TestSpaceChipRowDrop:
+    """Дроп чипа пространств В ЛЮБОМ месте ряда (зазор между чипами, отступы
+    ряда, кнопка «+ Пространство») коммитит позицию заглушки — как у дропа
+    карточек (коммит в любом месте списка): заглушка .space-ghost-slot
+    pointer-events:none, раньше дроп по заглушке/фону ряда промахивался мимо
+    хендлеров чипов — chip snap back home, no reorder."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    SP = [{"id": "sp1", "name": "Alpha"}, {"id": "sp2", "name": "Beta"},
+          {"id": "sp3", "name": "Gamma"}]
+    TABS = [{"name": "T", "url": "https://t.com", "spaceId": "sp1"}]
+
+    def _spaces(self):
+        return json.loads(self.page.evaluate("""(async () => {
+          var d = await chrome.storage.get('blattam-spaces');
+          return JSON.stringify((d['blattam-spaces'] || []).map(s => s.name));
+        })()"""))
+
+    def _row_children(self):
+        # DOM-порядок чипов в #space-chips: 'ghost' / чип-имя (+ '(hidden)')
+        return json.loads(self.page.evaluate(
+            "JSON.stringify([...document.querySelectorAll('#space-chips > *')].map(e => "
+            "e.classList.contains('space-ghost-slot') ? 'ghost' : "
+            "e.querySelector('.chip-name').textContent + (e.style.display === 'none' ? '(hidden)' : '')))"))
+
+    def _state(self):
+        return json.loads(self.page.evaluate("""(() => {
+          return JSON.stringify({
+            ghosts: document.querySelectorAll('.space-ghost-slot').length,
+            srcHidden: [...document.querySelectorAll('.space-chip')]
+              .some(c => getComputedStyle(c).display === 'none'),
+            visibleChips: [...document.querySelectorAll('.space-chip')]
+              .filter(c => getComputedStyle(c).display !== 'none').length,
+            sideCls: [...document.querySelectorAll('.space-chip')].some(c =>
+              c.classList.contains('drop-before') || c.classList.contains('drop-after')),
+            active: (document.querySelector('.chip.active .chip-name') || {}).textContent});
+        })()"""))
+
+    def _spy(self):
+        # Счётчик записей blattam-spaces: оборачиваем chrome.storage.sync.set
+        # (делегирование в оригинал), ставим ПОСЛЕ load_view, до взаимодействий
+        self.page.evaluate("""() => {
+          window.__spWrites = 0;
+          const orig = chrome.storage.sync.set;
+          chrome.storage.sync.set = function(data, cb) {
+            if (data && data['blattam-spaces']) window.__spWrites++;
+            return orig.call(chrome.storage.sync, data, cb);
+          };
+        }""")
+
+    def _start(self, src_name):
+        self.page.evaluate("""(args) => {
+          const chips = [...document.querySelectorAll('.space-chip')];
+          const src = chips.find(c => c.querySelector('.chip-name').textContent === args[0]);
+          window.__dt = new DataTransfer();
+          src.dispatchEvent(new DragEvent('dragstart', {dataTransfer: window.__dt, bubbles: true}));
+        }""", [src_name])
+        self.page.wait_for_timeout(30)  # отложенное создание chip-заглушки — setTimeout(0)
+
+    def _over(self, dst_name, half):
+        self.page.evaluate("""(args) => {
+          const dst = [...document.querySelectorAll('.space-chip')].find(
+            c => c.querySelector('.chip-name').textContent === args[0]);
+          const r = dst.getBoundingClientRect();
+          const clientX = args[1] === 'before' ? r.left + r.width * 0.25 : r.left + Math.max(r.width * 0.75, 0.001);
+          dst.dispatchEvent(new DragEvent('dragover', {dataTransfer: window.__dt, bubbles: true, cancelable: true, clientX}));
+        }""", [dst_name, half])
+
+    def _row_dragover(self):
+        # dragover по фону ряда (не по чипу) — ряд становится валидной целью
+        self.page.evaluate("""() => {
+          const row = document.getElementById('spaces-bar');
+          const r = row.getBoundingClientRect();
+          row.dispatchEvent(new DragEvent('dragover', {dataTransfer: window.__dt, bubbles: true,
+            cancelable: true, clientX: r.left + 2, clientY: r.top + 2}));
+        }""")
+
+    def _row_drop(self, clientX=None):
+        # drop с целью = ряд (e.target — фоновый элемент ряда, не чип)
+        self.page.evaluate("""(args) => {
+          const row = document.getElementById('spaces-bar');
+          const r = row.getBoundingClientRect();
+          row.dispatchEvent(new DragEvent('drop', {dataTransfer: window.__dt, bubbles: true,
+            cancelable: true, clientX: args[0] != null ? args[0] : r.left + r.width / 2}));
+        }""", [clientX])
+
+    def _end(self, src_name):
+        self.page.evaluate("""(args) => {
+          const src = [...document.querySelectorAll('.space-chip')].find(
+            c => c.querySelector('.chip-name').textContent === args[0]);
+          src.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        }""", [src_name])
+        self.page.wait_for_timeout(30)
+
+    def test_drop_in_row_gap_commits_ghost_position(self):
+        # (a) заглушка перед Gamma; дроп в зазоре (цель — ряд, e.target не
+        # чип; координаты — над самой заглушкой, pointer-events:none) →
+        # blattam-spaces = позиции заглушки; заглушка убрана, без боковых
+        # классов, активное пространство и blattam-last-space не меняются
+        load_view(self.page, spaces=self.SP, tabs=self.TABS, last_space="sp1")
+        self._start("Alpha")
+        self._over("Gamma", "before")
+        ghost_x = self.page.evaluate(
+            "() => { const g = document.querySelector('.space-ghost-slot'); "
+            "const r = g.getBoundingClientRect(); return r.left + r.width / 2; }")
+        self._row_drop(ghost_x)
+        assert self._spaces() == ["Beta", "Alpha", "Gamma"]
+        s = self._state()
+        assert s["ghosts"] == 0 and s["sideCls"] is False, s
+        assert s["active"] == "Alpha"
+        last = json.loads(self.page.evaluate(
+            "(async () => { var d = await chrome.storage.get('blattam-last-space'); return JSON.stringify(d['blattam-last-space']); })()"))
+        assert last == "sp1"
+        self._end("Alpha")
+        assert self._row_children() == ["Beta", "Alpha", "Gamma"]
+        assert self.page.evaluate(
+            "document.getElementById('spaces-bar').lastElementChild.id") == "add-space-btn"
+
+    def test_drop_on_add_space_button_moves_source_to_end(self):
+        # (b) заглушка после последнего чипа (перед кнопкой «+ Пространство»);
+        # дроп САМОЙ на кнопку → источник в КОНЕЦ blattam-spaces
+        load_view(self.page, spaces=self.SP, tabs=self.TABS)
+        self._start("Alpha")
+        self._over("Gamma", "after")
+        btn_x = self.page.evaluate(
+            "() => { const b = document.getElementById('add-space-btn'); "
+            "const r = b.getBoundingClientRect(); return r.left + r.width / 2; }")
+        self.page.evaluate("""(args) => {
+          const btn = document.getElementById('add-space-btn');
+          btn.dispatchEvent(new DragEvent('drop', {dataTransfer: window.__dt, bubbles: true,
+            cancelable: true, clientX: args[0]}));
+        }""", [btn_x])
+        assert self._spaces() == ["Beta", "Gamma", "Alpha"]
+        assert self._state()["ghosts"] == 0
+        self._end("Alpha")
+        assert self._row_children() == ["Beta", "Gamma", "Alpha"]
+
+    def test_drop_on_row_without_chip_dragover_is_noop_no_write(self):
+        # (c) dragstart + dragover по фону ряда (заглушка дома) + дроп по ряду →
+        # порядок неизменен и записи blattam-spaces в storage НЕТ (no-op-guard),
+        # ряд в DOM не тронут
+        load_view(self.page, spaces=self.SP, tabs=self.TABS)
+        self._spy()
+        self._start("Alpha")
+        self._row_dragover()
+        self._row_drop()
+        assert self._spaces() == ["Alpha", "Beta", "Gamma"]
+        assert self.page.evaluate("window.__spWrites") == 0
+        # заглушка снята дропом; чипы ряда = исходные 3 (исходный скрыт до dragend)
+        assert self._state()["ghosts"] == 0
+        assert self._row_children() == ["Alpha(hidden)", "Beta", "Gamma"]
+        self._end("Alpha")
+        assert self._row_children() == ["Alpha", "Beta", "Gamma"]
+
+    def test_drop_on_chip_commits_exactly_once(self):
+        # (d) регрессия: дроп НА чип коммитит ровно ОДИН раз (хендлер чипа +
+        # stopPropagation — хендлер ряда не коммитит повторно)
+        load_view(self.page, spaces=self.SP, tabs=self.TABS)
+        self._spy()
+        self._start("Alpha")
+        self._over("Gamma", "after")
+        self.page.evaluate("""() => {
+          const dst = [...document.querySelectorAll('.space-chip')].find(
+            c => c.querySelector('.chip-name').textContent === 'Gamma');
+          const r = dst.getBoundingClientRect();
+          dst.dispatchEvent(new DragEvent('drop', {dataTransfer: window.__dt, bubbles: true,
+            cancelable: true, clientX: r.left + Math.max(r.width * 0.75, 0.001)}));
+        }""")
+        assert self._spaces() == ["Beta", "Gamma", "Alpha"]
+        assert self.page.evaluate("window.__spWrites") == 1
+        assert self._state()["ghosts"] == 0
+        self._end("Alpha")
+        assert self._row_children() == ["Beta", "Gamma", "Alpha"]
+
+    def test_noop_guard_same_sequence_no_storage_write(self):
+        # (e) дроп, разрешающийся в ТО ЖЕ последовательность id (заглушка в
+        # собственном слоте источника) — no-op: записи blattam-spaces нет,
+        # порядок неизменен
+        load_view(self.page, spaces=self.SP, tabs=self.TABS)
+        self._spy()
+        self._start("Alpha")
+        self._over("Beta", "before")  # заглушка перед Beta = собственный слот Alpha
+        assert self._row_children() == ["Alpha(hidden)", "ghost", "Beta", "Gamma"]
+        self._row_drop()
+        assert self._spaces() == ["Alpha", "Beta", "Gamma"]
+        assert self.page.evaluate("window.__spWrites") == 0
+        assert self._state()["ghosts"] == 0
+        self._end("Alpha")
+
+    def test_dragend_after_row_background_hover_leaves_no_traces(self):
+        # (f) dragend без дропа после hover по фону ряда: без заглушки, без
+        # боковых классов, порядок неизменен, исходный чип видим
+        load_view(self.page, spaces=self.SP, tabs=self.TABS)
+        self._start("Alpha")
+        self._row_dragover()
+        self._end("Alpha")
+        s = self._state()
+        assert s["ghosts"] == 0 and s["sideCls"] is False, s
+        assert s["srcHidden"] is False and s["visibleChips"] == 3, s
+        assert self._spaces() == ["Alpha", "Beta", "Gamma"]
+        assert self._row_children() == ["Alpha", "Beta", "Gamma"]
+
+
+# ==========================================
+#  VIEW.JS: КОМПАКТНАЯ КАРТОЧКА (ширина -20%, меньше текст)
+# ==========================================
+
+class TestCardCompact:
+    """Компактная карточка: ширина -20% (--card-min 176px → 141px — единственный
+    регулятор ширины сетки), имя 13px → 11.5px (--card-name-size, имя + инлайн-поле
+    rename), комментарий 10px → 9px (.tab-comment); высота карточки 74px без изменений."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    SCRATCH = r"C:\Users\DI\AppData\Local\hermes\cache\scratch"
+    LONG = "Очень длинное имя вкладки которое явно не помещается в одну строку карточки"
+
+    def _inject_real_styles(self):
+        theme = load_file("theme.css")
+        html = load_file("view.html")
+        style = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate(
+            "(styles) => { var st = document.createElement('style'); st.textContent = styles; document.head.appendChild(st); }",
+            [theme + "\n" + style])
+
+    def test_grid_minmax_resolves_141px(self):
+        # --card-min — единственный регулятор ширины: minmax(var(--card-min), 1fr)
+        load_view(self.page, tabs=[{"name": "A", "url": "https://a.com"}])
+        self._inject_real_styles()
+        self.page.wait_for_timeout(120)
+        d = json.loads(self.page.evaluate("""(() => {
+          const token = getComputedStyle(document.documentElement).getPropertyValue('--card-min').trim();
+          let rule = null;
+          for (const ss of document.styleSheets) {
+            for (const r of ss.cssRules) {
+              if (r.selectorText === '.tabs-list' && r.cssText.includes('minmax(var(--card-min), 1fr)')) rule = r.cssText;
+            }
+          }
+          const col = getComputedStyle(document.getElementById('tabs-list')).gridTemplateColumns.split(' ');
+          return JSON.stringify({token, rule, col});
+        })()"""))
+        assert d["token"] == "141px", d
+        assert d["rule"] is not None and "grid-template-columns" in d["rule"], d
+        # разрешённые треки не уже минимума 141px (минимум minmax)
+        widths = [float(x.replace("px", "")) for x in d["col"]]
+        assert widths and all(w >= 141 for w in widths), d
+
+    def test_tab_name_font_11_5px_both_themes(self):
+        tabs = [{"name": "A", "url": "https://a.com"}]
+        for theme in ("light", "dark"):
+            load_view(self.page, tabs=tabs, theme=theme)
+            self._inject_real_styles()
+            self.page.wait_for_timeout(120)
+            assert self.page.evaluate("document.documentElement.dataset.theme") == theme
+            fs = self.page.evaluate(
+                "getComputedStyle(document.querySelector('.tab-name')).fontSize")
+            assert fs == "11.5px", (theme, fs)
+            # инлайн-поле rename (двойной клик по имени) — тот же размер
+            self.page.evaluate("document.querySelector('.tab-name').dispatchEvent(new MouseEvent('dblclick', {bubbles: true}))")
+            self.page.wait_for_timeout(50)
+            inp = self.page.evaluate(
+                "(() => { var i = document.querySelector('.tab-name-input'); return i ? getComputedStyle(i).fontSize : null; })()")
+            assert inp == "11.5px", (theme, inp)
+
+    def test_tab_comment_font_9px(self):
+        tabs = [{"name": "A", "url": "https://a.com", "comment": "примечание"}]
+        load_view(self.page, tabs=tabs)
+        self._inject_real_styles()
+        self.page.wait_for_timeout(120)
+        d = json.loads(self.page.evaluate("""(() => {
+          const c = document.querySelector('.tab-comment');
+          const cs = getComputedStyle(c);
+          return JSON.stringify({fs: cs.fontSize, lh: cs.lineHeight, family: cs.fontFamily, ws: cs.whiteSpace});
+        })()"""))
+        assert d["fs"] == "9px", d
+        assert d["lh"] == "11.7px", d              # 9px × 1.3
+        assert "mono" in d["family"].lower(), d    # моношрифт сохранён
+        assert d["ws"] == "nowrap", d
+
+    def test_cards_per_row_grew_at_wide_viewport(self):
+        # Зафиксированное широкое окно: центр = viewport − 410px рейки − 88px
+        # паддинги; при 1200px центр 702px → 4 колонки (minmax(141px, 1fr),
+        # gap 12px), карточка (702−36)/4 ≈ 166.5px
+        self.page.set_viewport_size({"width": 1200, "height": 900})
+        tabs = [{"name": f"T{i}", "url": f"https://t{i}.com"} for i in range(12)]
+        load_view(self.page, tabs=tabs)
+        self._inject_real_styles()
+        self.page.wait_for_timeout(150)
+        d = json.loads(self.page.evaluate("""(() => {
+          const col = getComputedStyle(document.getElementById('tabs-list')).gridTemplateColumns.split(' ');
+          const r = document.querySelector('.tab-card').getBoundingClientRect();
+          return JSON.stringify({cols: col.length, cardW: r.width});
+        })()"""))
+        assert d["cols"] == 4, d
+        assert d["cardW"] > 140, d
+        assert d["cardW"] < 190, d
+        self.page.set_viewport_size({"width": 1280, "height": 800})
+
+    def test_long_name_two_lines_still_fits_74px_card(self):
+        tabs = [{"name": self.LONG, "url": "https://github.com",
+                 "comment": "смотреть раздел API"}]
+        load_view(self.page, tabs=tabs)
+        self._inject_real_styles()
+        self.page.wait_for_timeout(120)
+        d = json.loads(self.page.evaluate("""(() => {
+          const card = document.querySelector('.tab-card');
+          const cmt = card.querySelector('.tab-comment');
+          const cr = card.getBoundingClientRect();
+          const mr = cmt ? cmt.getBoundingClientRect() : null;
+          return JSON.stringify({
+            cardH: cr.height, clientH: card.clientHeight, scrollH: card.scrollHeight,
+            cmtTop: mr ? (mr.top - cr.top) : null, cmtBottom: mr ? (mr.bottom - cr.bottom) : null,
+          });
+        })()"""))
+        assert d["cardH"] == 74, d
+        assert d["clientH"] >= d["scrollH"], d
+        assert d["cmtTop"] is not None and d["cmtTop"] >= 0, d
+        assert d["cmtBottom"] <= 0, d               # комментарий внутри карточки
+
+    def test_harness_screenshots_compact_card_light_dark(self):
+        tabs = [
+            {"name": self.LONG, "url": "https://github.com/some/very/long/path",
+             "comment": "смотреть раздел API"},
+            {"name": "GitHub", "url": "https://github.com"},
+            {"name": "Docs", "url": "https://docs.python.org"},
+        ]
+        for theme in ("light", "dark"):
+            load_view(self.page, tabs=tabs, theme=theme)
+            self._inject_real_styles()
+            self.page.wait_for_timeout(200)
+            png = self.SCRATCH + "\\bt_card_compact_" + theme + ".png"
+            self.page.screenshot(path=png)
+            assert os.path.exists(png), png
+            assert os.path.getsize(png) > 5 * 1024, png
+
+class TestCardNameDarkTone:
+    """Имя карточки (.tab-name) — токен --card-name. Светлая тема: совпадает с
+    --text (внешне без изменений); тёмная тема: тусклее --text
+    (--card-name: #b5ada6 против --text: #f5f2ee, ближе к --text-muted)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    TABS = [
+        {"name": "GitHub", "url": "https://github.com", "spaceId": "sp1"},
+        {"name": "Docs", "url": "https://docs.python.org", "spaceId": "sp1"},
+    ]
+
+    def _inject_real_styles(self):
+        theme = load_file("theme.css")
+        html = load_file("view.html")
+        style = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate(
+            "(styles) => { var st = document.createElement('style'); st.textContent = styles.join(String.fromCharCode(10)); document.head.appendChild(st); }",
+            [theme, style])
+
+    def _name_color(self, theme):
+        load_view(self.page, tabs=self.TABS, spaces=[{"id": "sp1", "name": "Main"}], theme=theme)
+        self._inject_real_styles()
+        self.page.wait_for_timeout(150)
+        # JS-объект приходит готовым dict — json.loads не нужен
+        return self.page.evaluate("""(() => {
+          const n = document.querySelector('.tab-name');
+          const root = getComputedStyle(document.documentElement);
+          return {
+            name: getComputedStyle(n).color,
+            text: root.getPropertyValue('--text').trim(),
+            cardName: root.getPropertyValue('--card-name').trim(),
+            theme: document.documentElement.getAttribute('data-theme')
+          };
+        })()""")
+
+    @staticmethod
+    def _hex_to_rgb(h):
+        h = h.lstrip("#")
+        if len(h) == 3:
+            h = "".join(c * 2 for c in h)
+        return "rgb(" + ", ".join(str(int(h[i:i+2], 16)) for i in (0, 2, 4)) + ")"
+
+    @staticmethod
+    def _lum(rgb_str):
+        m = re.match(r"rgb\((\d+), (\d+), (\d+)\)", rgb_str)
+        r, g, b = (int(m.group(i)) for i in (1, 2, 3))
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+    def test_light_name_color_unchanged(self):
+        d = self._name_color("light")
+        assert d["theme"] == "light", d
+        assert d["name"] == self._hex_to_rgb(d["cardName"]), d
+        assert d["name"] == self._hex_to_rgb(d["text"]), d  # светлая: имя == --text
+
+    def test_dark_name_dimmer_than_text(self):
+        d = self._name_color("dark")
+        assert d["theme"] == "dark", d
+        assert d["name"] == self._hex_to_rgb(d["cardName"]), d
+        assert d["cardName"].lower() != d["text"].lower(), d
+        assert self._lum(d["name"]) < self._lum(self._hex_to_rgb(d["text"])), d
+
+
+# ==========================================
+#  ТЁМА: ТУНИРОВКА ТЁМНОЙ ТЕМЫ (имя вкладки тусклее, линия гбара гаснет к краям,
+#  hover шапки группы едва заметный)
+# ==========================================
+
+class TestDarkGbarTuning:
+    """Тонкая подстройка ТЁМНОЙ темы: .tab-name — #b5ada6 (--card-name);
+    1px-линия .gbar — оверлей ::before (тёмная: градиент, тускнеет к краям);
+    hover шапки группы — rgba(255, 255, 255, 0.05) (--gbar-hover). Светлая тема
+    — пиксель-в-пиксель без изменений (сплошная --line2, hover --hover)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    SP = [{"id": "sp1", "name": "Main"}]
+    GROUPS = [
+        {"id": "g1", "name": "Dev", "spaceId": "sp1", "collapsed": False},
+        {"id": "g2", "name": "Life", "spaceId": "sp1", "collapsed": False},
+    ]
+    TABS = [
+        {"name": "D1", "url": "https://d1.com", "spaceId": "sp1", "groupId": "g1"},
+        {"name": "D2", "url": "https://d2.com", "spaceId": "sp1", "groupId": "g1"},
+        {"name": "L", "url": "https://l.com", "spaceId": "sp1"},
+    ]
+
+    def _inject_real_styles(self):
+        # Харнес ставит только body.innerHTML — подгружаем настоящие стили
+        # (theme.css + <style> view.html), чтобы computed-значения были реальными
+        theme = load_file("theme.css")
+        html = load_file("view.html")
+        style = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate(
+            "(styles) => { var st = document.createElement('style'); st.textContent = styles; document.head.appendChild(st); }",
+            [theme + "\\n" + style])
+
+    def _load_tuned(self, theme):
+        load_view(self.page, theme=theme, spaces=self.SP, groups=self.GROUPS, tabs=self.TABS)
+        self._inject_real_styles()
+        self.page.mouse.move(0, 0)  # нейтральная позиция: :hover не переживает load_view
+        self.page.wait_for_timeout(300)  # конец транзишенов background .1s / opacity .12s
+
+    def test_dark_tab_name_dimmed(self):
+        # (a) тёмная: имя карточки == #b5ada6
+        self._load_tuned("dark")
+        c = self.page.evaluate("getComputedStyle(document.querySelector('.tab-name')).color")
+        assert c == "rgb(181, 173, 166)", c
+
+    def test_dark_gbar_gradient_hairline(self):
+        # (b) тёмная: border-top убран (0px), ::before — 1px + linear-gradient
+        self._load_tuned("dark")
+        d = json.loads(self.page.evaluate("""(() => {
+          const cs = getComputedStyle(document.querySelector('.gbar'));
+          const bf = getComputedStyle(document.querySelector('.gbar'), '::before');
+          return JSON.stringify({
+            borderTopWidth: cs.borderTopWidth,
+            beforeHeight: bf.height,
+            beforeBgImage: bf.backgroundImage
+          });
+        })()"""))
+        assert d["borderTopWidth"] == "0px", d
+        assert d["beforeHeight"] == "1px", d
+        assert "linear-gradient" in d["beforeBgImage"], d
+
+    def test_dark_gbar_hover_faint(self):
+        # (c) тёмная: hover шапки — едва заметный rgba(255, 255, 255, 0.05)
+        self._load_tuned("dark")
+        self.page.hover(".gbar")
+        self.page.wait_for_timeout(300)  # конец транзишена background .1s
+        c = self.page.evaluate("getComputedStyle(document.querySelector('.gbar')).backgroundColor")
+        assert c == "rgba(255, 255, 255, 0.05)", c
+
+    def test_light_theme_unchanged(self):
+        # (d) светлая: имя == #171717; ::before — сплошная #ebebeb (без градиента);
+        #     hover шапки == #fafafa
+        self._load_tuned("light")
+        d = json.loads(self.page.evaluate("""(() => {
+          const nm = getComputedStyle(document.querySelector('.tab-name'));
+          const bf = getComputedStyle(document.querySelector('.gbar'), '::before');
+          return JSON.stringify({
+            nameColor: nm.color,
+            beforeBgColor: bf.backgroundColor,
+            beforeBgImage: bf.backgroundImage
+          });
+        })()"""))
+        assert d["nameColor"] == "rgb(23, 23, 23)", d
+        assert d["beforeBgColor"] == "rgb(235, 235, 235)", d
+        assert d["beforeBgImage"] == "none", d
+        self.page.hover(".gbar")
+        self.page.wait_for_timeout(300)
+        c = self.page.evaluate("getComputedStyle(document.querySelector('.gbar')).backgroundColor")
+        assert c == "rgb(250, 250, 250)", c
+
+    def test_new_tokens_in_both_sections(self):
+        # (e) токены --gbar-top-line / --gbar-hover — по одному разу в обеих секциях
+        # theme.css (значения — var()/градиент, не hex — поэтому не в hex-списке)
+        css = load_file("theme.css")
+        dark_at = css.index('[data-theme="dark"] {')
+        light_part, dark_part = css[:dark_at], css[dark_at:]
+        for tok in ("--gbar-top-line", "--gbar-hover"):
+            assert light_part.count(f"{tok}:") == 1, tok
+            assert dark_part.count(f"{tok}:") == 1, tok
+
+
+# ==========================================
+#  БОРДОВЫЙ ТОН ВЫБРАННОЙ КАРТОЧКИ: темнее фон --selected-bg, бордовое кольцо
+#  --selected-ring (1px) и контурная галочка --selected-check (вместо сплошного чернила)
+# ==========================================
+
+class TestSelectedRingSubtle:
+    """Кольцо выбранной карточки — деликатный 1px var(--selected-ring)
+    (светлая: rgba(107,16,32,0.25), тёмная: rgba(222,120,138,0.30)) — бордовый тон;
+    чекбокс выбранной карточки — контурный (фон + 1px галочка var(--selected-check)), клавиатурное кольцо
+    (1px чернила + 5px kbd-ring) без изменений."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    TABS = [
+        {"name": "A", "url": "https://a.com"},
+        {"name": "B", "url": "https://b.com"},
+    ]
+
+    def _inject_real_styles(self):
+        # Харнес ставит только body.innerHTML — подгружаем настоящие стили
+        theme = load_file("theme.css")
+        html = load_file("view.html")
+        style = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate(
+            "(styles) => { var st = document.createElement('style'); st.textContent = styles; document.head.appendChild(st); }",
+            [theme + "\n" + style])
+
+    def _load_ringed(self, theme):
+        load_view(self.page, theme=theme, tabs=self.TABS)
+        self._inject_real_styles()
+        self.page.mouse.move(0, 0)
+        self.page.wait_for_timeout(300)
+
+    def _select_first(self):
+        # evaluate-клик: page.click фокусирует чекбокс, и kbd-навигация гаснет
+        self.page.evaluate("document.querySelector('.tab-select').click()")  # чекбокс первой карточки
+        self.page.wait_for_timeout(300)
+
+    def test_selected_card_subtle_ring(self):
+        # (1) выбранная карточка: 1px rgba(107,16,32,0.25) — не 1.5px сплошное чернило
+        self._load_ringed("light")
+        self._select_first()
+        d = json.loads(self.page.evaluate("""(() => {
+          const sel = document.querySelector('.tab-card.selected');
+          return JSON.stringify({
+            selected: !!sel,
+            boxShadow: sel ? getComputedStyle(sel).boxShadow : null
+          });
+        })()"""))
+        assert d["selected"], d
+        assert "rgba(107, 16, 32, 0.25)" in d["boxShadow"], d
+        assert "0px 0px 0px 1px" in d["boxShadow"], d
+        assert "1.5px" not in d["boxShadow"], d
+
+    def test_unselected_card_default_ring(self):
+        # (2) невыбранная карточка — по-прежнему 1px --line
+        self._load_ringed("light")
+        self._select_first()
+        d = json.loads(self.page.evaluate("""(() => {
+          const c = document.querySelector('.tab-card:not(.selected)');
+          return JSON.stringify({exists: !!c, boxShadow: c ? getComputedStyle(c).boxShadow : null});
+        })()"""))
+        assert d["exists"], d
+        assert "rgba(0, 0, 0, 0.08)" in d["boxShadow"], d
+        assert "rgba(107, 16, 32, 0.25)" not in d["boxShadow"], d
+
+    def test_kbd_active_ring_unchanged(self):
+        # (3) регрессия: kbd-active карточка (не выбранная) — 1px чернила + 5px kbd-ring
+        self._load_ringed("light")
+        self._select_first()
+        for _ in range(2):  # ArrowDown x2: kbd-active на второй карточке (не выбранной)
+            self.page.evaluate("""(() => {
+              document.dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowDown', bubbles: true, cancelable: true}));
+            })()""")
+            self.page.wait_for_timeout(50)
+        d = json.loads(self.page.evaluate("""(() => {
+          const c = document.querySelector('.tab-card.kbd-active');
+          return JSON.stringify({
+            exists: !!c,
+            notSelected: c ? !c.classList.contains('selected') : null,
+            boxShadow: c ? getComputedStyle(c).boxShadow : null
+          });
+        })()"""))
+        assert d["exists"], d
+        assert d["notSelected"], d
+        assert "0px 0px 0px 1px" in d["boxShadow"], d
+        assert "0px 0px 0px 5px" in d["boxShadow"], d
+        assert "rgba(23, 23, 23, 0.08)" in d["boxShadow"], d
+
+    def test_selected_ring_token_in_both_sections(self):
+        # (4) --selected-ring — ровно по разу в секциях :root и [data-theme="dark"]
+        css = load_file("theme.css")
+        dark_at = css.index('[data-theme="dark"] {')
+        light_part, dark_part = css[:dark_at], css[dark_at:]
+        assert light_part.count("--selected-ring:") == 1
+        assert dark_part.count("--selected-ring:") == 1
+        assert "rgba(107, 16, 32, 0.25)" in light_part
+        assert "rgba(222, 120, 138, 0.30)" in dark_part
+
+
+# ==========================================
+#  БОРДОВЫЙ ТОН ВЫБРАННОЙ КАРТОЧКИ: темнее фон --selected-bg + контурная
+#  галочка --selected-check (вместо сплошного чернила)
+# ==========================================
+
+class TestSelectedBordeaux:
+    """Выбранная карточка — темнее и бордовее: background var(--selected-bg)
+    (светлая #efe8e9 / тёмная #2e2325), чекбокс — контурный (фон var(--surface)
+    + 1px var(--selected-check) + бордовая галочка)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    TABS = [
+        {"name": "A", "url": "https://a.com"},
+        {"name": "B", "url": "https://b.com"},
+    ]
+
+    def _inject_real_styles(self):
+        # Харнес ставит только body.innerHTML — подгружаем настоящие стили
+        theme = load_file("theme.css")
+        html = load_file("view.html")
+        style = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate(
+            "(styles) => { var st = document.createElement('style'); st.textContent = styles; document.head.appendChild(st); }",
+            [theme + "\n" + style])
+
+    def _load_bordeaux(self, theme):
+        load_view(self.page, theme=theme, tabs=self.TABS)
+        self._inject_real_styles()
+        self.page.mouse.move(0, 0)
+        self.page.wait_for_timeout(300)
+
+    def _select_first(self):
+        # evaluate-клик: page.click фокусирует чекбокс, и kbd-навигация гаснет
+        self.page.evaluate("document.querySelector('.tab-select').click()")
+        self.page.wait_for_timeout(300)
+
+    def test_selected_card_bordeaux_background(self):
+        # (1) выбранная карточка: background = --selected-bg (светлая) — темнее невыбранной
+        self._load_bordeaux("light")
+        self._select_first()
+        d = json.loads(self.page.evaluate("""(() => {
+          const sel = document.querySelector('.tab-card.selected');
+          const unsel = document.querySelector('.tab-card:not(.selected)');
+          return JSON.stringify({
+            selected: !!sel,
+            selBg: sel ? getComputedStyle(sel).backgroundColor : null,
+            unBg: unsel ? getComputedStyle(unsel).backgroundColor : null
+          });
+        })()"""))
+        assert d["selected"], d
+        assert d["selBg"] == "rgb(239, 232, 233)", d   # #efe8e9 — --selected-bg (light)
+        assert d["unBg"] == "rgb(245, 245, 245)", d    # --card-bg (light)
+        assert d["selBg"] != d["unBg"], d
+
+    def test_selected_checkbox_outline_not_ink(self):
+        # (2) чекбокс: не сплошное чернило — фон var(--surface), 1px var(--selected-check),
+        #     галочка бордовая (на не-залитом фоне белая была бы невидима)
+        self._load_bordeaux("light")
+        self._select_first()
+        d = json.loads(self.page.evaluate("""(() => {
+          const cb = document.querySelector('.tab-card.selected .tab-select');
+          if (!cb) return JSON.stringify({exists: false});
+          const cs = getComputedStyle(cb);
+          const after = getComputedStyle(cb, '::after');
+          return JSON.stringify({
+            exists: true,
+            bg: cs.backgroundColor,
+            boxShadow: cs.boxShadow,
+            afterBorder: after.borderLeftColor,
+            opacity: cs.opacity
+          });
+        })()"""))
+        assert d["exists"], d
+        assert d["bg"] == "rgb(255, 255, 255)", d                      # --surface (light)
+        assert "0px 0px 0px 1px" in d["boxShadow"], d
+        assert "rgba(107, 16, 32, 0.9)" in d["boxShadow"], d           # --selected-check (light)
+        assert d["afterBorder"] == "rgba(107, 16, 32, 0.9)", d
+        assert d["opacity"] == "1", d
+
+    def test_bordeaux_tokens_in_both_sections(self):
+        # (3) --selected-bg и --selected-check — ровно по разу в :root и [data-theme="dark"]
+        css = load_file("theme.css")
+        dark_at = css.index('[data-theme="dark"] {')
+        light_part, dark_part = css[:dark_at], css[dark_at:]
+        for tok in ("--selected-bg:", "--selected-check:"):
+            assert light_part.count(tok) == 1, tok
+            assert dark_part.count(tok) == 1, tok
+        assert "#efe8e9" in light_part
+        assert "#2e2325" in dark_part
+
+
+# ==========================================
+#  VIEW.HTML: NEWTAB — 3-КОЛОНКА (БОКОВЫЕ РЕЙКИ)
+# ==========================================
+
+class TestRailLayout:
+    """Новый newtab-лейаут: .workspace — 3 колонки (220px / minmax(0,1fr) / 190px):
+    левая рейка-меню (поиск наверху — полная ширина рейки, ≤760px — скрыт;
+    Тема/Экспорт/Импорт/Настройки — hover-reveal-строки, eyebrow «Меню»
+    убрано, аккаунт-карта закреплена внизу), центр (in-column header:
+    wordmark ONLY, БЕЗ кнопок; мета-строка — #meta-label + #meta-count,
+    кнопка «Выбрать» удалена), правая рейка-плейсхолдер
+    (watermark «ВКЛАДКИ БРАУЗЕРА» + ghost-заглушки). Колонки разделены ТОНОМ
+    (--rail-bg, без линий/теней). Responsive ≤760px: левая рейка — иконки 60px,
+    правая скрыта. #import-input остаётся скрытым после .workspace."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self._errors = []
+        page.on("pageerror", self._on_err)
+        yield
+        assert not self._errors, self._errors
+        page.remove_listener("pageerror", self._on_err)
+
+    def _on_err(self, err):
+        self._errors.append(str(err))
+
+    SCRATCH = r"C:\Users\DI\AppData\Local\hermes\cache\scratch"
+    TABS = [
+        {"name": "GitHub", "url": "https://github.com"},
+        {"name": "Docs", "url": "https://docs.python.org"},
+        {"name": "MDN", "url": "https://developer.mozilla.org"},
+    ]
+
+    def _inject_real_styles(self):
+        theme = load_file("theme.css")
+        html = load_file("view.html")
+        style = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate(
+            "(styles) => { var st = document.createElement('style'); st.textContent = styles; document.head.appendChild(st); }",
+            [theme + "\n" + style])
+
+    def test_grid_geometry_1440(self):
+        # 3 трека: 220px | minmax(0,1fr) | 190px; центр ≈ 71.5% ширины окна
+        self.page.set_viewport_size({"width": 1440, "height": 900})
+        load_view(self.page, tabs=self.TABS)
+        self._inject_real_styles()
+        self.page.wait_for_timeout(120)
+        d = json.loads(self.page.evaluate("""(() => {
+          const col = getComputedStyle(document.querySelector('.workspace')).gridTemplateColumns.split(' ');
+          return JSON.stringify({col, vw: window.innerWidth});
+        })()"""))
+        assert len(d["col"]) == 3, d
+        assert d["col"][0] == "220px", d
+        assert d["col"][2] == "190px", d
+        mid = float(d["col"][1].replace("px", ""))
+        assert 1025 <= mid <= 1035, d                      # 1440 − 220 − 190 = 1030
+        assert 68 <= mid / 1440 * 100 <= 82, d             # ≈ 71.5%
+
+    def test_rail_backgrounds_no_dividers(self):
+        # Рейки залиты --rail-bg (light #f4f2f0 / dark #292523), без box-shadow
+        # (разделение колонок — тоном, не линиями/тенями)
+        expect = {"light": ("rgb(244, 242, 240)", "#f4f2f0"),
+                  "dark": ("rgb(41, 37, 35)", "#292523")}
+        for theme in ("light", "dark"):
+            rgb, hexv = expect[theme]
+            load_view(self.page, tabs=self.TABS, theme=theme)
+            self._inject_real_styles()
+            self.page.wait_for_timeout(120)
+            d = json.loads(self.page.evaluate("""(() => {
+              const g = (el) => { const cs = getComputedStyle(el);
+                return {bg: cs.backgroundColor, shadow: cs.boxShadow}; };
+              return JSON.stringify({
+                token: getComputedStyle(document.documentElement).getPropertyValue('--rail-bg').trim(),
+                left: g(document.getElementById('rail-left')),
+                right: g(document.getElementById('rail-right'))
+              });
+            })()"""))
+            assert d["token"] == hexv, (theme, d)
+            assert d["left"]["bg"] == rgb, (theme, d)
+            assert d["right"]["bg"] == rgb, (theme, d)
+            assert d["left"]["shadow"] == "none", (theme, d)
+            assert d["right"]["shadow"] == "none", (theme, d)
+
+    def test_left_rail_contents(self):
+        # 4 hover-reveal-строки (Тема/Экспорт/Импорт/Настройки) в #rail-controls,
+        # все кнопки — в левой рейке; #settings-btn — no-op; #import-input скрыт
+        load_view(self.page, tabs=self.TABS)
+        self._inject_real_styles()
+        self.page.wait_for_timeout(120)
+        d = json.loads(self.page.evaluate("""(() => {
+          const rail = document.getElementById('rail-left');
+          const inRail = (id) => rail.contains(document.getElementById(id));
+          const items = document.querySelectorAll('#rail-controls .rail-item');
+          const inp = document.getElementById('import-input');
+          const cs = inp ? getComputedStyle(inp) : null;
+          return JSON.stringify({
+            items: items.length,
+            titles: [...document.querySelectorAll('#rail-controls .rail-item .t')].map(e => e.textContent.trim()),
+            themeInRail: inRail('theme-btn'), exportInRail: inRail('export-btn'),
+            importInRail: inRail('import-btn'), settingsExists: !!document.getElementById('settings-btn'),
+            searchInRail: inRail('search'),
+            searchFirst: rail.firstElementChild ? rail.firstElementChild.contains(document.getElementById('search')) : false,
+            importInDom: !!inp, importDisplay: cs ? cs.display : null,
+            inputAfterWorkspace: !!document.querySelector('.workspace').nextElementSibling
+              && document.querySelector('.workspace').nextElementSibling.id === 'import-input'
+          });
+        })()"""))
+        assert d["items"] == 4, d
+        assert d["titles"] == ["Тема", "Экспорт", "Импорт", "Настройки"], d
+        assert d["themeInRail"] and d["exportInRail"] and d["importInRail"], d
+        assert d["searchInRail"] and d["searchFirst"], d
+        assert d["settingsExists"], d
+        assert d["importInDom"], d
+        assert d["importDisplay"] == "none", d
+        assert d["inputAfterWorkspace"], d
+        # невидим для пользователя: у скрытого input нет bounding box
+        assert self.page.locator("#import-input").bounding_box() is None
+        # клик по «Настройки» — no-op: модалок/панелей нет, ошибок страницы нет
+        self.page.click("#settings-btn")
+        self.page.wait_for_timeout(150)
+        d2 = json.loads(self.page.evaluate("""(() => {
+          const overlays = [...document.querySelectorAll('.modal-overlay')];
+          const dlg = document.querySelector('[role="dialog"], .settings-panel');
+          return JSON.stringify({
+            noDialog: overlays.every(o => getComputedStyle(o).display === 'none') && (!dlg || getComputedStyle(dlg).display === 'none'),
+            theme: document.documentElement.dataset.theme
+          });
+        })()"""))
+        assert d2["noDialog"], d2
+
+    def test_account_card_pinned_bottom(self):
+        # Аккаунт-карта закреплена внизу левой рейки (margin-top: auto)
+        self.page.set_viewport_size({"width": 1440, "height": 900})
+        load_view(self.page, tabs=self.TABS)
+        self._inject_real_styles()
+        self.page.wait_for_timeout(120)
+        d = json.loads(self.page.evaluate("""(() => {
+          const rail = document.getElementById('rail-left');
+          const card = document.querySelector('#rail-left .rail-accounts');
+          if (!card || !rail.contains(card)) return JSON.stringify({exists: false});
+          const r = card.getBoundingClientRect();
+          const rr = rail.getBoundingClientRect();
+          return JSON.stringify({exists: true, centerFrac: (r.top + r.height / 2) / rr.height});
+        })()"""))
+        assert d["exists"], d
+        assert d["centerFrac"] >= 0.75, d
+
+    def test_center_header_clean(self):
+        # In-column header: wordmark ONLY (поиск переехал в левую рейку),
+        # НОЛЬ кнопок в .head; #select-btn удалён — мета-строка держит
+        # #meta-label + #meta-count
+        load_view(self.page, tabs=self.TABS)
+        self._inject_real_styles()
+        self.page.wait_for_timeout(120)
+        d = json.loads(self.page.evaluate("""(() => {
+          const head = document.querySelector('#center-pane .head');
+          return JSON.stringify({
+            hasWordmark: !!head.querySelector('.wordmark'),
+            headChildren: [...head.children].map(c => c.className || c.tagName),
+            hasSearch: !!head.querySelector('#search'),
+            buttonsInHead: head.querySelectorAll('button').length,
+            selectBtn: !!document.getElementById('select-btn'),
+            metarowHas: !!(document.getElementById('meta-label') && document.getElementById('meta-count')),
+            empty: !!document.getElementById('empty-state'),
+            noResults: !!document.getElementById('no-results'),
+            resetBtn: !!document.getElementById('btn-reset-filters'),
+          });
+        })()"""))
+        assert d["hasWordmark"] and d["headChildren"] == ["wordmark"], d
+        assert not d["hasSearch"], d
+        assert d["buttonsInHead"] == 0, d
+        assert d["selectBtn"] is False, d
+        assert d["metarowHas"] and d["empty"] and d["noResults"] and d["resetBtn"], d
+
+    def test_right_rail_placeholder(self):
+        # Watermark «ВКЛАДКИ БРАУЗЕРА» + 4 ghost-заглушки: тусклые, некликабельные
+        load_view(self.page, tabs=self.TABS)
+        self._inject_real_styles()
+        self.page.wait_for_timeout(120)
+        d = json.loads(self.page.evaluate("""(() => {
+          const wm = document.querySelector('#rail-right .wm');
+          const gt = document.querySelector('#rail-right .ghost-tabs');
+          const cs = gt ? getComputedStyle(gt) : null;
+          return JSON.stringify({
+            wmText: wm ? wm.textContent : null,
+            ghosts: gt ? gt.querySelectorAll('i').length : 0,
+            opacity: cs ? cs.opacity : null,
+            pointerEvents: cs ? cs.pointerEvents : null
+          });
+        })()"""))
+        assert d["wmText"] and "ВКЛАДКИ" in d["wmText"] and "БРАУЗЕРА" in d["wmText"], d
+        assert d["ghosts"] == 4, d
+        assert d["opacity"] == "0.3", d
+        assert d["pointerEvents"] == "none", d
+
+    def test_hover_reveal(self):
+        # Hover-reveal: подпись .s и стрелка .go появляются (opacity 1) при hover
+        load_view(self.page, tabs=self.TABS)
+        self._inject_real_styles()
+        self.page.wait_for_timeout(300)                 # дождаться конца transition opacity
+        before = self.page.evaluate("""(() => {
+          const s = document.querySelector('#export-btn .s');
+          return getComputedStyle(s).opacity;
+        })""")
+        assert before == "0", before
+        self.page.hover("#export-btn")
+        self.page.wait_for_timeout(300)                 # transition .18s
+        d = json.loads(self.page.evaluate("""(() => {
+          const btn = document.querySelector('#export-btn');
+          return JSON.stringify({
+            s: getComputedStyle(btn.querySelector('.s')).opacity,
+            go: getComputedStyle(btn.querySelector('.go')).opacity
+          });
+        })()"""))
+        assert d["s"] == "1", d
+        assert d["go"] == "1", d
+
+    def test_rails_screenshots_light_dark(self):
+        self.page.set_viewport_size({"width": 1440, "height": 900})
+        for theme in ("light", "dark"):
+            load_view(self.page, tabs=self.TABS, theme=theme)
+            self._inject_real_styles()
+            self.page.mouse.move(0, 0)
+            self.page.wait_for_timeout(200)
+            png = self.SCRATCH + "\\bt_rails_" + theme + ".png"
+            self.page.screenshot(path=png)
+            assert os.path.exists(png), png
+            assert os.path.getsize(png) > 5 * 1024, png
+
+    def test_responsive_600px(self):
+        # ≤760px: 2 трека (60px иконная рейка + центр), правая рейка скрыта,
+        # подписи .lbl/стрелки .go спрятаны
+        self.page.set_viewport_size({"width": 600, "height": 900})
+        load_view(self.page, tabs=self.TABS)
+        self._inject_real_styles()
+        self.page.wait_for_timeout(120)
+        d = json.loads(self.page.evaluate("""(() => {
+          const col = getComputedStyle(document.querySelector('.workspace')).gridTemplateColumns.split(' ');
+          return JSON.stringify({
+            col,
+            rightDisplay: getComputedStyle(document.getElementById('rail-right')).display,
+            lblDisplay: getComputedStyle(document.querySelector('.rail-item .lbl')).display,
+            goDisplay: getComputedStyle(document.querySelector('.rail-item .go')).display
+          });
+        })()"""))
+        assert len(d["col"]) == 2, d
+        assert d["col"][0] == "60px", d
+        assert d["rightDisplay"] == "none", d
+        assert d["lblDisplay"] == "none", d
+        assert d["goDisplay"] == "none", d
+
+
+class TestLeftRailSearchAndCleanup:
+    """UI-волна: поиск — наверху левой рейки (полная ширина, ≤760px — скрыт);
+    eyebrow «Меню» убран; модалка редактирования вкладки — вертикальная
+    (выше ширины), крупнее, тон полей — как у имени вкладки (--card-name),
+    модалка пространств — без изменений; кнопка «Выбрать» удалена из
+    мета-строки (групповые ☑ и чекбоксы карточек остались)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self._errors = []
+        page.on("pageerror", self._on_err)
+        # фиксированный широкий вьюпорт — предыдущие классы могут оставить
+        # узкий (≤760px), тогда рейка иконная и поиск скрыт
+        page.set_viewport_size({"width": 1280, "height": 900})
+        yield
+        assert not self._errors, self._errors
+        page.remove_listener("pageerror", self._on_err)
+        page.set_viewport_size({"width": 1280, "height": 720})
+
+    def _on_err(self, err):
+        self._errors.append(str(err))
+
+    TABS = [
+        {"name": "GitHub", "url": "https://github.com"},
+        {"name": "Docs", "url": "https://docs.python.org"},
+        {"name": "MDN", "url": "https://developer.mozilla.org"},
+    ]
+
+    def _inject_real_styles(self):
+        theme = load_file("theme.css")
+        html = load_file("view.html")
+        style = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate(
+            "(styles) => { var st = document.createElement('style'); st.textContent = styles; document.head.appendChild(st); }",
+            [theme + "\n" + style])
+
+    def test_no_menu_eyebrow_in_left_rail(self):
+        # Видимого eyebrow «Меню» в левой рейке нет; aria-label
+        # (невидимый текст) сохранён
+        load_view(self.page, tabs=self.TABS)
+        self._inject_real_styles()
+        self.page.wait_for_timeout(120)
+        d = json.loads(self.page.evaluate("""(() => {
+          const rail = document.getElementById('rail-left');
+          return JSON.stringify({
+            eyebrows: document.querySelectorAll('#rail-left .eyebrow').length,
+            railText: rail.textContent,
+            ariaLabel: rail.getAttribute('aria-label')
+          });
+        })()"""))
+        assert d["eyebrows"] == 0, d
+        assert "Меню" not in d["railText"], d
+        assert d["ariaLabel"] == "Меню и настройки", d
+
+    def test_search_moved_into_left_rail(self):
+        # #search — наверху левой рейки (до первой .rail-item), полная
+        # ширина рейки; .head — только wordmark; фильтрация работает
+        load_view(self.page, tabs=self.TABS)
+        self._inject_real_styles()
+        self.page.wait_for_timeout(120)
+        d = json.loads(self.page.evaluate("""(() => {
+          const rail = document.getElementById('rail-left');
+          const search = document.getElementById('search');
+          const head = document.querySelector('#center-pane .head');
+          const firstItem = document.querySelector('#rail-left .rail-item');
+          const sr = search.getBoundingClientRect();
+          const rr = rail.getBoundingClientRect();
+          const rcs = getComputedStyle(rail);
+          const content = rail.clientWidth
+            - parseFloat(rcs.paddingLeft) - parseFloat(rcs.paddingRight);
+          return JSON.stringify({
+            inRail: rail.contains(search),
+            inHead: head.contains(search),
+            headChildren: [...head.children].map(c => c.className || c.tagName),
+            beforeFirstItem: firstItem
+              ? (search.compareDocumentPosition(firstItem) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+              : false,
+            fullWidth: Math.abs(sr.width - content) <= 3,
+            srW: sr.width, contentW: content
+          });
+        })()"""))
+        assert d["inRail"] and not d["inHead"], d
+        assert d["headChildren"] == ["wordmark"], d
+        assert d["beforeFirstItem"], d
+        assert d["fullWidth"], d
+        # поиск всё так же фильтрует карточки
+        self.page.locator("#search").fill("python")
+        names = self.page.evaluate(
+            "[...document.querySelectorAll('.tab-card .tab-name')].map(e => e.textContent)")
+        assert names == ["Docs"], names
+
+    def test_search_hidden_at_600px(self):
+        # ≤760px: иконная рейка 60px — поиск скрыт
+        self.page.set_viewport_size({"width": 600, "height": 900})
+        load_view(self.page, tabs=self.TABS)
+        self._inject_real_styles()
+        self.page.wait_for_timeout(120)
+        d = json.loads(self.page.evaluate("""(() => {
+          const s = document.getElementById('search');
+          const box = document.querySelector('#rail-left .searchbox');
+          return JSON.stringify({
+            display: getComputedStyle(box).display,
+            width: box.getBoundingClientRect().width,
+            srW: s.getBoundingClientRect().width
+          });
+        })()"""))
+        assert d["display"] == "none", d
+        assert d["width"] == 0, d
+        assert d["srW"] == 0, d
+
+    def test_edit_tab_modal_vertical_bigger_tabname_tone(self):
+        # Модалка редактирования вкладки: прямоугольник выше ширины,
+        # ширина ≥ 300px, поля 14px, тон текста — как у .tab-name
+        # (--card-name), обе темы
+        for theme in ("light", "dark"):
+            self.page.set_viewport_size({"width": 520, "height": 900})
+            load_view(self.page, tabs=self.TABS, theme=theme)
+            self._inject_real_styles()
+            self.page.evaluate("document.querySelector('.tab-card .tab-edit').click()")
+            self.page.wait_for_timeout(80)
+            d = json.loads(self.page.evaluate("""(() => {
+              const modal = document.querySelector('#edit-tab-modal .modal');
+              const inp = document.getElementById('edit-name-input');
+              const name = document.querySelector('.tab-card .tab-name');
+              const r = modal.getBoundingClientRect();
+              const cs = getComputedStyle(inp);
+              return JSON.stringify({
+                open: document.getElementById('edit-tab-modal').classList.contains('open'),
+                w: r.width, h: r.height,
+                font: cs.fontSize,
+                inputColor: cs.color,
+                nameColor: name ? getComputedStyle(name).color : null
+              });
+            })()"""))
+            assert d["open"], (theme, d)
+            assert d["w"] >= 300 and d["w"] <= 321, (theme, d)
+            assert d["h"] > d["w"], (theme, d)
+            assert d["font"] == "14px", (theme, d)
+            assert d["inputColor"] == d["nameColor"], (theme, d)
+            self.page.evaluate("document.getElementById('edit-cancel').click()")
+            self.page.wait_for_timeout(50)
+
+    def test_spaces_modal_unchanged(self):
+        # Модалка пространств (общая .modal) — прежняя геометрия
+        # (280px, padding 20px, h3 14px) и тон полей var(--text)
+        for theme in ("light", "dark"):
+            load_view(self.page, tabs=self.TABS, theme=theme)
+            self._inject_real_styles()
+            self.page.evaluate("document.getElementById('add-space-btn').click()")
+            self.page.wait_for_timeout(80)
+            d = json.loads(self.page.evaluate("""(() => {
+              const modal = document.querySelector('#space-modal .modal');
+              const inp = document.getElementById('space-name-input');
+              const cs = getComputedStyle(inp);
+              const r = modal.getBoundingClientRect();
+              return JSON.stringify({
+                open: document.getElementById('space-modal').classList.contains('open'),
+                w: r.width,
+                pad: getComputedStyle(modal).padding,
+                h3font: getComputedStyle(modal.querySelector('h3')).fontSize,
+                font: cs.fontSize,
+                inputColor: cs.color
+              });
+            })()"""))
+            assert d["open"], (theme, d)
+            assert d["w"] == 280, (theme, d)
+            assert d["pad"] == "20px", (theme, d)
+            assert d["h3font"] == "14px", (theme, d)
+            assert d["font"] == "13px", (theme, d)
+            if theme == "dark":
+                assert d["inputColor"] == "rgb(245, 242, 238)", (theme, d)   # --text dark
+            else:
+                assert d["inputColor"] == "rgb(23, 23, 23)", (theme, d)      # --text light
+            self.page.evaluate("document.getElementById('modal-cancel').click()")
+            self.page.wait_for_timeout(50)

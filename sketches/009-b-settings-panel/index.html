@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Toby — вкладки</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* BlattamToby — токены (из theme.css: светлая :root, тёмная [data-effective="dark"]) */
+:root{
+  --bg:#ffffff;--surface:#ffffff;--card-bg:#f5f5f5;--surface-soft:#fafafa;--btn-hover:#fafafa;--hover:#fafafa;--gbar-hover:#fafafa;
+  --text:#171717;--text-soft:#4d4d4d;--text-muted:#666666;--text-faint:#808080;--card-name:#171717;--on-ink:#ffffff;
+  --line:rgba(0,0,0,0.08);--line2:#ebebeb;--gbar-top-line:#ebebeb;--dashed:#b0b0b0;--dashed-hover:#737373;
+  --ink:#171717;--ink-hover:rgba(23,23,23,0.88);
+  --selected-ring:rgba(107,16,32,0.25);--selected-bg:#efe8e9;--selected-check:rgba(107,16,32,0.90);
+  --ghost-bg:#fbe3b6;--ghost-ring:#d99a4e;
+  --shadow-hover:0 2px 10px rgba(0,0,0,0.06);--shadow-lg:0 8px 24px rgba(0,0,0,0.10),0 2px 2px rgba(0,0,0,0.04);
+  --card-min:141px;--card-gap:12px;--card-radius:8px;--card-name-size:11.5px;
+  --font-ui:'Geist',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  --font-mono:'Geist Mono',ui-monospace,Consolas,monospace;
+  color-scheme:light;
+}
+[data-effective="dark"]{
+  --bg:#1f1c1b;--surface:#2a2624;--card-bg:#36312d;--surface-soft:#282422;--btn-hover:#38322f;--hover:#38322f;--gbar-hover:rgba(255,255,255,0.05);
+  --text:#f5f2ee;--text-soft:#d7d1cb;--text-muted:#a8a09a;--text-faint:#827c76;--card-name:#b5ada6;--on-ink:#1f1c1b;
+  --line:rgba(255,255,255,0.10);--line2:rgba(255,255,255,0.16);--gbar-top-line:linear-gradient(90deg,rgba(255,255,255,0) 0%,rgba(255,255,255,0.16) 50%,rgba(255,255,255,0) 100%);--dashed:#6d655e;--dashed-hover:#a8a09a;
+  --ink:#f5f2ee;--ink-hover:rgba(245,242,238,0.90);
+  --selected-ring:rgba(222,120,138,0.30);--selected-bg:#2e2325;--selected-check:rgba(230,145,160,0.95);
+  --ghost-bg:#4c3c22;--ghost-ring:#d7a24d;
+  --shadow-hover:0 2px 10px rgba(0,0,0,0.45);--shadow-lg:0 10px 30px rgba(0,0,0,0.50),0 2px 2px rgba(0,0,0,0.30);
+  color-scheme:dark;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+html{height:100%;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;}
+html,body{height:100%;}
+body{
+  font-family:var(--font-ui);font-feature-settings:'liga';
+  background:var(--bg);color:var(--text);font-size:14px;line-height:1.5;
+  height:100vh;overflow:hidden;display:flex;flex-direction:column;
+  transition:background-color .18s ease,color .18s ease;
+}
+::selection{background:var(--ink);color:var(--on-ink);}
+button{font-family:inherit;cursor:pointer;}
+.header,.rail,.center,.drawer,.tab-card,.gbar,.chip,.icon-btn,.sec,.seg-btn,.data-btn,.account-cta,.list-row,.avatar,.search-box{
+  transition:background-color .18s ease,color .18s ease,border-color .18s ease,box-shadow .14s ease,transform .12s ease;
+}
+
+/* ---------- header (full width, sticky) ---------- */
+.header{
+  position:sticky;top:0;z-index:50;flex-shrink:0;
+  background:var(--bg);box-shadow:0 1px 0 var(--line2);
+  height:52px;padding:0 18px;display:flex;align-items:center;
+}
+.wordmark{font-size:17px;font-weight:700;letter-spacing:-.06em;user-select:none;flex:0 0 150px;}
+.searchbox{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:440px;max-width:44vw;}
+.searchbox svg{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--text-faint);pointer-events:none;}
+.search-box{
+  width:100%;height:34px;border:0;border-radius:8px;background:var(--bg);
+  box-shadow:0 0 0 1px var(--line);padding:0 34px;font:400 13px/1 var(--font-ui);color:var(--text);
+  outline:none;
+}
+.search-box::placeholder{color:var(--text-faint);}
+.search-box:focus{box-shadow:0 0 0 1.5px var(--ink);}
+.searchbox kbd{position:absolute;right:9px;top:50%;transform:translateY(-50%);min-width:18px;height:18px;padding:0 4px;display:grid;place-items:center;font:500 10.5px/1 var(--font-mono);color:var(--text-faint);border-radius:4px;box-shadow:0 0 0 1px var(--line2);}
+.top-actions{margin-left:auto;display:flex;gap:6px;flex:0 0 auto;}
+.icon-btn{
+  width:32px;height:32px;border:0;border-radius:8px;background:var(--bg);
+  box-shadow:0 0 0 1px var(--line);display:grid;place-items:center;color:var(--text-muted);font-size:14px;line-height:1;
+}
+.icon-btn:hover{background:var(--hover);color:var(--text);}
+
+/* ---------- workbench (3 columns) ---------- */
+.workbench{flex:1;min-height:0;display:flex;}
+
+/* (a) LEFT — thin icon rail (essentially empty / future) */
+.rail{
+  flex:0 0 56px;width:56px;box-shadow:inset -1px 0 0 var(--line2);
+  background:var(--surface);display:flex;flex-direction:column;align-items:center;
+  padding:12px 0;gap:10px;
+}
+.rail .tile{
+  width:34px;height:34px;border-radius:9px;display:grid;place-items:center;
+  background:transparent;box-shadow:0 0 0 1px var(--line);color:var(--text-faint);opacity:.5;
+}
+.rail .tile.active{opacity:.9;background:var(--surface-soft);color:var(--text-muted);box-shadow:0 0 0 1px var(--line);}
+.rail .rail-spacer{flex:1;}
+.rail .rail-foot{
+  width:34px;height:34px;border-radius:50%;box-shadow:0 0 0 1px var(--line);
+  background:var(--surface-soft);display:grid;place-items:center;color:var(--text-faint);opacity:.6;
+}
+/* (b) CENTER — dominant work area */
+.center{flex:1 1 auto;min-width:0;background:var(--bg);overflow-y:auto;overflow-x:hidden;}
+.chip-row{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:16px 22px 2px;}
+.chip{
+  height:26px;padding:0 12px;border:0;border-radius:9999px;
+  display:inline-flex;align-items:center;gap:5px;
+  background:var(--bg);box-shadow:0 0 0 1px var(--line);
+  font:500 12.5px/1 var(--font-ui);color:var(--text-muted);letter-spacing:-.1px;user-select:none;
+}
+.chip:hover{background:var(--hover);}
+.chip.active{background:var(--ink);color:var(--on-ink);box-shadow:none;}
+.chip-add{
+  height:26px;padding:0 12px;border:1px dashed var(--dashed);border-radius:9999px;
+  display:inline-flex;align-items:center;gap:5px;background:transparent;
+  font:500 12.5px/1 var(--font-ui);color:var(--text-muted);letter-spacing:-.1px;
+}
+.chip-add:hover{background:var(--hover);border-color:var(--dashed-hover);}
+#add-space-btn{
+  height:26px;padding:0;border:0;border-radius:0;display:inline-flex;align-items:center;gap:0;
+  background:transparent;font:500 10.5px/1 var(--font-mono);color:var(--text-faint);
+  text-transform:uppercase;letter-spacing:.08em;white-space:nowrap;
+}
+#add-space-btn:hover{color:var(--text);}
+
+.metarow{display:flex;align-items:baseline;gap:12px;padding:18px 22px 14px;}
+.metatitle{font-size:15px;font-weight:600;letter-spacing:-.2px;display:flex;align-items:baseline;gap:8px;}
+.metatitle .n{font:500 11px/1 var(--font-mono);color:var(--text-faint);}
+
+.tabs-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(var(--card-min),1fr));gap:var(--card-gap);width:100%;padding:0 22px 40px;}
+
+/* gbar — group header (faithful to view.html, ::before top line) */
+.gbar{
+  position:relative;grid-column:1/-1;display:flex;align-items:center;gap:8px;height:28px;padding:0 2px;
+  background:transparent;cursor:pointer;user-select:none;
+}
+.gbar:hover{background:var(--gbar-hover);}
+.gbar::before{content:'';position:absolute;left:0;right:0;top:0;height:1px;background:var(--gbar-top-line);pointer-events:none;z-index:1;}
+.gbar .chev{font:400 10px/1 var(--font-mono);color:var(--text-faint);width:10px;flex:none;text-align:center;}
+.gbar .gname{font-size:12px;font-weight:500;letter-spacing:-.1px;color:var(--text-soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.gbar .gcount{font:400 10.5px/1 var(--font-mono);color:var(--text-faint);white-space:nowrap;flex:none;}
+.loose-label{grid-column:1/-1;display:flex;align-items:center;gap:8px;font:500 10.5px/1 var(--font-mono);color:var(--text-faint);text-transform:uppercase;letter-spacing:.08em;padding-top:2px;}
+#add-group-btn{
+  grid-column:1/-1;height:40px;padding:0;border:1px dashed var(--dashed);border-radius:6px;background:transparent;
+  color:var(--text-muted);font:500 12.5px/1 var(--font-ui);letter-spacing:-.1px;
+}
+#add-group-btn:hover{background:var(--hover);border-color:var(--dashed-hover);}
+
+.tab-card{
+  position:relative;border-radius:var(--card-radius);background:var(--card-bg);
+  box-shadow:0 0 0 1px var(--line);cursor:pointer;display:flex;flex-direction:column;overflow:hidden;min-height:74px;
+}
+.tab-card:hover{box-shadow:0 0 0 1px var(--line),var(--shadow-hover);transform:translateY(-1px);}
+.cbody{flex:1;display:flex;align-items:flex-start;padding:8px 10px 9px;}
+.cname{display:flex;align-items:flex-start;gap:5px;}
+.tab-favicon-fallback{
+  width:15px;height:15px;flex:none;display:grid;place-items:center;margin-top:2px;
+  font:500 9px/1 var(--font-mono);color:var(--text-muted);background:var(--hover);
+  border-radius:3px;box-shadow:0 0 0 1px var(--line);user-select:none;
+}
+.tab-name{
+  font-size:var(--card-name-size);font-weight:500;letter-spacing:-.1px;color:var(--card-name);flex:1;min-width:0;
+  white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;text-overflow:ellipsis;
+}
+/* (c) RIGHT — settings drawer (roomier, rounded, product-grade) */
+.drawer{
+  flex:0 0 296px;width:296px;box-shadow:inset 1px 0 0 var(--line2);
+  background:var(--surface);overflow-y:auto;padding:22px 18px 24px;
+}
+.drawer-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;}
+.drawer-title{font-size:16px;font-weight:600;letter-spacing:-.2px;}
+.drawer-close{width:28px;height:28px;border:0;border-radius:8px;background:transparent;display:grid;place-items:center;color:var(--text-faint);}
+.drawer-close:hover{background:var(--hover);color:var(--text);}
+.sec{background:var(--card-bg);box-shadow:0 0 0 1px var(--line);border-radius:12px;padding:14px;margin-bottom:12px;}
+.sec-label{display:block;font-size:11px;font-weight:600;letter-spacing:.03em;color:var(--text-muted);text-transform:uppercase;margin-bottom:11px;}
+
+/* segmented theme control — warm drag-ghost tone on the active state */
+.seg{display:flex;gap:3px;background:var(--bg);box-shadow:0 0 0 1px var(--line);border-radius:9px;padding:3px;}
+.seg-btn{
+  flex:1;height:30px;border:0;border-radius:6px;background:transparent;
+  font:500 12px/1 var(--font-ui);color:var(--text-muted);letter-spacing:-.1px;display:grid;place-items:center;
+}
+.seg-btn:hover{background:var(--hover);}
+.seg-btn.active{background:var(--ghost-bg);box-shadow:inset 0 0 0 1px var(--ghost-ring);color:var(--text);}
+
+/* data buttons (full width, one-line subtitle) */
+.data-btn{
+  width:100%;display:flex;align-items:center;gap:11px;text-align:left;
+  padding:11px 12px;margin-bottom:8px;border:0;border-radius:9px;
+  background:var(--surface);box-shadow:0 0 0 1px var(--line);
+}
+.data-btn:last-child{margin-bottom:0;}
+.data-btn:hover{background:var(--hover);}
+.data-btn .di{width:28px;height:28px;flex:none;border-radius:7px;display:grid;place-items:center;background:var(--surface-soft);box-shadow:0 0 0 1px var(--line);color:var(--text-muted);}
+.data-btn .dt{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
+.data-btn .dt b{font-size:12.5px;font-weight:500;color:var(--text);letter-spacing:-.1px;}
+.data-btn .dt span{font-size:11px;color:var(--text-faint);}
+
+/* account */
+.account-top{display:flex;align-items:center;gap:11px;margin-bottom:12px;}
+.avatar{width:42px;height:42px;flex:none;border-radius:50%;background:var(--surface-soft);box-shadow:0 0 0 1px var(--line);display:grid;place-items:center;color:var(--text-faint);}
+.account-name{display:flex;flex-direction:column;gap:2px;min-width:0;}
+.account-name b{font-size:13.5px;font-weight:600;color:var(--text);letter-spacing:-.1px;}
+.account-name span{font-size:11px;color:var(--text-faint);}
+.account-cta{width:100%;height:36px;border:0;border-radius:9px;background:var(--ink);color:var(--on-ink);font:500 12.5px/1 var(--font-ui);letter-spacing:-.1px;}
+.account-cta:hover{background:var(--ink-hover);}
+.account-note{margin-top:11px;font-size:10.5px;line-height:1.45;color:var(--text-faint);}
+.account-note .soon{color:var(--ghost-ring);font-weight:600;}
+
+/* inert settings list rows */
+.list-card{padding:5px;}
+.list-row{display:flex;align-items:center;gap:10px;height:42px;padding:0 10px;border-radius:8px;cursor:default;}
+.list-row:hover{background:var(--hover);}
+.list-row .li{width:26px;height:26px;flex:none;border-radius:7px;display:grid;place-items:center;background:var(--surface-soft);box-shadow:0 0 0 1px var(--line);color:var(--text-muted);}
+.list-row .lt{flex:1;font-size:12.5px;color:var(--text);letter-spacing:-.1px;}
+.list-row .lv{font-size:11.5px;color:var(--text-faint);}
+.list-row .chev{color:var(--text-faint);opacity:.7;font-size:14px;}
+.list-row + .list-row{box-shadow:inset 0 1px 0 var(--line);}
+</style>
+</head>
+<body>
+  <header class="header">
+    <div class="wordmark">Toby</div>
+    <div class="searchbox">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input type="text" class="search-box" id="search" placeholder="Поиск во вкладках…" autocomplete="off" spellcheck="false">
+      <kbd>/</kbd>
+    </div>
+    <div class="top-actions">
+      <button class="icon-btn" id="btn-settings" title="Настройки"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+      <button class="icon-btn" id="btn-more" title="Ещё"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+    </div>
+  </header>
+
+  <div class="workbench">
+    <!-- (a) LEFT — thin icon rail (essentially empty / future) -->
+    <aside class="rail">
+      <div class="tile active" title="Вкладки (скоро)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M4 5h9l3 4h4a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"/><path d="M3 11h18" stroke-width="1.3"/></svg></div>
+      <div class="tile" title="Пространства (скоро)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg></div>
+      <div class="rail-spacer"></div>
+      <div class="rail-foot" title="Аккаунт (скоро)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4 20a8 8 0 0 1 16 0"/></svg></div>
+    </aside>
+
+    <!-- (b) CENTER — dominant work area (space chips + tab-card grid) -->
+    <main class="center">
+      <nav class="chip-row" id="spaces-bar">
+        <span id="space-chips" style="display:contents"></span>
+        <button class="chip-add" id="add-space-btn" title="Новое пространство">+ Пространство</button>
+      </nav>
+      <div class="metarow">
+        <div class="metatitle"><span id="meta-label">Мои вкладки</span><span class="n" id="meta-count">0</span></div>
+      </div>
+      <div id="tabs-list" class="tabs-list"></div>
+    </main>
+
+    <!-- (c) RIGHT — settings drawer -->
+    <aside class="drawer" id="drawer">
+      <div class="drawer-head">
+        <div class="drawer-title">Настройки</div>
+        <button class="drawer-close" id="drawer-close" title="Свернуть"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </div>
+
+      <section class="sec">
+        <span class="sec-label">Тема</span>
+        <div class="seg" id="theme-seg">
+          <button class="seg-btn active" data-value="light">Светлая</button>
+          <button class="seg-btn" data-value="dark">Тёмная</button>
+          <button class="seg-btn" data-value="system">Система</button>
+        </div>
+      </section>
+
+      <section class="sec">
+        <span class="sec-label">Данные</span>
+        <button class="data-btn" id="btn-export">
+          <span class="di"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg></span>
+          <span class="dt"><b>Экспортировать JSON</b><span>Скачать вкладки и пространства в файл</span></span>
+        </button>
+        <button class="data-btn" id="btn-import">
+          <span class="di"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="m7 8 5-5 5 5"/><path d="M5 21h14"/></svg></span>
+          <span class="dt"><b>Импортировать JSON</b><span>Восстановить библиотеку из резервной копии</span></span>
+        </button>
+      </section>
+
+      <section class="sec">
+        <span class="sec-label">Аккаунт</span>
+        <div class="account-top">
+          <div class="avatar"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="12" cy="8" r="3.6"/><path d="M5 20a7 7 0 0 1 14 0"/></svg></div>
+          <div class="account-name"><b>Гостевой режим</b><span>Данные хранятся только на этом устройстве</span></div>
+        </div>
+        <button class="account-cta" id="btn-login">Войти в аккаунт</button>
+        <div class="account-note">Синхронизация между устройствами — <span class="soon">скоро</span></div>
+      </section>
+
+      <section class="sec list-card">
+        <div class="list-row" id="row-lang">
+          <span class="li"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/></svg></span>
+          <span class="lt">Язык</span>
+          <span class="lv">Русский</span>
+          <span class="chev">›</span>
+        </div>
+        <div class="list-row" id="row-keys">
+          <span class="li"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h10"/></svg></span>
+          <span class="lt">Горячие клавиши</span>
+          <span class="lv">/ поиск</span>
+          <span class="chev">›</span>
+        </div>
+      </section>
+    </aside>
+  </div>
+<script>
+(function(){
+  'use strict';
+  var root = document.documentElement;
+  var mq = window.matchMedia('(prefers-color-scheme: dark)');
+  var pref = 'light';
+
+  function applyTheme(){
+    var eff = pref === 'system' ? (mq.matches ? 'dark' : 'light') : pref;
+    root.dataset.effective = eff;
+    root.dataset.theme = eff;
+    document.querySelectorAll('.seg-btn').forEach(function(b){
+      b.classList.toggle('active', b.dataset.value === pref);
+    });
+  }
+  function setPref(v){ pref = v; applyTheme(); }
+  if (mq.addEventListener) mq.addEventListener('change', function(){ if (pref === 'system') applyTheme(); });
+  document.querySelectorAll('.seg-btn').forEach(function(b){
+    b.addEventListener('click', function(){ setPref(b.dataset.value); });
+  });
+
+  var drawer = document.getElementById('drawer');
+  document.getElementById('btn-settings').addEventListener('click', function(){ drawer.scrollTop = 0; });
+  document.addEventListener('keydown', function(e){
+    if (e.key === '/' && !/^(INPUT|TEXTAREA)$/.test((document.activeElement||{}).tagName)){
+      e.preventDefault(); document.getElementById('search').focus();
+    }
+  });
+
+  // render space chips + tab grid (structure faithful to view.html)
+  var SPACES = ['Работа','Личное','Книги'];
+  var chipWrap = document.getElementById('space-chips');
+  SPACES.forEach(function(name, i){
+    var c = document.createElement('button');
+    c.className = 'chip' + (i===0 ? ' active' : '');
+    c.textContent = name;
+    chipWrap.appendChild(c);
+  });
+
+  var GROUPS = [
+    { name:'Статьи', cards:[
+      ['Как устроены LLM — разбор','H'],
+      ['Attention Is All You Need','A'],
+      ['CSS Grid: A Complete Guide','C']
+    ]},
+    { name:'Книги', cards:[
+      ['Databases for Mortals — PDF','D'],
+      ['Проект Ганновер — заметки','П']
+    ]}
+  ];
+  var UNGROUPED = [
+    ['GitHub — BlattamToby','G'],
+    ['llama.cpp — Releases','L'],
+    ['Linear — Roadmap','L'],
+    ['Vercel — Dashboard','V']
+  ];
+
+  function plural(n){ var m10=n%10, m100=n%100; if(m10===1 && m100!==11) return 'вкладка'; if(m10>=2 && m10<=4 && (m100<10 || m100>=20)) return 'вкладки'; return 'вкладок'; }
+  var grid = document.getElementById('tabs-list');
+  function card(title, letter){
+    var c = document.createElement('div'); c.className = 'tab-card';
+    var body = document.createElement('div'); body.className = 'cbody';
+    var name = document.createElement('div'); name.className = 'cname';
+    var fav = document.createElement('span'); fav.className = 'tab-favicon-fallback'; fav.textContent = letter;
+    var t = document.createElement('span'); t.className = 'tab-name'; t.textContent = title;
+    name.appendChild(fav); name.appendChild(t); body.appendChild(name); c.appendChild(body);
+    return c;
+  }
+  var total = 0;
+  GROUPS.forEach(function(g){
+    var bar = document.createElement('div'); bar.className = 'gbar';
+    var chev = document.createElement('span'); chev.className = 'chev'; chev.textContent = '▾';
+    var gname = document.createElement('span'); gname.className = 'gname'; gname.textContent = g.name;
+    var gcount = document.createElement('span'); gcount.className = 'gcount'; gcount.textContent = g.cards.length + ' ' + plural(g.cards.length);
+    bar.appendChild(chev); bar.appendChild(gname); bar.appendChild(gcount);
+    grid.appendChild(bar);
+    g.cards.forEach(function(t){ grid.appendChild(card(t[0], t[1])); total++; });
+  });
+  var lbl = document.createElement('div'); lbl.className = 'loose-label'; lbl.textContent = 'БЕЗ ГРУППЫ'; grid.appendChild(lbl);
+  UNGROUPED.forEach(function(t){ grid.appendChild(card(t[0], t[1])); total++; });
+  var add = document.createElement('button'); add.id = 'add-group-btn'; add.textContent = '+ Группа'; grid.appendChild(add);
+
+  document.getElementById('meta-count').textContent = total;
+  applyTheme();
+})();
+</script>
+</body>
+</html>
