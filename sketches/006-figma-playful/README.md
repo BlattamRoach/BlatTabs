@@ -14,7 +14,7 @@ The opposite pole of 002 (Vercel light): instead of a monochrome, engineering-pr
   - tag dots reuse the same six hues; primary accent is Figma blue #1e72ff.
   Every fake screenshot is tinted by its folder's hue (hue header band + pastel body + skeleton lines), so the grid reads as a colorful shelf; hover lifts cast a soft *colored* shadow in the card's own hue.
 - **Interaction** — bouncy: hovers use a springy cubic-bezier with scale 1.02 + lift; chips are pills carrying a tiny colored square of their family hue (active chip fills with the hue); checkboxes become colorful squares in the card's hue when checked; keyboard-active card gets a Figma-blue ring + soft lift + blue glow; the selection bar is a white pill with a blue «Открыть» pill button. Dashed 2px focus outlines (Figma's selection-handle signature) on all interactive elements.
-- **Wordmark** — «Toby» with a 4-quadrant rainbow mark (blue/green/amber/purple), the subtle two-tone treatment.
+- **Wordmark** — «BlatTabs» with a 4-quadrant rainbow mark (blue/green/amber/purple), the subtle two-tone treatment.
 
 ### States shown
 

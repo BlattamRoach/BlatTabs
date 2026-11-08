@@ -42,7 +42,7 @@ is selected.
   monochrome glow (not a colored focus ring), matching the request; it can move as
   the user interacts.
 - **Real Russian content.** Realistic titles and URLs (docs.python.org,
-  github.com/BlattamRoach/BlattamToby, habr.com, lenta.ru, yandex.ru/maps…),
+  github.com/BlattamRoach/BlatTabs, habr.com, lenta.ru, yandex.ru/maps…),
   Russian chip labels («Все», «Работа», «Дома», «Проекты», «Архив», «Частые»,
   «Избранные», sessions), Russian selection bar («3 выбрано — Открыть / Сбросить»)
   with correct pluralization.

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Toby — вкладки</title>
+  <title>BlatTabs — вкладки</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -329,23 +329,47 @@
     }
 
 
-    /* ---------- правая рейка: дубликат открытых вкладок браузера (пока пусто, watermark) ---------- */
+    /* ---------- правая рейка: живое зеркало открытых вкладок браузера ---------- */
+    /* Вертикальный список #browser-tabs-list (то же зеркало верхней полосы):
+       элементы .bt-tab (фавикон 16px + обрезанное имя), drag — reorder внутри
+       рейки (chrome.tabs.move) и перенос в центр (сохранить вкладку).
+       Заглушка .bt-ghost-slot — тёплая (как ghost-slot карточек: --ghost-bg /
+       --ghost-ring, пунктир) */
     .rail-right {
       position: relative; min-height: 0; background: var(--rail-bg);
-      display: flex; flex-direction: column; align-items: center;
-      padding-top: 34px;
+      display: flex; flex-direction: column;
+      padding: 26px 12px 16px;
     }
-    .rail-right .wm {
-      writing-mode: vertical-rl; text-orientation: mixed;
-      font: 500 9px/1 var(--font-mono); letter-spacing: .24em; text-transform: uppercase;
-      color: var(--text-faint); opacity: .45; user-select: none; pointer-events: none;
+    #browser-tabs-list {
+      max-height: 100%; min-height: 0; overflow-y: auto;
+      display: flex; flex-direction: column; gap: 6px;
     }
-    .rail-right .ghost-tabs { margin-top: 30px; display: flex; flex-direction: column; gap: 10px; align-items: center; opacity: .30; pointer-events: none; }
-    .rail-right .ghost-tabs i { display: block; height: 9px; border-radius: 5px; box-shadow: inset 0 0 0 1px var(--line2); background: var(--bg); }
-    .rail-right .ghost-tabs i:nth-child(1) { width: 60px; }
-    .rail-right .ghost-tabs i:nth-child(2) { width: 52px; }
-    .rail-right .ghost-tabs i:nth-child(3) { width: 44px; }
-    .rail-right .ghost-tabs i:nth-child(4) { width: 36px; }
+    .bt-tab {
+      flex: none; display: flex; align-items: center; gap: 8px;
+      padding: 7px 9px; border-radius: 6px;
+      background: var(--bg); box-shadow: 0 0 0 1px var(--line);
+      cursor: pointer; user-select: none;
+      transition: background .1s, box-shadow .1s;
+    }
+    .bt-tab:hover { background: var(--hover); box-shadow: 0 0 0 1px var(--line2); }
+    .bt-icon {
+      width: 16px; height: 16px; flex: none; object-fit: contain; border-radius: 3px;
+      box-shadow: 0 0 0 1px var(--line2); background: var(--surface);
+    }
+    /* Буквенный fallback фавикона рейки — та же монохромная плитка, что у карточек */
+    .bt-icon-fallback {
+      width: 16px; height: 16px; flex: none; display: grid; place-items: center; border-radius: 3px;
+      background: var(--hover); box-shadow: 0 0 0 1px var(--line2);
+      font: 500 9px/1 var(--font-mono); color: var(--text-muted); user-select: none;
+    }
+    .bt-title {
+      flex: 1; min-width: 0; font: 500 12px/1.3 var(--font-ui); letter-spacing: -.1px;
+      color: var(--text-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .bt-ghost-slot {
+      flex: none; pointer-events: none; border-radius: 6px;
+      background: var(--ghost-bg); border: 1px dashed var(--ghost-ring);
+    }
     /* ---------- states ---------- */
     .empty-state { padding: 60px 0; text-align: center; color: var(--text-muted); font-size: 14px; }
     .empty-state span { display: block; margin-top: 6px; font-size: 12.5px; color: var(--text-faint); }
@@ -406,6 +430,28 @@
     #edit-tab-modal .modal h3 { font-size: 15px; margin-bottom: 24px; }
     #edit-tab-modal input[type="text"] { padding: 16px 14px; font-size: 14px; margin-bottom: 28px; color: var(--card-name); }
 
+    /* Модалка настроек (FAQ) — шире общей .modal; крестик сверху справа;
+       блок «Частые вопросы»: заголовок + строка вопроса + приглушённый ответ.
+       Только токены (var(--…)) — работает и в светлой, и в тёмной теме */
+    #settings-modal .modal { min-width: 340px; max-width: 420px; padding: 22px 20px; position: relative; }
+    #settings-modal .modal h3 { font-size: 15px; margin-bottom: 16px; }
+    #settings-modal .modal-close {
+      position: absolute; top: 14px; right: 14px; width: 26px; height: 26px;
+      display: flex; align-items: center; justify-content: center;
+      border: 0; border-radius: 6px; background: var(--bg); color: var(--text-muted);
+      box-shadow: 0 0 0 1px var(--line); font-size: 13px; line-height: 1;
+      cursor: pointer; transition: background .1s, color .1s;
+    }
+    #settings-modal .modal-close:hover { background: var(--hover); color: var(--text); }
+    #settings-modal .settings-section-title {
+      font-size: 11px; font-weight: 600; letter-spacing: .4px; text-transform: uppercase;
+      color: var(--text-muted); margin: 0 0 12px;
+    }
+    #settings-modal .faq-item { margin-bottom: 14px; }
+    #settings-modal .faq-item:last-child { margin-bottom: 0; }
+    #settings-modal .faq-q { font-size: 13px; font-weight: 600; color: var(--text); margin: 0 0 4px; }
+    #settings-modal .faq-a { font-size: 12.5px; line-height: 1.5; color: var(--text-muted); margin: 0; }
+
     @media (max-width: 760px) {
       .workspace { grid-template-columns: 60px minmax(0, 1fr); }
       .rail-right { display: none; }
@@ -444,7 +490,7 @@
           <span class="lbl"><span class="t">Импорт</span><span class="s">Загрузить JSON</span></span>
           <span class="go">→</span>
         </button>
-        <button class="rail-item" id="settings-btn" title="Скоро — настройки">
+        <button class="rail-item" id="settings-btn" title="Настройки">
           <span class="ico"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>
           <span class="lbl"><span class="t">Настройки</span><span class="s">Параметры</span></span>
           <span class="go">→</span>
@@ -468,7 +514,7 @@
     <!-- ЦЕНТР — in-column header (без кнопки темы), чипы, grid -->
     <main class="center" id="center-pane">
       <header class="head">
-        <div class="wordmark">Toby</div>
+        <div class="wordmark">BlatTabs</div>
       </header>
 
       <div class="main">
@@ -499,10 +545,9 @@
       </div>
     </main>
 
-    <!-- ПРАВАЯ РЕЙКА — дубликат открытых вкладок браузера (пока пусто, watermark) -->
-    <aside class="rail-right" id="rail-right" aria-label="Вкладки браузера (скоро)">
-      <span class="wm">ВКЛАДКИ&nbsp;БРАУЗЕРА</span>
-      <div class="ghost-tabs" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+    <!-- ПРАВАЯ РЕЙКА — живое зеркало открытых вкладок браузера (верхняя полоса) -->
+    <aside class="rail-right" id="rail-right" aria-label="Вкладки браузера">
+      <div id="browser-tabs-list" class="browser-tabs-list"></div>
     </aside>
   </div>
 
@@ -540,6 +585,39 @@
         <button class="modal-btn ghost" id="edit-cancel">Отмена</button>
         <button class="modal-btn primary" id="edit-confirm">Сохранить</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Modal: настройки (FAQ) -->
+  <div class="modal-overlay" id="settings-modal">
+    <div class="modal">
+      <button class="modal-close" id="settings-close" title="Закрыть" aria-label="Закрыть">✕</button>
+      <h3>Настройки</h3>
+      <section class="settings-section">
+        <h4 class="settings-section-title">Частые вопросы</h4>
+        <div class="faq-list">
+          <div class="faq-item">
+            <p class="faq-q">Что такое BlatTabs?</p>
+            <p class="faq-a">Это страница «новой вкладки», где хранятся сохранённые вкладки: с именами, комментариями, группами и пространствами.</p>
+          </div>
+          <div class="faq-item">
+            <p class="faq-q">Как сохранить открытую вкладку?</p>
+            <p class="faq-a">Перетащите её из правой рейки (список открытых вкладок) в центр; вкладки из центра можно перетаскивать и между группами.</p>
+          </div>
+          <div class="faq-item">
+            <p class="faq-q">Что такое пространства и группы?</p>
+            <p class="faq-a">Пространства — верхние чипы для разделки библиотеки; группы — секции вкладок внутри пространства, которые можно сворачивать.</p>
+          </div>
+          <div class="faq-item">
+            <p class="faq-q">Как выгрузить и загрузить данные?</p>
+            <p class="faq-a">Кнопки «Экспорт» (JSON) и «Импорт» в левой рейке.</p>
+          </div>
+          <div class="faq-item">
+            <p class="faq-q">Где хранятся данные?</p>
+            <p class="faq-a">На этом устройстве (chrome.storage.local); синхронизация между устройствами появится вместе с аккаунтом.</p>
+          </div>
+        </div>
+      </section>
     </div>
   </div>
 

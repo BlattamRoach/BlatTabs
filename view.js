@@ -105,6 +105,16 @@ let pendingGbarClickAfterDrag = false; // one-shot: ложный клик по �
                         // нажатие мыши (mousedown) раньше его клика сбрасывает флаг
 let activeUrl = null; // карточка, выбранная клавиатурой (по URL — переживает перерисовку)
 let openModalId = null; // id открытой модалки — чтобы глобальный keydown её не перехватывал
+let browserTabs = []; // все открытые вкладки браузера (blattam-browser-tabs, все окна)
+let browserWindowId = null; // id этого окна — рейка показывает вкладки только его
+let dragSourceBrowserTab = null; // вкладки рейки, которую тянут: {id,url,title,favIconUrl,windowId,index}
+let dragBrowserTabGhost = null;const browserTabsList = document.getElementById('browser-tabs-list'); // рейка: список открытых вкладок
+let btDragItem = null; // элемент рейки, который тащат (cleanup по id переживает перерисовку)
+let btDragHeight = 30; // высота элемента ДО display:none (размер заглушки)
+let btDropCommitted = false; // дроп обработан (рейка/центр) — ложный клик гасится
+let pendingBtClickAfterDrag = false; // one-shot: ложный post-drop-клик по элементу рейки
+let pendingCardClickAfterDrag = false; // one-shot: ложный post-drop-клик по центральной карточке (открыл бы вкладку) — вооружается на dragstart карточки и вкладки рейки
+//  // тёплая заглушка рейки (.bt-ghost-slot) на слоте схваченной вкладки
 
 const DEFAULT_SPACE_NAME = 'Мои вкладки';
 
@@ -464,6 +474,36 @@ editConfirm.addEventListener('click', () => {
     if (e.key === 'Enter') editConfirm.click();
     if (e.key === 'Escape') editCancel.click();
   });
+});
+
+// === Модалка: настройки (FAQ) ===
+// Открытие — кнопка «Настройки» в левой рейке. Закрытие — ✕, клик по затемнённому
+// фону (как у модалки пространств) и Escape. setModalOpen('settings') делает
+// isAnyModalOpen() истинным, поэтому глобальный keydown (modal check → Escape →
+// editable-guard) не перехватывает клавиши, пока модалка открыта.
+const settingsModal = document.getElementById('settings-modal');
+const settingsCloseBtn = document.getElementById('settings-close');
+const settingsBtn = document.getElementById('settings-btn');
+
+function openSettingsModal() {
+  settingsModal.classList.add('open');
+  setModalOpen('settings');
+}
+
+function closeSettingsModal() {
+  settingsModal.classList.remove('open');
+  setModalOpen(null);
+}
+
+settingsBtn.addEventListener('click', openSettingsModal);
+settingsCloseBtn.addEventListener('click', closeSettingsModal);
+settingsModal.addEventListener('click', (e) => {
+  if (e.target === settingsModal) closeSettingsModal();
+});
+
+// Escape — закрыть (отдельный слушатель: глобальный keydown байлит при открытой модалке)
+document.addEventListener('keydown', (e) => {
+  if (settingsModal.classList.contains('open') && e.key === 'Escape') closeSettingsModal();
 });
 
 // === Открытие вкладок (единый путь: background создаёт browser-tab) ===
@@ -1035,6 +1075,9 @@ function appendCard(tab) {
   // Клик по карточке — открыть вкладку + снять выбор
   card.addEventListener('click', () => {
     if (card.dataset.pressBtn) return; // press начался на чекбоксе/✕ — не открываем
+    // Ложный post-drop-клик (без mousedown) рождается в момент дропа —
+    // гасим ровно один; настоящее нажатие сначала прогонит mousedown
+    if (pendingCardClickAfterDrag) { pendingCardClickAfterDrag = false; return; }
     openUrl(tab.url);
   });
 
@@ -1056,6 +1099,7 @@ function appendCard(tab) {
     // Chrome генерирует его на drop-цели ДО dragend источника — флаг, поставленный
     // только на dragend, его не поймаешь
     pendingGbarClickAfterDrag = true;
+    pendingCardClickAfterDrag = true; // дроп на другую карточку — ложный клик её не открывает
     // Выделенный батч: перетаскивая ЛЮБУЮ выделенную карточку, переезжают ВСЕ
     // выделенные вкладки (батч — в исходном порядке). В рендере — как одна:
     // скрывается только эта карточка, заглушка одна.
@@ -1307,7 +1351,7 @@ function attachSpaceDrop(chip, spaceId) {
   });
 }
 
-// === Drag & drop: перестановка карточек (reorder), toby-style ===
+// === Drag & drop: перестановка карточек (reorder), BlatTabs-style ===
 // Забрали карточку: оригинал исчезает из слота (на его месте — ghost-slot: тёплая пустая
 // заглушка размера карточки); нативный drag-образ браузера следует за курсором, клон-призрака нет.
 // Заглушка — ЕДИНСТВЕННЫЙ индикатор вставки (2px-линия убрана): она ходит за
@@ -1661,7 +1705,7 @@ function placeBatchToSlot(batch, anchorUrl, side, section) {
 // Новое нажатие мыши — реальное действие пользователя: сбрасываем one-shot
 // флаг ложного post-drop клика ДО того, как придёт его click (у ложного клика
 // после drag mousedown не было)
-document.addEventListener('mousedown', () => { pendingGbarClickAfterDrag = false; pendingChipClickAfterDrag = false; }, true);
+document.addEventListener('mousedown', () => { pendingGbarClickAfterDrag = false; pendingChipClickAfterDrag = false; pendingCardClickAfterDrag = false; pendingBtClickAfterDrag = false; }, true);
 
 // Глобальные dragover/drop: нативный drag-образ браузера следует за курсором,
 // заглушка — в ближайшую позицию вставки (с учётом секций). Свою семантику дропа
@@ -1982,9 +2026,19 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
       if (!sameUrlSet) selectedUrls.clear(); // набор вкладок изменился — сброс выбора
       renderTabs(searchInput.value);
     }
+    // Зеркало открытых вкладок (blattam-browser-tabs) — перерисовка рейки.
+    // В драге рейки не перерисовываем (заглушка уйдёт из DOM) — dragend
+    // перерисует.
+    if (changes['blattam-browser-tabs']) {
+      if (dragSourceBrowserTab) return;
+      browserTabs = changes['blattam-browser-tabs'].newValue || [];
+      renderBrowserTabs();
+      return;
+    }
     return;
   }
   if (areaName !== 'sync') return;
+// 
 
   if (changes['blattam-spaces']) {
     const newSpaces = changes['blattam-spaces'].newValue || [];
@@ -2007,7 +2061,7 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 
 document.getElementById('export-btn').addEventListener('click', () => {
   const data = {
-    'blattam-toby': true,
+    'blatt-tabs': true,
     version: chrome.runtime.getManifest().version,
     exported: new Date().toISOString(),
     spaces: allSpaces,
@@ -2016,7 +2070,7 @@ document.getElementById('export-btn').addEventListener('click', () => {
   };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
-  a_click(url, `blattam-toby-backup-${new Date().toISOString().slice(0, 10)}.json`);
+  a_click(url, `blatt-tabs-backup-${new Date().toISOString().slice(0, 10)}.json`);
   URL.revokeObjectURL(url);
 });
 
@@ -2126,5 +2180,401 @@ document.getElementById('import-input').addEventListener('change', (e) => {
   e.target.value = '';
 });
 
+// === Правая рейка: живое зеркало открытых вкладок браузера (blattam-browser-tabs) ===
+// Единственный реальный источник зеркала — background.js (слушатели chrome.tabs,
+// дебаунс ~200 мс); view.js этот ключ НЕ записывает. Рейка показывает вкладки
+// ТОЛЬКО этого окна (chrome.windows.getCurrent) в порядке верхней полосы;
+// страница newtab (view.html) не показывается. Драг: reorder внутри рейки
+// (chrome.tabs.move — верхняя полоса и рейка синхронизируются в обе стороны)
+// и дроп в центр (сохранить вкладку карточкой — браузерная вкладка остаётся
+// открытой).
+
+// Страница newtab (view.html) — в рейку не попадает
+function isOwnNewTab(t) {
+  if (!t) return true;
+  try {
+    const selfUrl = chrome.runtime.getURL('view.html');
+    return t.url === selfUrl || t.pendingUrl === selfUrl;
+  } catch (err) { return false; }
+}
+
+// Начальная загрузка зеркала: окно (windows.getCurrent) + ключ
+// blattam-browser-tabs; фолбэк — chrome.tabs.query (первый запуск:
+// background зеркало ещё не записал)
+function loadBrowserTabs() {
+  (async () => {
+    if (chrome.windows && chrome.windows.getCurrent) {
+      try { const w = await chrome.windows.getCurrent(); browserWindowId = w ? w.id : null; }
+      catch (err) { browserWindowId = null; }
+    }
+    let list = null;
+    try {
+      const data = await chrome.storage.local.get('blattam-browser-tabs');
+      if (Array.isArray(data['blattam-browser-tabs']) && data['blattam-browser-tabs'].length > 0) {
+        list = data['blattam-browser-tabs'];
+      }
+    } catch (err) { list = null; }
+    if ((!list || list.length === 0) && chrome.tabs && chrome.tabs.query) {
+      try {
+        const q = browserWindowId != null ? { windowId: browserWindowId } : {};
+        const tabs = await chrome.tabs.query(q);
+        if (Array.isArray(tabs)) {
+          list = tabs.filter(t => !isOwnNewTab(t))
+            .map(t => ({ id: t.id, title: t.title || '', url: t.url || '',
+                         favIconUrl: t.favIconUrl || '', windowId: t.windowId, index: t.index }))
+            .sort((a, b) => (a.windowId - b.windowId) || (a.index - b.index));
+        }
+      } catch (err) { list = []; }
+    }
+    browserTabs = Array.isArray(list) ? list : [];
+    renderBrowserTabs();
+  })();
+}
+
+// Рендер рейки: вкладки этого окна в порядке полосы (index), по id
+function renderBrowserTabs() {
+  if (!browserTabsList) return;
+  // Перерисовка в драге рейки уносит заглушку из DOM — сбрасываем ссылку,
+  // чтобы отсоединённая заглушка не «воскресла» после dragend
+  if (dragBrowserTabGhost && !dragBrowserTabGhost.isConnected) dragBrowserTabGhost = null;
+  const mine = browserTabs
+    .filter(t => browserWindowId == null || t.windowId === browserWindowId)
+    .slice()
+    .sort((a, b) => (a.windowId - b.windowId) || (a.index - b.index));
+  browserTabsList.innerHTML = '';
+  mine.forEach(t => browserTabsList.appendChild(makeBtItem(t)));
+}
+
+// Буквенная плитка фавикона рейки — та же монохромная, что у карточек
+function makeBtIconFallback(t) {
+  const el = document.createElement('span');
+  el.className = 'bt-icon-fallback';
+  el.textContent = faviconFallbackChar(t.url || t.title || '');
+  return el;
+}
+
+// Элемент рейки: фавикон 16px (img; error — буквенная плитка) + обрезанное имя
+function makeBtItem(t) {
+  const item = document.createElement('div');
+  item.className = 'bt-tab';
+  item.dataset.id = String(t.id);
+  item.draggable = true;
+  item.title = t.title || t.url || '';
+  if (t.favIconUrl) {
+    const img = document.createElement('img');
+    img.className = 'bt-icon';
+    img.src = t.favIconUrl;
+    img.alt = '';
+    img.draggable = false;
+    img.addEventListener('error', () => { if (img.parentNode) img.replaceWith(makeBtIconFallback(t)); });
+    item.appendChild(img);
+  } else {
+    item.appendChild(makeBtIconFallback(t));
+  }
+  const label = document.createElement('span');
+  label.className = 'bt-title';
+  label.textContent = t.title || t.url || '—';
+  item.appendChild(label);
+  // Клик — открыть браузерную вкладку (ложный post-drop-клик гасится one-shot)
+  item.addEventListener('click', () => {
+    if (pendingBtClickAfterDrag) { pendingBtClickAfterDrag = false; return; }
+    if (t.url) window.open(t.url, '_blank');
+  });
+  item.addEventListener('dragstart', (e) => onBtDragStart(e, item, t));
+  item.addEventListener('dragend', () => onBtDragEnd());
+  return item;
+}
+
+// Заглушка рейки: тёплая (как ghost-slot карточек: --ghost-bg + пунктир
+// --ghost-ring), размер элемента. Инлайн — в тестах head-стили view.html
+// не грузятся
+function makeBtGhostSlot(height) {
+  const slot = document.createElement('div');
+  slot.className = 'bt-ghost-slot';
+  slot.style.cssText =
+    'pointer-events:none;box-sizing:border-box;background:var(--ghost-bg);' +
+    'border-width:1px;border-style:dashed;border-color:var(--ghost-ring);' +
+    'border-radius:6px;width:100%;height:' + (height || 30) + 'px;';
+  return slot;
+}
+
+function onBtDragStart(e, item, t) {
+  dragSourceBrowserTab = { id: t.id, url: t.url || '', title: t.title || '',
+                           favIconUrl: t.favIconUrl || '', windowId: t.windowId, index: t.index };
+  btDragItem = item;
+  btDragHeight = item.offsetHeight || 30; // меряем ДО display:none
+  btDropCommitted = false;
+  // Ложный клик по элементу рождается в момент дропа (до dragend) —
+  // вооружаем one-shot-подавление
+  pendingBtClickAfterDrag = true;
+  pendingCardClickAfterDrag = true; // дроп в центр: ложный клик не открывает карточку
+  pendingChipClickAfterDrag = true; // дроп на чип: ложный клик не переключает пространство
+  if (e.dataTransfer) {
+    e.dataTransfer.setData('text/plain', String(t.id));
+    e.dataTransfer.effectAllowed = 'move';
+  }
+  item.style.display = 'none';
+  // Отложенно: display:none в самом dragstart «залипает» HTML5-drag в Chrome
+  setTimeout(() => {
+    // Перерисовка в драге уносит элемент из DOM — отсоединённому заглушку
+    // не вставляем
+    if (!dragSourceBrowserTab || !btDragItem || !btDragItem.isConnected) return;
+    if (!dragBrowserTabGhost) {
+      dragBrowserTabGhost = makeBtGhostSlot(btDragHeight);
+      btDragItem.before(dragBrowserTabGhost);
+    }
+  }, 0);
+}
+
+// Полный cleanup (идемпотентный): заглушки сняты, источник возвращён в слот,
+// рейка перерисована
+function onBtDragEnd() {
+  const src = dragSourceBrowserTab;
+  dragSourceBrowserTab = null;
+  btDragItem = null;
+  if (!btDropCommitted) pendingBtClickAfterDrag = false; // драг отменён — ложного клика не будет
+  btDropCommitted = false;
+  if (dragBrowserTabGhost && dragBrowserTabGhost.isConnected) dragBrowserTabGhost.remove();
+  dragBrowserTabGhost = null;
+  removeGhostSlot(); // центральная заглушка (рейка → центр)
+  if (src && browserTabsList) {
+    // Источник мог уже перерисоваться (onChanged) — восстановим видимость по id
+    const el = browserTabsList.querySelector('.bt-tab[data-id="' + CSS.escape(String(src.id)) + '"]');
+    if (el) el.style.display = '';
+  }
+  renderBrowserTabs(); // идемпотентно
+}
+
+// Видимые элементы рейки в DOM-порядке (источник при драге скрыт)
+function btVisibleItems() {
+  if (!browserTabsList) return [];
+  return [...browserTabsList.querySelectorAll('.bt-tab')].filter(el => el.style.display !== 'none');
+}
+
+// Слот вставки в рейке (midpoint-правило, как у карточек): первый элемент,
+// чья вертикальная середина НИЖЕ курсора — слот перед ним; выше середин всех —
+// после последнего
+function btSlotAnchor(clientY) {
+  const items = btVisibleItems();
+  if (!items.length) return null;
+  for (const it of items) {
+    const r = it.getBoundingClientRect();
+    if (clientY != null && clientY < r.top + r.height / 2) return { el: it, side: 'before' };
+  }
+  return { el: items[items.length - 1], side: 'after' };
+}
+
+function moveBtGhostSlot(anchor) {
+  if (!dragBrowserTabGhost || !dragBrowserTabGhost.isConnected) return;
+  if (!anchor || !anchor.el) { browserTabsList.appendChild(dragBrowserTabGhost); return; }
+  if (anchor.side === 'before') anchor.el.before(dragBrowserTabGhost);
+  else anchor.el.after(dragBrowserTabGhost);
+}
+
+// Новый per-window-индекс перетаскиваемой вкладки по DOM-позиции заглушки
+// (порядок рейки = порядок верхней полосы окна)
+function btGhostIndex() {
+  const ghost = dragBrowserTabGhost;
+  const src = dragSourceBrowserTab;
+  if (!ghost || !ghost.isConnected) return src ? src.index : 0;
+  let pos = 0;
+  for (const child of browserTabsList.children) {
+    if (child === ghost) break;
+    if (child.classList && child.classList.contains('bt-tab') && child.style.display !== 'none') pos++;
+  }
+  return pos;
+}
+
+// Reorder рейки: chrome.tabs.move — зеркало (background) и верхняя полоса
+// следуют, onChanged перерисует рейку. Целевой индекс — по РЕАЛЬНОМУ окну:
+// рейка не показывает newtab-страницу (view.html), поэтому позиция в рейке —
+// НЕ то же, что индекс в окне (view.html занимает слот в окне). Достаём окно,
+// вставляем источник в позицию заглушки по числу ВИДИМЫХ вкладок перед ней.
+// После chrome.tabs.move перерисовываем рейку НЕМЕДЛЕННО из реального
+// окна. В реальном Chrome запись зеркала в background идёт с дебаунсом
+// ~200 мс, и пока она не доберётся до view, рейка остаётся в старом
+// порядке (мок перерисовывает зеркало синхронно, поэтому в тестах это не
+// видно). В storage зеркало view не пишет (единственный источник —
+// background) — обновляем только в-памяти список browserTabs + рейку.
+function syncRailFromTabs() {
+  if (!chrome.tabs || !chrome.tabs.query) return;
+  try {
+    chrome.tabs.query({}, (tabs) => {
+      if (!Array.isArray(tabs)) return;
+      browserTabs = tabs
+        .filter(t => t && !isOwnNewTab(t))
+        .map(t => ({ id: t.id, title: t.title || '', url: t.url || '',
+                     favIconUrl: t.favIconUrl || '', windowId: t.windowId, index: t.index }))
+        .sort((a, b) => (a.windowId - b.windowId) || (a.index - b.index));
+      renderBrowserTabs();
+    });
+  } catch (err) { /* рейка — вспомогательная, молча пропускаем */ }
+}
+
+function commitBtRailMove(src) {
+  const ghostPos = btGhostIndex(); // число видимых вкл. рейки ПЕРЕД заглушкой
+  btDropCommitted = true;
+  // Снимаем guard ДО записи: onChanged (мок) перерисует рейку сразу
+  dragSourceBrowserTab = null;
+  if (!chrome.tabs || !chrome.tabs.move) return;
+  if (chrome.tabs.query) {
+    (async () => {
+      const tabs = await new Promise((res) =>
+        chrome.tabs.query({ windowId: src.windowId }, (ts) => res(ts || [])));
+      const others = tabs.filter(t => t && t.id !== src.id);
+      let count = 0, target = others.length;
+      for (let i = 0; i < others.length; i++) {
+        if (count === ghostPos) { target = i; break; }
+        if (!isOwnNewTab(others[i])) count++;
+      }
+      if (target !== src.index) {
+        const p = chrome.tabs.move(src.id, { windowId: src.windowId, index: target });
+        if (p && p.then) p.then(() => syncRailFromTabs()).catch(() => {});
+        else syncRailFromTabs();
+      }
+    })().catch(() => {});
+  } else if (ghostPos !== src.index) {
+    const p = chrome.tabs.move(src.id, { windowId: src.windowId, index: ghostPos });
+    if (p && p.then) p.then(() => syncRailFromTabs()).catch(() => {});
+    else syncRailFromTabs();
+  }
+}
+
+// Сохранённая карточка из браузерной вкладки — те же поля, что у
+// существующего save-пути (saveCurrentTab): name/url/title/favIconUrl?/spaceId
+// (+ groupId секции)
+function makeSavedTabFromBrowser(src, section) {
+  const tab = {
+    name: ((src.title || '').trim() || src.url) || 'Без имени',
+    url: src.url,
+    title: src.title || '',
+    spaceId: activeSpaceId,
+    groupId: section
+  };
+  if (src.favIconUrl) tab.favIconUrl = src.favIconUrl;
+  return tab;
+}
+
+// Дроп в центр: НОВАЯ карточка в позиции ghost-slot (groupId секции слота,
+// null — «Без группы»); браузерная вкладка остаётся открытой, зеркало не
+// трогаем
+function saveBtToCenter(src, anchor) {
+  btDropCommitted = true;
+  dragSourceBrowserTab = null;
+  let section = null, at = allTabs.length;
+  if (anchor && anchor.el) {
+    section = slotSection(anchor);
+    let anchorUrl, side = anchor.side;
+    if (anchor.el.classList.contains('tab-card') && anchor.side === 'before') {
+      anchorUrl = anchor.el.__tab.url; // перед видимой карточкой X
+    } else if (anchor.el.classList.contains('tab-card')) {
+      const t = sectionTabFull(section, true); // конец секции (= конец списка)
+      if (t) { anchorUrl = t.url; side = 'after'; }
+    } else if (anchor.side === 'after') {
+      const t = sectionTabFull(section, false); // начало секции
+      if (t) { anchorUrl = t.url; side = 'before'; }
+    } else {
+      const t = sectionTabFull(section, true); // конец предыдущей секции
+      if (t) { anchorUrl = t.url; side = 'after'; }
+    }
+    if (anchorUrl != null) {
+      const a = allTabs.findIndex(t => t.url === anchorUrl);
+      if (a !== -1) at = side === 'after' ? a + 1 : a;
+    }
+  }
+  const tabs = allTabs.slice();
+  tabs.splice(at, 0, makeSavedTabFromBrowser(src, section));
+  chrome.storage.local.set({ 'blattam-tabs': tabs });
+  removeGhostSlot();
+}
+
+// Дроп на шапку группы (или слот пустой группы): в ту группу, в конец списка
+// (семантика drop-пути gbar)
+function saveBtToGroup(src, groupId) {
+  btDropCommitted = true;
+  dragSourceBrowserTab = null;
+  const tabs = allTabs.slice();
+  tabs.push(makeSavedTabFromBrowser(src, groupId));
+  chrome.storage.local.set({ 'blattam-tabs': tabs });
+  removeGhostSlot();
+}
+
+// Центральная заглушка для драга рейка → центр: ghost-slot карточки, размер
+// видимой карточки (создаётся при первом dragover по центральному списку)
+function ensureCentralBtGhost() {
+  if (dragGhostSlot && dragGhostSlot.isConnected) return;
+  const ref = document.querySelector('#tabs-list .tab-card');
+  if (!ref) return;
+  dragRowKeeper = null;
+  dragGhostSlot = makeGhostSlot(ref);
+}
+
+// Ставит центральную заглушку в слот вставки при драге рейки → центр.
+// moveGhostSlot неприменим: он завязан на dragSourceUrl (драг карточки) и
+// syncRowKeeper() — а источник тут в рейке, а не в секции карточек
+// (dragRowKeeper уже обнулён в ensureCentralBtGhost).
+function moveCentralBtGhost(anchor) {
+  if (!dragGhostSlot) return;
+  if (!anchor || !anchor.el) return;
+  if (anchor.side === 'before') anchor.el.before(dragGhostSlot);
+  else anchor.el.after(dragGhostSlot);
+}
+
+// Глобальный dragover при драге вкладки рейки: рейка — заглушка по
+// midpoint-правилу; чип пространства — no-target (заглушка замирает, дроп не
+// переключает пространство); шапка группы / слот пустой группы — дроп в группу
+// (центральная заглушка скрыта); центральный список — центральная заглушка
+// следует, как при драге карточки
+document.addEventListener('dragover', (e) => {
+  if (!dragSourceBrowserTab || !e.dataTransfer) return;
+  const t = e.target;
+  const closest = (s) => (t && t.closest) ? t.closest(s) : null;
+  if (closest('.space-chip')) return; // no-target
+  if (closest('.gbar') || closest('.group-empty-slot')) {
+    if (dragGhostSlot) setGhostDisplay('none');
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    return;
+  }
+  if (closest('#browser-tabs-list')) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    moveBtGhostSlot(btSlotAnchor(e.clientY));
+    return;
+  }
+  if (closest('#tabs-list')) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    ensureCentralBtGhost();
+    setGhostDisplay('');
+    moveCentralBtGhost(slotAnchor(cardGapIndex(e.clientX, e.clientY), e.clientY));
+  }
+});
+
+document.addEventListener('drop', (e) => {
+  if (!dragSourceBrowserTab || !e.dataTransfer) return;
+  const t = e.target;
+  const closest = (s) => (t && t.closest) ? t.closest(s) : null;
+  const src = dragSourceBrowserTab;
+  if (closest('.space-chip')) return; // no-target — отмена
+  const gbar = closest('.gbar');
+  if (gbar && gbar.dataset.groupId) { e.preventDefault(); saveBtToGroup(src, gbar.dataset.groupId); return; }
+  const ges = closest('.group-empty-slot');
+  if (ges && ges.dataset.groupId) { e.preventDefault(); saveBtToGroup(src, ges.dataset.groupId); return; }
+  if (closest('#browser-tabs-list')) { e.preventDefault(); commitBtRailMove(src); return; }
+  if (closest('#tabs-list')) {
+    e.preventDefault();
+    saveBtToCenter(src, slotAnchor(cardGapIndex(e.clientX, e.clientY), e.clientY));
+    return;
+  }
+  // Повсюду остальном — отмена (dragend снимет заглушки)
+});
+
+// Catch-all: перерисовка в драге уносит источник из DOM, и его собственный
+// dragend не сработает — cleanup здесь
+document.addEventListener('dragend', () => {
+  if (dragSourceBrowserTab) onBtDragEnd();
+});
 // === Start ===
 loadData();
+loadBrowserTabs();

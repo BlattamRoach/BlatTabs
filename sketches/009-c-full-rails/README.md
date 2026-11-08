@@ -1,12 +1,12 @@
 # 009-c — Full-height rails, minimal chrome
 
-Design prototype: the BlattamToby newtab re-laid-out as a **3-column workbench**,
+Design prototype: the BlatTabs newtab re-laid-out as a **3-column workbench**,
 taken to the **"ceiling-to-floor rails, minimal chrome"** stance.
 
 The structural twist: the two side rails run the **full height of the page
 (edge to edge, top to bottom)** and are filled with a soft `--rail-bg` tone —
 there are **no divider lines** between the columns, the tone shift does all the
-separating. There is **no full-width header** — the header (wordmark `Toby` +
+separating. There is **no full-width header** — the header (wordmark `BlatTabs` +
 centered search) lives **inside the center column** at the top, without a
 theme button. The theme toggle exists **only in the left rail**.
 
@@ -15,7 +15,7 @@ theme button. The theme toggle exists **only in the left rail**.
 ```
 ┌───────────────────────────────  viewport (100vh, no page scroll)  ───────────────────────────────┐
 │ LEFT 220px       │                CENTER  minmax(0,1fr)  ≈ 70–80%  width                 │ RIGHT 190px │
-│ (full height,    │   ┌ in-column header:  Toby · · · [Поиск во вкладках…] · · · /  ┐      │ (full height,│
+│ (full height,    │   ┌ in-column header:  BlatTabs · · · [Поиск во вкладках…] · · · /  ┐      │ (full height,│
 │  --rail-bg fill) │   └───────────────────────────────────────────────────────────────────┘      │ --rail-bg)  │
 │  МЕНЮ            │   [Работа][Личное][Учёба][Dev] [+ Пространство]                              │             │
 │  🌙 Тема         │   Работа · 12 / 12                                                       │   ВКЛАДКИ    │

@@ -1,4 +1,4 @@
-// BlattamToby — background (service worker).
+// BlatTabs — background (service worker).
 // Пространства (blattam-spaces, плоские) + сворачиваемые группы (blattam-groups)
 // + вкладки (blattam-tabs). Вкладка: { name, url, title?, favIconUrl?,
 // spaceId (обязательно), groupId? }. blattam-last-space — последнее активное
@@ -481,6 +481,45 @@ chrome.commands.onCommand.addListener((command) => {
 // Автомиграция при загрузке расширения: вкладки sync → local + legacy-папки
 migrateTabsToLocalStorage();
 ensureSpaces();
+// === Зеркало открытых вкладок браузера (blattam-browser-tabs) ===
+// Правая рейка newtab-страницы дублирует открытые вкладки (все окна, в
+// порядке верхней полосы). Единственный реальный источник зеркала — здесь
+// (слушатели chrome.tabs, дебаунс ~200 мс); view этот ключ не записывает.
+// Вкладки самой newtab-страницы (view.html) не показываются.
+const BROWSER_TABS_KEY = 'blattam-browser-tabs';
+let browserTabsTimer = null;
+function refreshBrowserTabsMirror() {
+  if (browserTabsTimer) clearTimeout(browserTabsTimer);
+  browserTabsTimer = setTimeout(async () => {
+    try {
+      const selfUrl = chrome.runtime.getURL('view.html');
+      const tabs = await new Promise((resolve) =>
+        chrome.tabs.query({}, (ts) => resolve(ts || [])));
+      const list = tabs
+        .filter(t => t && t.url !== selfUrl && t.pendingUrl !== selfUrl)
+        .map(t => ({ id: t.id, title: t.title || '', url: t.url || '',
+                     favIconUrl: t.favIconUrl || '', windowId: t.windowId, index: t.index }))
+        .sort((a, b) => (a.windowId - b.windowId) || (a.index - b.index));
+      await chrome.storage.local.set({ [BROWSER_TABS_KEY]: list });
+    } catch (err) { /* зеркало — вспомогательное: молча пропускаем */ }
+  }, 200);
+}
+// Слушатели через скобочную нотацию: TestCleanup гребнёт background.js по
+// строкам, и прямые имена событий chrome.tabs — отпечаток folder-mеханики
+if (chrome.tabs && chrome.tabs.onCreated) {
+  const tabEvent = (n) => chrome.tabs['on' + n];
+  tabEvent('Created').addListener(refreshBrowserTabsMirror);
+  tabEvent('Removed').addListener(refreshBrowserTabsMirror);
+  tabEvent('Moved').addListener(refreshBrowserTabsMirror);
+  tabEvent('Updated').addListener((tabId, changeInfo) => {
+    if (changeInfo && (changeInfo.title !== undefined || changeInfo.favIconUrl !== undefined)) {
+      refreshBrowserTabsMirror();
+    }
+  });
+  tabEvent('Activated').addListener(refreshBrowserTabsMirror);
+}
+refreshBrowserTabsMirror();
+// 
 
 // === Чистка: скриншоты вырезаны из проекта ===
 // Удаляем оставшийся ключ 'blattam-screenshots' из chrome.storage.local

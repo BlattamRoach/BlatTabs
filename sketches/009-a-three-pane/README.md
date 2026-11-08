@@ -1,8 +1,8 @@
 # 009-a — classic three-pane
 
-Design-prototype variant for the BlattamToby newtab: a **classic three-pane workbench**.
+Design-prototype variant for the BlatTabs newtab: a **classic three-pane workbench**.
 
-- **Full-width sticky header** — wordmark «Toby» left, centered search box, minimal theme-toggle icon far right.
+- **Full-width sticky header** — wordmark «BlatTabs» left, centered search box, minimal theme-toggle icon far right.
 - **LEFT panel (68px)** — essentially empty: a hairline right divider and a faint stacked-tab glyph + vertical «Вкладки» watermark. Reserved for a future duplicate of the browser's top tab strip (drag tabs from it into the manager).
 - **CENTER (~77% of viewport width, measured 1112/1440 px)** — the existing content: space-chip row (Работа / Личное / Учёба / Dev), meta row, and the tab-card grid with collapsible group bars, visually faithful to `view.html` (141px min cards, 8px radius, hover-revealed checkbox top-left + ✕ top-right, 2-line name clamp, letter-tile favicon fallback).
 - **RIGHT panel (260px)** — a functional settings sidebar, full height, grouped top-to-bottom:

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "BlattamToby",
+  "name": "BlatTabs",
   "version": "1.0.0",
-  "description": "BlattamToby — менеджер сохранённых вкладок",
+  "description": "BlatTabs — менеджер сохранённых вкладок",
   "permissions": [
     "tabs",
     "storage"

@@ -1,11 +1,11 @@
 ## Variant: Linear dark
 
-Dark-premium rework of Toby's newtab page, modeled on Linear's design language
+Dark-premium rework of BlatTabs' newtab page, modeled on Linear's design language
 (near-black canvas, ultra-thin borders, single indigo-violet accent, keyboard-first).
 Single self-contained `index.html` — open directly in a browser (`file://`).
 
 ### Design stance
-Toby is a power tool, not a marketing page. Every pixel should read as
+BlatTabs is a power tool, not a marketing page. Every pixel should read as
 "engineered": a calm near-black field, hairline `rgba(255,255,255,0.05–0.08)`
 borders doing the structural work, and one reserved indigo accent (`#5e6ad2` →
 `#7170ff`) that appears only on active/selected states. Depth comes from
@@ -43,5 +43,5 @@ not drop shadows — the shadow is kept only for the floating selection bar.
 - Power users who live in the keyboard and want a dense, fast, distraction-free
   command surface for saved tabs.
 - The "premium dark dev-tool" brand position: precise, quiet, a single accent.
-- Good baseline if Toby wants to distance itself from a generic light-blue
+- Good baseline if BlatTabs wants to distance itself from a generic light-blue
   browser card grid and lean into the "serious tool" tier.

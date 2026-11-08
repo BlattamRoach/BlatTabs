@@ -1,5 +1,5 @@
 r"""
-BlattamToby тесты через Playwright.
+BlatTabs тесты через Playwright.
 Мокируем Chrome API; проверяем background.js, view.js, popup.js +
 пространства (spaces) и сворачиваемые группы (groups), миграцию legacy-папок.
 
@@ -14,14 +14,24 @@ import struct
 import zipfile
 from playwright.sync_api import sync_playwright
 
-EXT_PATH = r"C:\Users\DI\Desktop\QwenCode\BlattamToby"
+EXT_PATH = r"C:\Users\DI\Desktop\QwenCode\BlatTabs"
 
 
 # === Моки Chrome API ===
 
 MOCK_CHROME = """
 var mockSeq = 100;
-function cloneVal(v) { return (v === undefined || v === null) ? v : JSON.parse(JSON.stringify(v)); }
+function cloneVal(v) { return (v === undefined || v === null) ? v : JSON.parse(JSON.stringify(v)); }// mockEvent — emitter в стиле chrome.*.onX: addListener/removeListener/_fire
+function mockEvent(name) {
+  var ls = [];
+  return {
+    _name: name, _listeners: ls,
+    addListener: function(fn) { ls.push(fn); },
+    removeListener: function(fn) { var i = ls.indexOf(fn); if (i !== -1) ls.splice(i, 1); },
+    _fire: function() { var a = Array.prototype.slice.call(arguments); for (var i = 0; i < ls.length; i++) ls[i].apply(null, a); }
+  };
+}
+
 var chrome = {
   storage: {
     _data: {},                 // sync area (blattam-spaces/groups/last-space/folders)
@@ -95,9 +105,59 @@ var chrome = {
   },
   tabs: {
     createdTabs: [],
-    create: function(opts) { this.createdTabs.push(opts); window.lastTabCreated = opts; },
+    _tabs: [],  // открытые вкладки браузера (тесты рейки сидят его; по умолчанию пусто)
+    create: function(opts) {
+      this.createdTabs.push(opts);
+      window.lastTabCreated = opts;
+      this._tabs = this._tabs.concat([Object.assign({ id: 'mockTab' + (++mockSeq), windowId: 1, index: this._tabs.length }, opts)]);
+    },
     _currentTab: { id: 'mockTab1', url: 'https://example.com', title: 'Example Domain', favIconUrl: 'https://example.com/favicon.ico' },
-    query: function(query, callback) { if (callback) callback([this._currentTab]); },
+    // query: callback-стиль (background.js) без _tabs — [ _currentTab ] (как раньше);
+    // promise-стиль (view.js) без _tabs — [] (рейка пуста, старые тесты не трогаются);
+    // _tabs непусто — его (копия), с фильтром по query.windowId
+    query: function(query, callback) {
+      var list = (Array.isArray(this._tabs) && this._tabs.length)
+        ? JSON.parse(JSON.stringify(this._tabs))
+        : ((typeof callback === 'function') ? [JSON.parse(JSON.stringify(this._currentTab))] : []);
+      if (query && query.windowId != null) list = list.filter(function(t) { return t.windowId === query.windowId; });
+      if (callback) { callback(list); return undefined; }
+      return Promise.resolve(list);
+    },
+    // move: переставляет в _tabs (индексы per-window пересчитывает), fire onMoved и
+    // эмулирует background: обновляет mirror blattam-browser-tabs (без newtab-страницы)
+    move: function(tabId, opts) {
+      var tabs = this._tabs;
+      var idx = -1;
+      for (var i = 0; i < tabs.length; i++) if (tabs[i].id === tabId) { idx = i; break; }
+      if (idx === -1) return Promise.resolve(undefined);
+      var tab = tabs.splice(idx, 1)[0];
+      var to = (opts && Number.isInteger(opts.index)) ? Math.max(0, Math.min(tabs.length, opts.index)) : tabs.length;
+      tabs.splice(to, 0, tab);
+      var counts = {};
+      for (var j = 0; j < tabs.length; j++) {
+        var w = tabs[j].windowId;
+        if (!(w in counts)) counts[w] = 0;
+        tabs[j].index = counts[w]++;
+      }
+      if (this.onMoved) this.onMoved._fire(tabId, to, idx, (opts && opts.windowId != null ? opts.windowId : tab.windowId));
+      var selfUrl = (chrome.runtime && chrome.runtime.getURL) ? chrome.runtime.getURL('view.html') : null;
+      var entries = tabs.filter(function(t) { return t && (t.url || t.pendingUrl) !== selfUrl; })
+        .map(function(t) { return { id: t.id, title: t.title || '', url: t.url || '', favIconUrl: t.favIconUrl || '', windowId: t.windowId, index: t.index }; })
+        .sort(function(a, b) { return (a.windowId - b.windowId) || (a.index - b.index); });
+      var oldVal = JSON.parse(JSON.stringify(chrome.storage.local._data['blattam-browser-tabs'] || []));
+      chrome.storage.local._data['blattam-browser-tabs'] = entries;
+      chrome.storage._fire({ 'blattam-browser-tabs': { newValue: entries, oldValue: oldVal } }, 'local');
+      return Promise.resolve(undefined);
+    },
+    onCreated: mockEvent('tabs.onCreated'),
+    onRemoved: mockEvent('tabs.onRemoved'),
+    onMoved: mockEvent('tabs.onMoved'),
+    onUpdated: mockEvent('tabs.onUpdated'),
+    onActivated: mockEvent('tabs.onActivated'),
+  },
+  windows: {
+    _current: { id: 1 },
+    getCurrent: function(cb) { if (cb) { cb(this._current); return undefined; } return Promise.resolve(this._current); },
   },
   commands: {
     onCommand: { _listeners: [], addListener: function(fn) { this._listeners.push(fn); } }
@@ -304,6 +364,7 @@ var chrome = {
       if (callback) callback(response);
       return Promise.resolve(response);
     },
+    getURL: function(path) { return 'chrome-extension://mock-extension-id/' + path; },
     getManifest: function() { return { version: '1.0.0' }; }
   }
 };
@@ -426,11 +487,16 @@ POPUP_DOM = body_dom("popup.html")
 
 
 def load_view(pg, tabs=None, spaces=None, groups=None, folders=None,
-              last_space=None, theme=None, confirm=False):
-    """about:blank + mock + данные + DOM view.html + view.js."""
+              last_space=None, theme=None, confirm=False, browser_tabs=None):
+    """about:blank + mock + данные + DOM view.html + view.js.
+
+    browser_tabs — список открытых вкладок браузера (chrome.tabs._tabs):
+    зеркало в правой рейке view (blattam-browser-tabs)."""
     init = []
     if tabs is not None:
         init.append("chrome.storage.local._data['blattam-tabs'] = " + json.dumps(tabs, ensure_ascii=False) + ";")
+    if browser_tabs is not None:
+        init.append("chrome.tabs._tabs = " + json.dumps(browser_tabs, ensure_ascii=False) + ";")
     if spaces is not None:
         init.append("chrome.storage._data['blattam-spaces'] = " + json.dumps(spaces, ensure_ascii=False) + ";")
     if groups is not None:
@@ -481,7 +547,7 @@ class TestManifest:
 
     def test_name(self):
         m = json.load(open(f"{EXT_PATH}/manifest.json"))
-        assert m["name"] == "BlattamToby"
+        assert m["name"] == "BlatTabs"
 
     def test_permissions(self):
         m = json.load(open(f"{EXT_PATH}/manifest.json"))
@@ -2914,10 +2980,10 @@ class TestReorderDnD:
 
 
 # ==========================================
-#  VIEW.JS: DnD TOBY-STYLE (призрак + 2px-линия в зазоре)
+#  VIEW.JS: DnD BLATTABS-STYLE (призрак + 2px-линия в зазоре)
 # ==========================================
 
-class TestTobyDnD:
+class TestBlatTabsDnD:
     @pytest.fixture(autouse=True)
     def _setup(self, page):
         self.page = page
@@ -4629,14 +4695,14 @@ class TestEditTab:
         })()""")
         self.page.wait_for_timeout(60)
         self.page.fill("#edit-name-input", "GitHub — репозиторий")
-        self.page.fill("#edit-url-input", "https://github.com/blattam")
+        self.page.fill("#edit-url-input", "https://github.com/blattabs")
         self.page.fill("#edit-comment-input", "примечание к вкладке")
         self.page.click("#edit-confirm")
         self.page.wait_for_timeout(150)
         tabs = self._tabs()
         t1 = next(t for t in tabs if t["id"] == "t1")
         assert t1["name"] == "GitHub — репозиторий"
-        assert t1["url"] == "https://github.com/blattam"
+        assert t1["url"] == "https://github.com/blattabs"
         assert t1["comment"] == "примечание к вкладке"
         # Модалка закрыта, карточка перерисована с комментарием
         closed = self.page.evaluate("!document.getElementById('edit-tab-modal').classList.contains('open')")
@@ -5524,7 +5590,7 @@ class TestViewImportExport:
         self.page.evaluate("""(payload) => {
           var input = document.getElementById('import-input');
           var dt = new DataTransfer();
-          dt.items.add(new File([payload], 'blattam-toby-backup.json', {type: 'application/json'}));
+          dt.items.add(new File([payload], 'blatt-tabs-backup.json', {type: 'application/json'}));
           input.files = dt.files;
           input.dispatchEvent(new Event('change'));
         }""", payload)
@@ -5535,7 +5601,7 @@ class TestViewImportExport:
             {"id": "g1", "name": "Dev", "spaceId": "sp1", "collapsed": False},
         ], tabs=[{"name": "A", "url": "https://a.com", "spaceId": "sp1"}])
         data = self._export()
-        assert data["blattam-toby"] is True
+        assert data["blatt-tabs"] is True
         assert "spaces" in data and "groups" in data and "tabs" in data
         assert "tags" not in data and "sessions" not in data and "folders" not in data
         assert len(data["spaces"]) == 1 and len(data["groups"]) == 1 and len(data["tabs"]) == 1
@@ -5546,7 +5612,7 @@ class TestViewImportExport:
                   groups=[{"id": "g1", "name": "Dev", "spaceId": "sp1", "collapsed": False}],
                   tabs=[{"name": "T1", "url": "https://t1.com", "spaceId": "sp1"}])
         self._import({
-            "blattam-toby": True, "version": "1.0.0",
+            "blatt-tabs": True, "version": "1.0.0",
             "spaces": [{"id": "fsp1", "name": "Main"}, {"id": "fsp2", "name": "Work"}],
             "groups": [
                 {"id": "fg1", "name": "Dev", "spaceId": "fsp1", "collapsed": False},
@@ -5575,7 +5641,7 @@ class TestViewImportExport:
     def test_import_legacy_folders_migrated(self):
         load_view(self.page, confirm=True, tabs=[])
         self._import({
-            "blattam-toby": True, "version": "1.0.0",
+            "blatt-tabs": True, "version": "1.0.0",
             "folders": [{"id": "ff1", "name": "Work", "parentId": None}],
             "tabs": [
                 {"name": "W", "url": "https://w.com", "folderId": "ff1"},
@@ -5593,7 +5659,7 @@ class TestViewImportExport:
 
     def test_import_rejects_invalid(self):
         load_view(self.page, tabs=[])
-        self._import({"blattam-toby": True, "noTabs": []})
+        self._import({"blatt-tabs": True, "noTabs": []})
         assert read_storage_raw(self.page, "blattam-tabs") == []
 
 
@@ -5710,7 +5776,7 @@ class TestRelease:
         bz = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(bz)
         bz.main()
-        return os.path.join(EXT_PATH, "dist", "BlattamToby-v%s.zip" % bz.read_version())
+        return os.path.join(EXT_PATH, "dist", "BlatTabs-v%s.zip" % bz.read_version())
 
     @staticmethod
     def _png_size(path):
@@ -5865,11 +5931,11 @@ class TestFavicons:
           var payload = %s;
           var input = document.getElementById('import-input');
           var dt = new DataTransfer();
-          dt.items.add(new File([payload], 'blattam-toby-backup.json', {type: 'application/json'}));
+          dt.items.add(new File([payload], 'blatt-tabs-backup.json', {type: 'application/json'}));
           input.files = dt.files;
           input.dispatchEvent(new Event('change'));
         })()""" % json.dumps(json.dumps({
-            "blattam-toby": True, "version": "1.0.0",
+            "blatt-tabs": True, "version": "1.0.0",
             "spaces": [{"id": "sp1", "name": "Main"}],
             "tabs": [
                 {"name": "GH", "url": "https://github.com", "favIconUrl": "https://github.com/favicon.ico", "spaceId": "sp1"},
@@ -9256,18 +9322,19 @@ class TestRailLayout:
         assert d["inputAfterWorkspace"], d
         # невидим для пользователя: у скрытого input нет bounding box
         assert self.page.locator("#import-input").bounding_box() is None
-        # клик по «Настройки» — no-op: модалок/панелей нет, ошибок страницы нет
+        # клик по «Настройки» — открывает модалку настроек (FAQ)
         self.page.click("#settings-btn")
         self.page.wait_for_timeout(150)
         d2 = json.loads(self.page.evaluate("""(() => {
-          const overlays = [...document.querySelectorAll('.modal-overlay')];
-          const dlg = document.querySelector('[role="dialog"], .settings-panel');
+          const m = document.getElementById('settings-modal');
+          const faq = document.querySelector('#settings-modal .faq-list');
           return JSON.stringify({
-            noDialog: overlays.every(o => getComputedStyle(o).display === 'none') && (!dlg || getComputedStyle(dlg).display === 'none'),
-            theme: document.documentElement.dataset.theme
+            settingsOpen: m ? m.classList.contains('open') : false,
+            faqItems: faq ? faq.querySelectorAll('.faq-item').length : 0
           });
         })()"""))
-        assert d2["noDialog"], d2
+        assert d2["settingsOpen"], d2
+        assert d2["faqItems"] == 5, d2
 
     def test_account_card_pinned_bottom(self):
         # Аккаунт-карта закреплена внизу левой рейки (margin-top: auto)
@@ -9313,27 +9380,28 @@ class TestRailLayout:
         assert d["selectBtn"] is False, d
         assert d["metarowHas"] and d["empty"] and d["noResults"] and d["resetBtn"], d
 
-    def test_right_rail_placeholder(self):
-        # Watermark «ВКЛАДКИ БРАУЗЕРА» + 4 ghost-заглушки: тусклые, некликабельные
+    def test_right_rail_browser_tabs_list(self):
+        # Старый плейсхолдер (водяной знак + ghost-пилюли) убрал: в рейке —
+        # живой список #browser-tabs-list открытых вкладок (пусто, если
+        # открытых вкладок нет)
         load_view(self.page, tabs=self.TABS)
         self._inject_real_styles()
-        self.page.wait_for_timeout(120)
+        self.page.wait_for_timeout(150)
         d = json.loads(self.page.evaluate("""(() => {
-          const wm = document.querySelector('#rail-right .wm');
-          const gt = document.querySelector('#rail-right .ghost-tabs');
-          const cs = gt ? getComputedStyle(gt) : null;
+          const rail = document.querySelector('#rail-right');
+          const list = document.querySelector('#browser-tabs-list');
+          const cs = rail ? getComputedStyle(rail) : null;
           return JSON.stringify({
-            wmText: wm ? wm.textContent : null,
-            ghosts: gt ? gt.querySelectorAll('i').length : 0,
-            opacity: cs ? cs.opacity : null,
-            pointerEvents: cs ? cs.pointerEvents : null
+            list: !!list,
+            wm: !!document.querySelector('#rail-right .wm'),
+            ghostTabs: !!document.querySelector('#rail-right .ghost-tabs'),
+            items: list ? list.querySelectorAll('.bt-tab').length : -1,
+            railW: cs ? cs.width : null
           });
         })()"""))
-        assert d["wmText"] and "ВКЛАДКИ" in d["wmText"] and "БРАУЗЕРА" in d["wmText"], d
-        assert d["ghosts"] == 4, d
-        assert d["opacity"] == "0.3", d
-        assert d["pointerEvents"] == "none", d
-
+        assert d["list"] and not d["wm"] and not d["ghostTabs"], d
+        assert d["items"] == 0, d
+        assert d["railW"] == "190px", d
     def test_hover_reveal(self):
         # Hover-reveal: подпись .s и стрелка .go появляются (opacity 1) при hover
         load_view(self.page, tabs=self.TABS)
@@ -9567,3 +9635,715 @@ class TestLeftRailSearchAndCleanup:
                 assert d["inputColor"] == "rgb(23, 23, 23)", (theme, d)      # --text light
             self.page.evaluate("document.getElementById('modal-cancel').click()")
             self.page.wait_for_timeout(50)
+
+
+#  VIEW.JS: RAIL MIRROR — правая рейка: живое зеркало открытых вкладок браузера
+class TestRailBrowserTabs:
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    BT = [
+        {"id": "bt1", "title": "Wiki", "url": "https://wiki.example",
+         "favIconUrl": "https://fav.example/1.ico", "windowId": 1, "index": 0},
+        {"id": "bt2", "title": "Mail", "url": "https://mail.example",
+         "favIconUrl": "https://fav.example/2.ico", "windowId": 1, "index": 1},
+        {"id": "bt3", "title": "News", "url": "https://news.example",
+         "favIconUrl": "https://fav.example/3.ico", "windowId": 1, "index": 2},
+    ]
+    SP = [{"id": "sp1", "name": "Alpha"}]
+    TABS = [{"name": "Saved", "url": "https://saved.example", "spaceId": "sp1"}]
+    GROUPS = [{"id": "g1", "name": "Grp", "spaceId": "sp1", "collapsed": False}]
+
+    def _rail_titles(self):
+        return json.loads(self.page.evaluate(
+            "JSON.stringify([...document.querySelectorAll('#browser-tabs-list .bt-tab .bt-title')].map(e => e.textContent))"))
+
+    def _tabs_order(self):
+        return json.loads(self.page.evaluate(
+            "JSON.stringify(chrome.tabs._tabs.map(t => t.id))"))
+
+    def _rail_drag(self, src_id, target_selector, pos, wait=60):
+        # dragstart -> (отложенная заглушка) -> dragover -> drop. pos:
+        # 'before'/'after' — верхняя/нижняя половина цели (midpoint-правило)
+        self.page.evaluate("""(args) => {
+          const src = document.querySelector('#browser-tabs-list .bt-tab[data-id="' + args[0] + '"]');
+          const dst = document.querySelector(args[1]);
+          const r = dst.getBoundingClientRect();
+          const clientY = args[2] === 'before' ? r.top + r.height * 0.25 : r.bottom - Math.max(r.height * 0.25, 0.001);
+          const clientX = r.left + r.width * 0.75; // правая половина (gap-индекс «после»)
+          const dt = new DataTransfer();
+          src.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true, cancelable: true}));
+          window.__btDt = dt; window.__btSrc = args[0]; window.__btXY = [clientX, clientY];
+        }""", [src_id, target_selector, pos])
+        self.page.wait_for_timeout(wait)  # отложенное создание заглушки (setTimeout 0)
+
+    def _rail_over_and_drop(self, target_selector, pos='after'):
+        self.page.evaluate("""(args) => {
+          const dst = document.querySelector(args[0]);
+          const r = dst.getBoundingClientRect();
+          const clientY = args[1] === 'before' ? r.top + r.height * 0.25 : r.bottom - Math.max(r.height * 0.25, 0.001);
+          const dt = window.__btDt;
+          dst.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true,
+                                                       clientX: r.left + r.width * 0.75, clientY}));
+          dst.dispatchEvent(new DragEvent('drop', {dataTransfer: dt, bubbles: true, cancelable: true,
+                                                   clientX: r.left + r.width * 0.75, clientY}));
+          const src = document.querySelector('#browser-tabs-list .bt-tab[data-id="' + (window.__btSrc || '') + '"]');
+          src.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        }""", [target_selector, pos])
+        self.page.wait_for_timeout(50)
+
+    def test_rail_renders_open_tabs_in_strip_order(self):
+        load_view(self.page, tabs=self.TABS, spaces=self.SP, browser_tabs=self.BT)
+        self.page.wait_for_timeout(80)
+        assert self._rail_titles() == ["Wiki", "Mail", "News"]
+        assert self.page.evaluate(
+            "[...document.querySelectorAll('#browser-tabs-list .bt-tab')].every(e => e.draggable)") is True
+        assert self.page.evaluate(
+            "[...document.querySelectorAll('#browser-tabs-list .bt-tab')].map(e => e.dataset.id)") == ["bt1", "bt2", "bt3"]
+
+    def test_newtab_page_tab_excluded(self):
+        own = dict(self.BT[0])
+        own.update({"id": "own", "url": "chrome-extension://mock-extension-id/view.html",
+                    "title": "New Tab", "windowId": 1, "index": 3})
+        load_view(self.page, tabs=self.TABS, spaces=self.SP, browser_tabs=self.BT + [own])
+        self.page.wait_for_timeout(80)
+        assert self._rail_titles() == ["Wiki", "Mail", "News"]  # своя newtab-страница не в рейке
+
+    def test_empty_state_no_crash(self):
+        self.page.on("pageerror", lambda e: pytest.fail("pageerror: %s" % e))
+        load_view(self.page, tabs=self.TABS, spaces=self.SP)
+        self.page.wait_for_timeout(80)
+        assert self._rail_titles() == []
+        assert self.page.evaluate("document.querySelectorAll('#browser-tabs-list .bt-tab').length") == 0
+
+    def test_rail_drag_ghost_look(self):
+        # Виден тот же «тёплый» ghost-slot, что у карточек: захваченный
+        # элемент скрыт, заглушка того же размера с --ghost-bg + пунктиром
+        load_view(self.page, tabs=self.TABS, spaces=self.SP, browser_tabs=self.BT)
+        theme = load_file("theme.css")
+        html = load_file("view.html")
+        self.page.evaluate(
+            "(styles) => { var st = document.createElement('style'); st.textContent = styles; document.head.appendChild(st); }",
+            [theme + "\n" + html.split("<style>", 1)[1].rsplit("</style>", 1)[0]])
+        self.page.wait_for_timeout(60)
+        ref_h = self.page.evaluate(
+            "document.querySelector('.bt-tab[data-id=\"bt3\"]').getBoundingClientRect().height")
+        self._rail_drag("bt2", "#browser-tabs-list .bt-tab[data-id='bt1']", 'before', wait=60)
+        d = json.loads(self.page.evaluate("""(() => {
+          const src = document.querySelector('.bt-tab[data-id="bt2"]');
+          const ghost = document.querySelector('#browser-tabs-list .bt-ghost-slot');
+          const cs = ghost ? getComputedStyle(ghost) : null;
+          return JSON.stringify({
+            srcHidden: src ? src.style.display === 'none' : null,
+            ghost: !!ghost,
+            ghostH: ghost ? ghost.getBoundingClientRect().height : 0,
+            bg: cs ? cs.backgroundColor : null,
+            borderStyle: cs ? cs.borderStyle : null,
+            items: document.querySelectorAll('#browser-tabs-list .bt-tab').length,
+            children: document.querySelectorAll('#browser-tabs-list > *').length
+          });
+        })()"""))
+        assert d["srcHidden"] is True and d["ghost"] is True, d
+        assert d["items"] == 3 and d["children"] == 4, d  # элемент скрыт, слот на его месте
+        assert ref_h > 0 and d["ghostH"] > 0 and abs(d["ghostH"] - ref_h) <= 2, (d, ref_h)
+        m = re.search(r"--ghost-bg:\s*(#[0-9a-fA-F]{3,8}|rgba?\([^)]*\))", theme)
+        assert m, "--ghost-bg token"
+        v = m.group(1)
+        if v.startswith("#"):
+            h = v[1:]
+            if len(h) == 3:
+                h = "".join(c * 2 for c in h)
+            expect = "rgb({0}, {1}, {2})".format(int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+        else:
+            nums = [x.strip() for x in v.split("(", 1)[1].strip().strip("()").split(",")]
+            expect = "rgba({0}, {1}, {2}, {3})".format(*nums)
+        assert d["bg"] == expect, (d["bg"], expect)
+        assert d["borderStyle"] == "dashed", d
+
+    def test_rail_reorder_calls_tabs_move_and_follows(self):
+        load_view(self.page, tabs=self.TABS, spaces=self.SP, browser_tabs=self.BT)
+        self.page.wait_for_timeout(80)
+        self._rail_drag("bt1", "#browser-tabs-list .bt-tab[data-id='bt3']", 'after')
+        self._rail_over_and_drop("#browser-tabs-list .bt-tab[data-id='bt3']", 'after')
+        # chrome.tabs.move переписал _tabs + зеркало (onChanged перерисовал рейку)
+        assert self._tabs_order() == ["bt2", "bt3", "bt1"]
+        assert self._rail_titles() == ["Mail", "News", "Wiki"]
+
+    def test_rail_reorder_same_slot_noop(self):
+        load_view(self.page, tabs=self.TABS, spaces=self.SP, browser_tabs=self.BT)
+        self.page.wait_for_timeout(80)
+        self._rail_drag("bt1", "#browser-tabs-list .bt-tab[data-id='bt2']", 'before')
+        self._rail_over_and_drop("#browser-tabs-list .bt-tab[data-id='bt2']", 'before')
+        assert self._tabs_order() == ["bt1", "bt2", "bt3"]
+        assert self._rail_titles() == ["Wiki", "Mail", "News"]
+
+    def test_top_strip_reorder_reflects_in_rail(self):
+        # Верхняя полоса изменилась (move извне) — рейка следует
+        load_view(self.page, tabs=self.TABS, spaces=self.SP, browser_tabs=self.BT)
+        self.page.wait_for_timeout(80)
+        self.page.evaluate("chrome.tabs.move('bt3', {index: 0})")
+        self.page.wait_for_timeout(80)
+        assert self._rail_titles() == ["News", "Wiki", "Mail"]
+
+    def test_drop_in_center_group_saves_tab(self):
+        gtabs = [dict(self.TABS[0], groupId="g1")]
+        load_view(self.page, tabs=gtabs, spaces=self.SP, groups=self.GROUPS, browser_tabs=self.BT)
+        self.page.wait_for_timeout(80)
+        self._rail_drag("bt1", "#tabs-list .tab-card", 'after')
+        self._rail_over_and_drop("#tabs-list .tab-card", 'after')
+        data = json.loads(self.page.evaluate("JSON.stringify(chrome.storage.local._data)"))
+        tabs = data.get("blattam-tabs") or []
+        assert [t["url"] for t in tabs] == ["https://saved.example", "https://wiki.example"], tabs
+        assert tabs[1]["groupId"] == "g1" and tabs[1]["spaceId"] == "sp1", tabs
+        assert tabs[1]["title"] == "Wiki", tabs
+        # Браузерная вкладка осталась открытой — зеркало и порядок не тронуты
+        assert self._tabs_order() == ["bt1", "bt2", "bt3"]
+        assert self._rail_titles() == ["Wiki", "Mail", "News"]
+
+    def test_drop_in_center_loose_saves_loose(self):
+        load_view(self.page, tabs=self.TABS, spaces=self.SP, browser_tabs=self.BT)
+        self.page.wait_for_timeout(80)
+        self._rail_drag("bt2", "#tabs-list .tab-card", 'after')
+        self._rail_over_and_drop("#tabs-list .tab-card", 'after')
+        data = json.loads(self.page.evaluate("JSON.stringify(chrome.storage.local._data)"))
+        tabs = data.get("blattam-tabs") or []
+        assert [t["url"] for t in tabs] == ["https://saved.example", "https://mail.example"], tabs
+        assert tabs[1].get("groupId") in (None, ""), tabs
+        assert tabs[1]["favIconUrl"] == "https://fav.example/2.ico", tabs
+
+    def test_drop_on_gbar_saves_to_group(self):
+        load_view(self.page, tabs=self.TABS, spaces=self.SP, groups=self.GROUPS, browser_tabs=self.BT)
+        self.page.wait_for_timeout(80)
+        self._rail_drag("bt3", "#tabs-list .gbar", 'after')
+        self._rail_over_and_drop("#tabs-list .gbar", 'after')
+        data = json.loads(self.page.evaluate("JSON.stringify(chrome.storage.local._data)"))
+        tabs = data.get("blattam-tabs") or []
+        assert tabs[-1]["url"] == "https://news.example" and tabs[-1]["groupId"] == "g1", tabs
+
+    def test_cancel_drag_changes_nothing(self):
+        load_view(self.page, tabs=self.TABS, spaces=self.SP, groups=self.GROUPS, browser_tabs=self.BT)
+        self.page.wait_for_timeout(80)
+        # dragstart, затем дроп НЕ в рейке и не в центр (левая рейка) — отмена
+        self._rail_drag("bt1", "#browser-tabs-list .bt-tab[data-id='bt1']", 'before')
+        self.page.evaluate("""() => {
+          const dst = document.querySelector('#rail-left');
+          const r = dst.getBoundingClientRect();
+          const dt = window.__btDt;
+          dst.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true,
+                                                       clientX: r.left + 10, clientY: r.top + 10}));
+          dst.dispatchEvent(new DragEvent('drop', {dataTransfer: dt, bubbles: true, cancelable: true,
+                                                   clientX: r.left + 10, clientY: r.top + 10}));
+          const src = document.querySelector('.bt-tab[data-id="bt1"]');
+          src.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        }""")
+        self.page.wait_for_timeout(50)
+        assert self._tabs_order() == ["bt1", "bt2", "bt3"]
+        data = json.loads(self.page.evaluate("JSON.stringify(chrome.storage.local._data)"))
+        assert [t["url"] for t in (data.get("blattam-tabs") or [])] == ["https://saved.example"]
+        d = json.loads(self.page.evaluate("""JSON.stringify({
+          ghost: !!document.querySelector('.bt-ghost-slot'),
+          centralGhost: !!document.querySelector('.tab-ghost-slot'),
+          items: document.querySelectorAll('#browser-tabs-list .bt-tab').length
+        })"""))
+        assert d["ghost"] is False and d["centralGhost"] is False and d["items"] == 3, d
+        assert self._rail_titles() == ["Wiki", "Mail", "News"]
+
+    def test_manifest_has_tabs_permission(self):
+        src = load_file("manifest.json")
+        m = json.loads(src)
+        assert "tabs" in m.get("permissions", []), m.get("permissions")
+
+    def test_rail_item_click_opens_url(self):
+        load_view(self.page, tabs=self.TABS, spaces=self.SP, browser_tabs=self.BT)
+        self.page.wait_for_timeout(80)
+        self.page.evaluate("window.__opened = null; window.open = (u) => { window.__opened = u; };")
+        self.page.evaluate("document.querySelector('.bt-tab[data-id=\"bt2\"]').click()")
+        assert self.page.evaluate("window.__opened") == "https://mail.example"
+
+
+class TestRailReorderMirror:
+    """Рейка при реордеринге обязана перерисоваться в новый порядок окна.
+
+    Тайминг только в реальном Chrome: background пишет зеркало
+    blattam-browser-tabs с дебаунсом ~200 мс, поэтому в реальном Chrome view
+    не может полагаться на onChanged зеркала, чтобы перерисовать рейку сразу
+    после chrome.tabs.move. view.js теперь сам синхронизирует рейку из
+    реального окна, как только move разрешён (syncRailFromTabs). Мок
+    chrome.tabs.move эмулирует запись зеркала + onChanged СИНХРОННО, поэтому
+    обычный тест ниже проходит и без фикса; тест
+    test_rail_reorder_self_syncs_without_mirror подавляет onChanged зеркала и
+    доказывает, что view синхронизирует рейку сам (регрессия для реального
+    Chrome)."""
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    BT = [
+        {"id": "bt1", "title": "Wiki", "url": "https://wiki.example",
+         "favIconUrl": "https://fav.example/1.ico", "windowId": 1, "index": 0},
+        {"id": "bt2", "title": "Mail", "url": "https://mail.example",
+         "favIconUrl": "https://fav.example/2.ico", "windowId": 1, "index": 1},
+        {"id": "bt3", "title": "News", "url": "https://news.example",
+         "favIconUrl": "https://fav.example/3.ico", "windowId": 1, "index": 2},
+    ]
+    SP = [{"id": "sp1", "name": "Alpha"}]
+    TABS = [{"name": "Saved", "url": "https://saved.example", "spaceId": "sp1"}]
+
+    def _rail_titles(self):
+        return json.loads(self.page.evaluate(
+            "JSON.stringify([...document.querySelectorAll('#browser-tabs-list .bt-tab .bt-title')].map(e => e.textContent))"))
+
+    def _tabs_order(self):
+        return json.loads(self.page.evaluate(
+            "JSON.stringify(chrome.tabs._tabs.map(t => t.id))"))
+
+    def _rail_drag(self, src_id, target_selector, pos, wait=60):
+        self.page.evaluate("""(args) => {
+          const src = document.querySelector('#browser-tabs-list .bt-tab[data-id="' + args[0] + '"]');
+          const dst = document.querySelector(args[1]);
+          const r = dst.getBoundingClientRect();
+          const clientY = args[2] === 'before' ? r.top + r.height * 0.25 : r.bottom - Math.max(r.height * 0.25, 0.001);
+          const clientX = r.left + r.width * 0.75;
+          const dt = new DataTransfer();
+          src.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true, cancelable: true}));
+          window.__btDt = dt; window.__btSrc = args[0];
+        }""", [src_id, target_selector, pos])
+        self.page.wait_for_timeout(wait)
+
+    def _rail_over_and_drop(self, target_selector, pos='after'):
+        self.page.evaluate("""(args) => {
+          const dst = document.querySelector(args[0]);
+          const r = dst.getBoundingClientRect();
+          const clientY = args[1] === 'before' ? r.top + r.height * 0.25 : r.bottom - Math.max(r.height * 0.25, 0.001);
+          const dt = window.__btDt;
+          dst.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true,
+                                                       clientX: r.left + r.width * 0.75, clientY}));
+          dst.dispatchEvent(new DragEvent('drop', {dataTransfer: dt, bubbles: true, cancelable: true,
+                                                   clientX: r.left + r.width * 0.75, clientY}));
+          const src = document.querySelector('#browser-tabs-list .bt-tab[data-id="' + (window.__btSrc || '') + '"]');
+          src.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        }""", [target_selector, pos])
+        self.page.wait_for_timeout(50)
+
+    def test_rail_reorder_reflects_new_window_order(self):
+        # Страховка: порядок рейки следует за переставленной верхней полосой.
+        load_view(self.page, tabs=self.TABS, spaces=self.SP, browser_tabs=self.BT)
+        self.page.wait_for_timeout(80)
+        self._rail_drag("bt1", "#browser-tabs-list .bt-tab[data-id='bt3']", 'after')
+        self._rail_over_and_drop("#browser-tabs-list .bt-tab[data-id='bt3']", 'after')
+        assert self._tabs_order() == ["bt2", "bt3", "bt1"]
+        assert self._rail_titles() == ["Mail", "News", "Wiki"]
+
+    def test_rail_reorder_self_syncs_without_mirror_onchanged(self):
+        # view обязан сам перерисовать рейку из реального окна, как только
+        # chrome.tabs.move разрешён (syncRailFromTabs), а не по onChanged
+        # зеркала: в реальном Chrome background пишет blattam-browser-tabs с
+        # дебаунсом ~200 мс, поэтому рейку нельзя синхронизировать только по
+        # зеркалу. Моковый move пишет зеркало + onChanged синхронно, поэтому
+        # здесь глушим onChanged зеркала (chrome.storage._fire): рейка обязана
+        # обновиться ТОЛЬКО через самосинхронизацию view, иначе тест провалится.
+        load_view(self.page, tabs=self.TABS, spaces=self.SP, browser_tabs=self.BT)
+        self.page.wait_for_timeout(80)
+        self.page.evaluate(
+            "window.__origStorageFire = chrome.storage._fire; "
+            "chrome.storage._fire = function() {};")
+        try:
+            self._rail_drag("bt1", "#browser-tabs-list .bt-tab[data-id='bt3']", 'after')
+            self._rail_over_and_drop("#browser-tabs-list .bt-tab[data-id='bt3']", 'after')
+            self.page.wait_for_timeout(80)
+            assert self._tabs_order() == ["bt2", "bt3", "bt1"]
+            # Зеркало onChanged было заглушено — рейка обновилась самосинхронизацией view
+            assert self._rail_titles() == ["Mail", "News", "Wiki"]
+        finally:
+            try:
+                self.page.evaluate("chrome.storage._fire = window.__origStorageFire;")
+            except Exception:
+                pass  # контекст сбрасывается каждым load_view (about:blank)
+
+
+class TestRailPostDropClick:
+    """Реальный Chrome генерирует ложный клик БЕЗ mousedown на drop-цели в
+    момент дропа: дроп вкладки рейки на карточку — не открывает её, на чип —
+    не переключает пространство, на шапку группы — не сворачивает; дроп
+    карточки на карточку — не открывает цель. Настоящее нажатие (с mousedown)
+    продолжает действовать."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    BT = [
+        {"id": "bt1", "title": "Wiki", "url": "https://wiki.example",
+         "favIconUrl": "https://fav.example/1.ico", "windowId": 1, "index": 0},
+        {"id": "bt2", "title": "Mail", "url": "https://mail.example",
+         "favIconUrl": "https://fav.example/2.ico", "windowId": 1, "index": 1},
+        {"id": "bt3", "title": "News", "url": "https://news.example",
+         "favIconUrl": "https://fav.example/3.ico", "windowId": 1, "index": 2},
+    ]
+    SP2 = [{"id": "sp1", "name": "Alpha"}, {"id": "sp2", "name": "Beta"}]
+    TABS = [{"name": "Saved", "url": "https://saved.example", "spaceId": "sp1"},
+            {"name": "Second", "url": "https://second.example", "spaceId": "sp1"}]
+    GROUPS = [{"id": "g1", "name": "Grp", "spaceId": "sp1", "collapsed": False}]
+
+    def _rail_titles(self):
+        return json.loads(self.page.evaluate(
+            "JSON.stringify([...document.querySelectorAll('#browser-tabs-list .bt-tab .bt-title')].map(e => e.textContent))"))
+
+    def _rail_drag(self, src_id, target_selector, pos='after'):
+        self.page.evaluate("""(args) => {
+          const src = document.querySelector('#browser-tabs-list .bt-tab[data-id="' + args[0] + '"]');
+          const dst = document.querySelector(args[1]);
+          const r = dst.getBoundingClientRect();
+          const clientY = args[2] === 'before' ? r.top + r.height * 0.25 : r.bottom - Math.max(r.height * 0.25, 0.001);
+          const dt = new DataTransfer();
+          src.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true, cancelable: true}));
+          window.__btDt = dt; window.__btSrc = args[0];
+        }""", [src_id, target_selector, pos])
+        self.page.wait_for_timeout(60)
+
+    def _rail_over_and_drop(self, target_selector, pos='after'):
+        self.page.evaluate("""(args) => {
+          const dst = document.querySelector(args[0]);
+          const r = dst.getBoundingClientRect();
+          const clientY = args[1] === 'before' ? r.top + r.height * 0.25 : r.bottom - Math.max(r.height * 0.25, 0.001);
+          const dt = window.__btDt;
+          dst.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true,
+                                                       clientX: r.left + r.width * 0.5, clientY}));
+          dst.dispatchEvent(new DragEvent('drop', {dataTransfer: dt, bubbles: true, cancelable: true,
+                                                   clientX: r.left + r.width * 0.5, clientY}));
+          const src = document.querySelector('#browser-tabs-list .bt-tab[data-id="' + (window.__btSrc || '') + '"]');
+          if (src) src.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        }""", [target_selector, pos])
+        self.page.wait_for_timeout(60)
+
+    def _synthetic_click(self, selector):
+        # ложный post-drop-клик: click БЕЗ предшествующего mousedown
+        self.page.evaluate("(s) => document.querySelector(s).click()", [selector])
+        self.page.wait_for_timeout(30)
+
+    def test_rail_drop_on_card_no_spurious_open(self):
+        load_view(self.page, tabs=self.TABS, spaces=[{"id": "sp1", "name": "Alpha"}], browser_tabs=self.BT)
+        self.page.wait_for_timeout(80)
+        self._rail_drag("bt1", "#tabs-list .tab-card", 'after')
+        self._rail_over_and_drop("#tabs-list .tab-card", 'after')
+        self._synthetic_click("#tabs-list .tab-card")
+        assert self.page.evaluate("chrome.tabs.createdTabs.length") == 0
+        # настоящее нажатие всё ещё открывает карточку
+        self.page.click("#tabs-list .tab-card")
+        assert self.page.evaluate("chrome.tabs.createdTabs.length") == 1
+
+    def test_card_drop_on_card_no_spurious_open(self):
+        tabs = [{"name": "A", "url": "https://a.com", "spaceId": "sp1"},
+                {"name": "B", "url": "https://b.com", "spaceId": "sp1"}]
+        load_view(self.page, tabs=tabs, spaces=[{"id": "sp1", "name": "Alpha"}])
+        self.page.wait_for_timeout(80)
+        self.page.evaluate("""() => {
+          const card = document.querySelectorAll('#tabs-list .tab-card')[0];
+          window.__srcCard = card;
+          const dt = new DataTransfer();
+          window.__dt = dt;
+          card.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true, cancelable: true}));
+        }""")
+        self.page.wait_for_timeout(50)
+        self.page.evaluate("""() => {
+          const dst = document.querySelectorAll('#tabs-list .tab-card')[1];
+          const r = dst.getBoundingClientRect();
+          const ev = (t) => new DragEvent(t, {dataTransfer: window.__dt, bubbles: true, cancelable: true,
+                                               clientX: r.left + r.width * 0.5, clientY: r.top + r.height * 0.25});
+          dst.dispatchEvent(ev('dragover'));
+          dst.dispatchEvent(ev('drop'));
+          if (window.__srcCard) window.__srcCard.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        }""")
+        self.page.wait_for_timeout(60)
+        self._synthetic_click("#tabs-list .tab-card")
+        assert self.page.evaluate("chrome.tabs.createdTabs.length") == 0
+        self.page.click("#tabs-list .tab-card")
+        assert self.page.evaluate("chrome.tabs.createdTabs.length") == 1
+
+    def test_rail_drop_on_chip_no_space_switch(self):
+        load_view(self.page, tabs=self.TABS, spaces=self.SP2, browser_tabs=self.BT)
+        self.page.wait_for_timeout(80)
+        before = self.page.evaluate("chrome.storage.sync._data['blattam-last-space'] || 'sp1'")
+        self._rail_drag("bt1", ".space-chip", 'after')
+        self._rail_over_and_drop(".space-chip", 'after')
+        self._synthetic_click(".space-chip")
+        assert self.page.evaluate("chrome.storage.sync._data['blattam-last-space'] || 'sp1'") == before
+        # настоящее нажатие всё ещё переключает пространство
+        self.page.click(".space-chip")
+        assert self.page.evaluate("chrome.storage.sync._data['blattam-last-space']") != before
+
+    def test_rail_drop_on_gbar_no_toggle(self):
+        gtabs = [dict(self.TABS[0], groupId="g1"), dict(self.TABS[1], groupId="g1")]
+        load_view(self.page, tabs=gtabs, spaces=[{"id": "sp1", "name": "Alpha"}],
+                  groups=self.GROUPS, browser_tabs=self.BT)
+        self.page.wait_for_timeout(80)
+        self._rail_drag("bt3", "#tabs-list .gbar", 'after')
+        self._rail_over_and_drop("#tabs-list .gbar", 'after')
+        self._synthetic_click("#tabs-list .gbar")
+        groups = json.loads(self.page.evaluate("JSON.stringify(chrome.storage.sync._data['blattam-groups'])"))
+        assert groups[0]["collapsed"] is False, groups
+        data = json.loads(self.page.evaluate("JSON.stringify(chrome.storage.local._data)"))
+        assert data["blattam-tabs"][-1]["groupId"] == "g1", data["blattam-tabs"]
+
+    def test_rail_reorder_committed_real_click_still_opens(self):
+        load_view(self.page, tabs=self.TABS, spaces=[{"id": "sp1", "name": "Alpha"}], browser_tabs=self.BT)
+        self.page.wait_for_timeout(80)
+        self.page.evaluate("window.__opened = null; window.open = (u) => { window.__opened = u; };")
+        self._rail_drag("bt1", "#browser-tabs-list .bt-tab[data-id='bt3']", 'after')
+        self._rail_over_and_drop("#browser-tabs-list .bt-tab[data-id='bt3']", 'after')
+        # ложный клик по элементу рейки гасится, настоящее нажатие работает
+        self._synthetic_click(".bt-tab[data-id='bt2']")
+        assert self.page.evaluate("window.__opened") is None
+        self.page.click(".bt-tab[data-id='bt2']")
+        assert self.page.evaluate("window.__opened") == "https://mail.example"
+
+    def test_rail_reorder_to_front_with_newtab_page(self):
+        # окно: [view.html, bt1, bt2, bt3]; рейка не показывает newtab —
+        # позиция в рейке НЕ равна индексу в окне (old code: ghostPos 0 -> end)
+        own = {"id": "own", "url": "chrome-extension://mock-extension-id/view.html",
+               "title": "New Tab", "windowId": 1, "index": 0}
+        load_view(self.page, tabs=self.TABS, spaces=[{"id": "sp1", "name": "Alpha"}],
+                  browser_tabs=[own] + self.BT)
+        self.page.wait_for_timeout(80)
+        self._rail_drag("bt3", "#browser-tabs-list .bt-tab[data-id='bt1']", 'before')
+        self._rail_over_and_drop("#browser-tabs-list .bt-tab[data-id='bt1']", 'before')
+        self.page.wait_for_timeout(80)
+        order = json.loads(self.page.evaluate("JSON.stringify(chrome.tabs._tabs.map(t => t.id))"))
+        assert order == ["bt3", "own", "bt1", "bt2"], order
+        assert self._rail_titles() == ["News", "Wiki", "Mail"]
+
+
+class TestRailCenterGhost:
+    """Рейка → центр: при драге вкладки рейки по центральному списку
+    появляется тёплая заглушка-слот вставки (.tab-ghost-slot, размер
+    карточки) — та же, что при драге карточки: видима, в DOM, следует по
+    слотам за курсором; после дропа/отмены — без следов. Регрессия: раньше
+    заглушка создавалась в отключённом виде и не подключалась (moveGhostSlot
+    завязан на dragSourceUrl — у драга рейки он пуст), и пользователь не мог
+    видеть, куда вкладка ляжет."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    BT = [
+        {"id": "bt1", "title": "Wiki", "url": "https://wiki.example",
+         "favIconUrl": "https://fav.example/1.ico", "windowId": 1, "index": 0},
+        {"id": "bt2", "title": "Mail", "url": "https://mail.example",
+         "favIconUrl": "https://fav.example/2.ico", "windowId": 1, "index": 1},
+    ]
+    TABS3 = [
+        {"name": "A", "url": "https://a.com"},
+        {"name": "B", "url": "https://b.com"},
+        {"name": "C", "url": "https://c.com"},
+    ]
+
+    def _slot_order(self):
+        """Порядок детей #tabs-list: 'card' / 'slot' / 'keeper' / 'other'."""
+        return json.loads(self.page.evaluate("""(() => JSON.stringify(
+          [...document.getElementById('tabs-list').children].map(c =>
+            c.classList.contains('tab-card') ? 'card' :
+            c.classList.contains('tab-ghost-slot') ? 'slot' :
+            c.classList.contains('tab-row-keeper') ? 'keeper' : 'other')))()"""))
+
+    def _rail_drag_start(self, src_id):
+        self.page.evaluate("""(args) => {
+          const src = document.querySelector('#browser-tabs-list .bt-tab[data-id="' + args + '"]');
+          const dt = new DataTransfer();
+          src.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true, cancelable: true}));
+          window.__btDt = dt; window.__btSrc = args;
+        }""", src_id)
+        self.page.wait_for_timeout(60)
+
+    def _center_coords(self, card_idx, side):
+        return self.page.evaluate("""(args) => {
+          const r = document.querySelectorAll('#tabs-list .tab-card')[args[0]].getBoundingClientRect();
+          return {x: r.left + r.width * (args[1] === 'before' ? 0.25 : 0.75),
+                  y: args[1] === 'before' ? r.top + r.height * 0.25 : r.bottom - Math.max(r.height * 0.25, 0.001)};
+        }""", [card_idx, side])
+
+    def _rail_over(self, card_idx, side):
+        self.page.evaluate("""(args) => {
+          const c = args[0];
+          document.querySelectorAll('#tabs-list .tab-card')[args[1]]
+            .dispatchEvent(new DragEvent('dragover', {dataTransfer: window.__btDt, bubbles: true, cancelable: true,
+                                                      clientX: c.x, clientY: c.y}));
+        }""", [self._center_coords(card_idx, side), card_idx])
+
+    def _rail_drop(self, card_idx, side):
+        self.page.evaluate("""(args) => {
+          const c = args[0];
+          const card = document.querySelectorAll('#tabs-list .tab-card')[args[1]];
+          card.dispatchEvent(new DragEvent('drop', {dataTransfer: window.__btDt, bubbles: true, cancelable: true,
+                                                    clientX: c.x, clientY: c.y}));
+          const src = document.querySelector('#browser-tabs-list .bt-tab[data-id="' + window.__btSrc + '"]');
+          if (src) src.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        }""", [self._center_coords(card_idx, side), card_idx])
+        self.page.wait_for_timeout(50)
+
+    def _center_names(self):
+        return json.loads(self.page.evaluate(
+            "JSON.stringify([...document.querySelectorAll('#tabs-list .tab-card .tab-name')].map(e => e.textContent))"))
+
+    def test_ghost_slot_appears_attached_and_visible(self):
+        # Драг рейки по карточке: тёплая заглушка в слоте вставки — в DOM,
+        # видима, одна, перед целевой карточкой
+        load_view(self.page, tabs=self.TABS3, browser_tabs=self.BT)
+        self.page.wait_for_timeout(80)
+        self._rail_drag_start("bt1")
+        self._rail_over(1, 'before')
+        s = json.loads(self.page.evaluate("""(() => {
+          const slot = document.querySelector('#tabs-list .tab-ghost-slot');
+          return JSON.stringify({
+            present: !!slot,
+            inCenter: !!(slot && slot.closest('#tabs-list')),
+            connected: !!(slot && slot.isConnected),
+            display: slot ? getComputedStyle(slot).display : null,
+            count: document.querySelectorAll('.tab-ghost-slot').length
+          });
+        })()"""))
+        assert s["present"] is True and s["inCenter"] is True
+        assert s["connected"] is True and s["count"] == 1
+        assert s["display"] != "none"
+        assert self._slot_order() == ["card", "slot", "card", "card", "other"]
+
+    def test_ghost_tracks_insertion_slot(self):
+        # Заглушка следует за курсором по слотам центра, как у драга карточки
+        load_view(self.page, tabs=self.TABS3, browser_tabs=self.BT)
+        self.page.wait_for_timeout(80)
+        self._rail_drag_start("bt1")
+        self._rail_over(1, 'before')  # перед B
+        assert self._slot_order() == ["card", "slot", "card", "card", "other"]
+        self._rail_over(0, 'before')  # перед A (начало списка)
+        assert self._slot_order() == ["slot", "card", "card", "card", "other"]
+        self._rail_over(2, 'after')  # после C (конец списка)
+        assert self._slot_order() == ["card", "card", "card", "slot", "other"]
+
+    def test_ghost_matches_card_drag_ghost_styling(self):
+        # Заглушка рейки → центр — та же «тёплая» заглушка, что у драга
+        # карточки: .tab-ghost-slot, --ghost-bg/--ghost-ring, размер карточки
+        load_view(self.page, tabs=self.TABS3, browser_tabs=self.BT)
+        self.page.wait_for_timeout(80)
+        self._rail_drag_start("bt1")
+        self._rail_over(1, 'before')
+        s = json.loads(self.page.evaluate("""(() => {
+          const slot = document.querySelector('#tabs-list .tab-ghost-slot');
+          const card = document.querySelectorAll('#tabs-list .tab-card')[0];
+          return JSON.stringify({
+            klass: slot.classList.contains('tab-ghost-slot'),
+            bgToken: slot.style.cssText.indexOf('var(--ghost-bg)') !== -1,
+            dashed: slot.style.borderStyle === 'dashed' && slot.style.cssText.indexOf('var(--ghost-ring)') !== -1,
+            sameSize: slot.offsetWidth === card.offsetWidth && slot.offsetHeight === card.offsetHeight,
+            pointerNone: getComputedStyle(slot).pointerEvents === 'none'
+          });
+        })()"""))
+        assert s["klass"] is True and s["bgToken"] is True
+        assert s["dashed"] is True and s["sameSize"] is True
+        assert s["pointerNone"] is True
+
+    def test_drop_places_card_and_removes_ghost(self):
+        # Дроп в центре: новая карточка в слоте заглушки, заглушки не остаётся
+        load_view(self.page, tabs=self.TABS3, browser_tabs=self.BT)
+        self.page.wait_for_timeout(80)
+        self._rail_drag_start("bt1")
+        self._rail_over(1, 'before')
+        self._rail_drop(1, 'before')
+        assert self.page.evaluate("document.querySelectorAll('.tab-ghost-slot').length") == 0
+        assert self._center_names() == ["A", "Wiki", "B", "C"]
+        tabs = read_storage_raw(self.page, "blattam-tabs")
+        assert [t["url"] for t in tabs] == ["https://a.com", "https://wiki.example",
+                                            "https://b.com", "https://c.com"]
+
+    def test_drop_at_end_appends_and_removes_ghost(self):
+        # Дроп в конце списка: карточка добавляется последней
+        load_view(self.page, tabs=self.TABS3, browser_tabs=self.BT)
+        self.page.wait_for_timeout(80)
+        self._rail_drag_start("bt2")
+        self._rail_over(2, 'after')
+        self._rail_drop(2, 'after')
+        assert self.page.evaluate("document.querySelectorAll('.tab-ghost-slot').length") == 0
+        assert self._center_names() == ["A", "B", "C", "Mail"]
+
+    def test_cancelled_drag_leaves_no_ghost(self):
+        # Отмена драга (dragend без дропа): центральная заглушка снята,
+        # центр не изменился
+        load_view(self.page, tabs=self.TABS3, browser_tabs=self.BT)
+        self.page.wait_for_timeout(80)
+        self._rail_drag_start("bt1")
+        self._rail_over(1, 'before')
+        assert self.page.evaluate("document.querySelectorAll('.tab-ghost-slot').length") == 1
+        self.page.evaluate("""(() => {
+          const src = document.querySelector('#browser-tabs-list .bt-tab[data-id="' + window.__btSrc + '"]');
+          if (src) src.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        })()""")
+        self.page.wait_for_timeout(50)
+        assert self.page.evaluate("document.querySelectorAll('.tab-ghost-slot').length") == 0
+        assert self._center_names() == ["A", "B", "C"]
+
+
+# ==========================================
+#  VIEW.JS: НАСТРОЙКИ (модалка + FAQ)
+# ==========================================
+
+class TestSettingsModal:
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    def _open(self):
+        self.page.locator("#settings-btn").click()
+
+    def _open_state(self):
+        return self.page.evaluate("document.getElementById('settings-modal').classList.contains('open')")
+
+    def test_settings_btn_opens_modal_in_both_themes(self):
+        for theme in (None, "dark"):
+            load_view(self.page, theme=theme)
+            assert not self._open_state()
+            self._open()
+            assert self._open_state()
+
+    def test_settings_title_and_faq_heading(self):
+        load_view(self.page)
+        self._open()
+        assert self.page.evaluate("document.querySelector('#settings-modal .modal h3').textContent") == "Настройки"
+        assert self.page.evaluate("document.querySelector('#settings-modal .settings-section-title').textContent") == "Частые вопросы"
+
+    def test_settings_faq_has_five_items_with_qa(self):
+        load_view(self.page)
+        self._open()
+        qa = json.loads(self.page.evaluate(
+            "JSON.stringify([...document.querySelectorAll('#settings-modal .faq-item')]"
+            ".map(i => ({q: i.querySelector('.faq-q').textContent.trim(), a: i.querySelector('.faq-a').textContent.trim()})))"))
+        assert len(qa) == 5
+        assert all(len(x["q"]) > 0 and len(x["a"]) > 0 for x in qa)
+
+    def test_settings_faq_content(self):
+        load_view(self.page)
+        self._open()
+        text = self.page.evaluate("document.querySelector('#settings-modal .faq-list').textContent")
+        assert "Что такое BlatTabs?" in text
+        assert "Где хранятся данные?" in text
+        assert "chrome.storage.local" in text
+
+    def test_settings_close_via_x(self):
+        load_view(self.page)
+        self._open()
+        assert self._open_state()
+        self.page.locator("#settings-close").click()
+        assert not self._open_state()
+
+    def test_settings_close_via_escape(self):
+        load_view(self.page)
+        self._open()
+        assert self._open_state()
+        self.page.keyboard.press("Escape")
+        assert not self._open_state()
+
+    def test_settings_close_via_overlay_click(self):
+        load_view(self.page)
+        self._open()
+        assert self._open_state()
+        self.page.evaluate("document.getElementById('settings-modal').dispatchEvent(new MouseEvent('click', {bubbles: true}))")
+        assert not self._open_state()

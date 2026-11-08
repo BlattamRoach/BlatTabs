@@ -3,7 +3,7 @@
 Сборка zip для Chrome Web Store.
 
 Запуск: python build_zip.py  (из корня репозитория)
-Результат: dist/BlattamToby-<версия>.zip
+Результат: dist/BlatTabs-<версия>.zip
 
 Состав zip строго задан списком FILES ниже — в архив попадают ТОЛЬКО файлы
 расширения (manifest, скрипты, html, css, иконки). Всё остальное в корне
@@ -58,7 +58,7 @@ def main():
 
     dist_dir = os.path.join(ROOT, "dist")
     os.makedirs(dist_dir, exist_ok=True)
-    out_path = os.path.join(dist_dir, "BlattamToby-v%s.zip" % version)
+    out_path = os.path.join(dist_dir, "BlatTabs-v%s.zip" % version)
 
     with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
         for rel in files:
