@@ -25,6 +25,8 @@
 - **Массовое открытие и удаление** — чекбоксы на карточках + панель «N выбрано / Открыть / Сбросить / Удалить»; «✕ Удалить» — выбранные вкладки удаляются (с подтверждением).
 - **Клавиатурная навигация** — стрелки по карточкам (с зацикливанием), Enter — открыть, Delete — удалить, Esc — сброс.
 - **Тёмная тема** — переключатель 🌙/☀️ в шапке, выбор сохраняется.
+- **Фон** — своя картинка-фон страницы: выбирается в настройках, видна в обеих темах, хранится на устройстве (до ~4 МБ).
+- **Цвет вкладок** — свой цвет карточек сохранённых вкладок: пикер в настройках, работает в обеих темах, хранится на устройстве.
 - **Горячая клавиша** — Ctrl+Shift+S сохраняет текущую вкладку.
 - **Хранилище** — список вкладок — в `chrome.storage.local` (per-device, до ~10 МБ — влезает большая коллекция); пространства и группы — в `chrome.storage.sync` (синхронизация между устройствами).
 - **Экспорт / импорт JSON** — перенос коллекции с папками.
@@ -54,6 +56,8 @@ The design is minimal monochrome, Vercel-style: black/white/grey, Geist font, cr
 - **Bulk open & delete** — checkboxes on cards + «N selected / Open / Clear / Delete» panel; «✕ Delete» removes the selection (with confirmation).
 - **Keyboard navigation** — arrow keys across cards (wrapping), Enter to open, Delete to remove, Esc to reset.
 - **Dark theme** — 🌙/☀️ toggle in the header, choice is persisted.
+- **Background image** — pick a custom background image in the settings; it works in both themes and is stored on the device (up to ~4 MB).
+- **Tab color** — pick a custom color for saved-tab cards in the settings; it works in both themes and is stored on the device.
 - **Hotkey** — Ctrl+Shift+S saves the current tab.
 - **Storage** — the tab list lives in `chrome.storage.local` (per device, up to ~10 MB — large collections fit); spaces and groups live in `chrome.storage.sync` (across devices).
 - **JSON export / import** — migrate your collection with folders.

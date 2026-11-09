@@ -242,7 +242,7 @@
       background: var(--ghost-bg); border-color: var(--ghost-ring); color: var(--text-soft);
     }
     .tab-card {
-      position: relative; border-radius: var(--card-radius); background: var(--card-bg);
+      position: relative; border-radius: var(--card-radius); background: var(--tab-card-bg);
       box-shadow: 0 0 0 1px var(--line);
       transition: box-shadow .12s, transform .12s;
       cursor: pointer; display: flex; flex-direction: column; overflow: hidden;
@@ -433,8 +433,17 @@
     /* Модалка настроек (FAQ) — шире общей .modal; крестик сверху справа;
        блок «Частые вопросы»: заголовок + строка вопроса + приглушённый ответ.
        Только токены (var(--…)) — работает и в светлой, и в тёмной теме */
-    #settings-modal .modal { min-width: 340px; max-width: 420px; padding: 22px 20px; position: relative; }
+    #settings-modal .modal { min-width: 560px; max-width: 640px; width: min(640px, calc(100vw - 24px)); min-height: 440px; padding: 22px 20px; position: relative; display: flex; flex-direction: column; }
     #settings-modal .modal h3 { font-size: 15px; margin-bottom: 16px; }
+    /* Двухпанное окно: слева навигация разделов (.settings-nav — кнопки
+    .settings-nav-item: активная — --hover + --ink, неактивная — --text-soft),
+    справа — контент (.settings-main, скроллится внутри модалки). Только токены */
+    #settings-modal .settings-grid { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 10px 18px; }
+    #settings-modal .settings-nav { display: flex; flex-direction: column; gap: 4px; }
+    #settings-modal .settings-nav-item { height: 30px; padding: 0 12px; border: 0; border-radius: 6px; background: transparent; text-align: left; font: 500 13px/1 var(--font-ui); color: var(--text-soft); cursor: pointer; transition: background .12s, color .12s; }
+    #settings-modal .settings-nav-item:hover { background: var(--hover); }
+    #settings-modal .settings-nav-item.active { background: var(--hover); color: var(--ink); }
+    #settings-modal .settings-main { min-height: 0; overflow-y: auto; }
     #settings-modal .modal-close {
       position: absolute; top: 14px; right: 14px; width: 26px; height: 26px;
       display: flex; align-items: center; justify-content: center;
@@ -446,6 +455,16 @@
     #settings-modal .settings-section-title {
       font-size: 11px; font-weight: 600; letter-spacing: .4px; text-transform: uppercase;
       color: var(--text-muted); margin: 0 0 12px;
+    }    #settings-modal .bg-row { display: flex; gap: 8px; }
+    #settings-modal .tab-color-row { display: flex; align-items: center; gap: 8px; }
+    #settings-modal #tab-color-input {
+      width: 34px; height: 28px; padding: 2px; border: 0; border-radius: 6px;
+      box-shadow: 0 0 0 1px var(--line); background: var(--bg); cursor: pointer;
+    }
+    #settings-modal #bg-preview {
+      display: block; width: 100%; height: 64px; object-fit: cover;
+      border-radius: var(--card-radius); box-shadow: 0 0 0 1px var(--line);
+      margin-top: 10px;
     }
     #settings-modal .faq-item { margin-bottom: 14px; }
     #settings-modal .faq-item:last-child { margin-bottom: 0; }
@@ -552,6 +571,7 @@
   </div>
 
   <input type="file" id="import-input" accept=".json" style="display:none;">
+  <input type="file" id="bg-file-input" accept="image/*" style="display:none;">
 
   <!-- Selection bar -->
   <div id="selection-bar" class="selection-bar hidden">
@@ -593,6 +613,33 @@
     <div class="modal">
       <button class="modal-close" id="settings-close" title="Закрыть" aria-label="Закрыть">✕</button>
       <h3>Настройки</h3>
+      <!-- Две панели: слева навигация разделов, справа — контент активного раздела -->
+      <div class="settings-grid">
+        <nav class="settings-nav" aria-label="Разделы настроек">
+          <button class="settings-nav-item active" data-section="customization">Кастомизация</button>
+          <button class="settings-nav-item" data-section="faq">FAQ</button>
+        </nav>
+        <div class="settings-main">
+          <div class="settings-pane" id="settings-pane-customization">
+      <!-- Фон — custom background image (blattam-bg-image, data URL, local) -->
+      <section class="settings-section" id="bg-section">
+        <h4 class="settings-section-title">Фон</h4>
+        <div class="bg-row">
+          <button class="btn btn-ghost" id="bg-file-btn" title="Выбрать картинку для фона">Выбрать картинку</button>
+          <button class="btn btn-ghost" id="bg-clear-btn" style="display:none;">Убрать</button>
+        </div>
+        <img id="bg-preview" style="display:none;" alt="Превью фона">
+      </section>
+      <!-- Цвет вкладок — кастомный фон карточек (blattam-tab-color, hex, local) -->
+      <section class="settings-section" id="tab-color-section">
+        <h4 class="settings-section-title">Цвет вкладок</h4>
+        <div class="tab-color-row">
+          <input type="color" id="tab-color-input" title="Цвет карточек сохранённых вкладок">
+          <button class="btn btn-ghost" id="tab-color-reset" style="display:none;">Сбросить</button>
+        </div>
+      </section>
+          </div>
+          <div class="settings-pane" id="settings-pane-faq" style="display:none;">
       <section class="settings-section">
         <h4 class="settings-section-title">Частые вопросы</h4>
         <div class="faq-list">
@@ -618,6 +665,9 @@
           </div>
         </div>
       </section>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 

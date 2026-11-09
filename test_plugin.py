@@ -11,6 +11,7 @@ import os
 import re
 import pytest
 import struct
+import zlib
 import zipfile
 from playwright.sync_api import sync_playwright
 
@@ -487,7 +488,8 @@ POPUP_DOM = body_dom("popup.html")
 
 
 def load_view(pg, tabs=None, spaces=None, groups=None, folders=None,
-              last_space=None, theme=None, confirm=False, browser_tabs=None):
+              last_space=None, theme=None, confirm=False, browser_tabs=None,
+              bg=None, tab_color=None):
     """about:blank + mock + данные + DOM view.html + view.js.
 
     browser_tabs — список открытых вкладок браузера (chrome.tabs._tabs):
@@ -507,6 +509,10 @@ def load_view(pg, tabs=None, spaces=None, groups=None, folders=None,
         init.append("chrome.storage._data['blattam-last-space'] = " + json.dumps(last_space) + ";")
     if theme is not None:
         init.append("chrome.storage.local._data['blattam-theme'] = " + json.dumps(theme) + ";")
+    if bg is not None:
+        init.append("chrome.storage.local._data['blattam-bg-image'] = " + json.dumps(bg) + ";")
+    if tab_color is not None:
+        init.append("chrome.storage.local._data['blattam-tab-color'] = " + json.dumps(tab_color) + ";")
     if confirm:
         init.append("window.confirm = () => true;")
     pg.goto("about:blank")
@@ -10308,7 +10314,7 @@ class TestSettingsModal:
         load_view(self.page)
         self._open()
         assert self.page.evaluate("document.querySelector('#settings-modal .modal h3').textContent") == "Настройки"
-        assert self.page.evaluate("document.querySelector('#settings-modal .settings-section-title').textContent") == "Частые вопросы"
+        assert self.page.evaluate("document.querySelector('#settings-modal section:has(.faq-list) .settings-section-title').textContent") == "Частые вопросы"
 
     def test_settings_faq_has_five_items_with_qa(self):
         load_view(self.page)
@@ -10347,3 +10353,307 @@ class TestSettingsModal:
         assert self._open_state()
         self.page.evaluate("document.getElementById('settings-modal').dispatchEvent(new MouseEvent('click', {bubbles: true}))")
         assert not self._open_state()
+
+
+def _tiny_png_bytes():
+    """1x1 RGB PNG (красный пиксель) — реальный файл для FileReader-тестов."""
+    def chunk(typ, data):
+        c = struct.pack(">I", len(data)) + typ + data
+        return c + struct.pack(">I", zlib.crc32(typ + data) & 0xFFFFFFFF)
+    ihdr = struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0)
+    idat = zlib.compress(b"\x00\xff\x00\x00")
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", idat) + chunk(b"IEND", b"")
+
+
+TINY_PNG = _tiny_png_bytes()
+
+
+class TestSettingsBackground:
+    """«Фон» в настройках: кастомная картинка-фон (blattam-bg-image, data URL, local)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self.page_errors = []
+        self._on_pageerror = lambda exc: self.page_errors.append(str(exc))
+        self.page.on("pageerror", self._on_pageerror)
+        yield
+        self.page.remove_listener("pageerror", self._on_pageerror)
+
+    def _open(self):
+        self.page.locator("#settings-btn").click()
+
+    def _body_bg(self):
+        return self.page.evaluate("getComputedStyle(document.body).backgroundImage")
+
+    def _center_bg(self):
+        return self.page.evaluate(
+            "getComputedStyle(document.getElementById('center-pane')).backgroundImage")
+
+    def _set_file(self, buf=TINY_PNG, name="img.png", mime="image/png"):
+        self.page.set_input_files("#bg-file-input", [{"name": name, "mimeType": mime, "buffer": buf}])
+        self.page.wait_for_timeout(200)  # FileReader — async
+
+    def test_bg_section_present_default_hidden(self):
+        for theme in (None, "dark"):
+            load_view(self.page, theme=theme)
+            self._open()
+            # «Фон» — новый раздел НАД «Частые вопросы», тот же стиль заголовка
+            titles = json.loads(self.page.evaluate(
+                "JSON.stringify([...document.querySelectorAll('#settings-modal .settings-section-title')]"
+                ".map(el => el.textContent.trim()))"))
+            assert titles == ["Фон", "Цвет вкладок", "Частые вопросы"]
+            assert self.page.evaluate("document.getElementById('bg-file-btn').textContent.trim()") == "Выбрать картинку"
+            assert self.page.evaluate("document.getElementById('bg-clear-btn').textContent.trim()") == "Убрать"
+            # скрытый input-файла рядом с #import-input
+            assert self.page.evaluate("document.getElementById('bg-file-input').type") == "file"
+            assert self.page.evaluate("document.getElementById('bg-file-input').accept") == "image/*"
+            # default: preview и «Убрать» скрыты, фона нет
+            assert self.page.evaluate("document.getElementById('bg-preview').style.display") == "none"
+            assert self.page.evaluate("document.getElementById('bg-clear-btn').style.display") == "none"
+            assert self._body_bg() == "none"
+
+    def test_bg_set_file_applies_background(self):
+        load_view(self.page)
+        self._open()
+        self._set_file()
+        stored = self.page.evaluate("chrome.storage.local._data['blattam-bg-image']")
+        assert isinstance(stored, str) and stored.startswith("data:image/png;base64,")
+        # body и центр (визуальный фон) — картинка применена
+        assert self._body_bg().startswith("url(") and stored in self._body_bg()
+        assert self._center_bg().startswith("url(") and stored in self._center_bg()
+        # cover/center/fixed
+        cs = json.loads(self.page.evaluate("JSON.stringify(getComputedStyle(document.body))"))
+        assert (cs["backgroundSize"], cs["backgroundPositionX"], cs["backgroundAttachment"]) == ("cover", "50%", "fixed")
+        # превью + «Убрать» видны
+        prev = json.loads(self.page.evaluate(
+            "JSON.stringify({src: document.getElementById('bg-preview').src, d: document.getElementById('bg-preview').style.display})"))
+        assert prev["d"] == "block" and prev["src"].startswith("data:image/png;base64,")
+        assert self.page.evaluate("document.getElementById('bg-clear-btn').style.display") != "none"
+
+    def test_bg_persists_across_reload(self):
+        load_view(self.page)
+        self._set_file()
+        stored = self.page.evaluate("chrome.storage.local._data['blattam-bg-image']")
+        assert stored and stored.startswith("data:")
+        # пересоздаём страницу с тем же ключом в local — фон применяется при init
+        load_view(self.page, bg=stored)
+        assert self._body_bg().startswith("url(") and stored in self._body_bg()
+        assert self.page.evaluate("document.getElementById('bg-preview').style.display") == "block"
+        assert self.page.evaluate("document.getElementById('bg-clear-btn').style.display") != "none"
+
+    def test_bg_clear_removes_background(self):
+        load_view(self.page)
+        self._open()
+        self._set_file()
+        assert self.page.evaluate("chrome.storage.local._data['blattam-bg-image']") is not None
+        self.page.locator("#bg-clear-btn").click()
+        assert self.page.evaluate("'blattam-bg-image' in chrome.storage.local._data") is False
+        assert self._body_bg() == "none"
+        assert self._center_bg() == "none"
+        assert self.page.evaluate("document.getElementById('bg-preview').style.display") == "none"
+        assert self.page.evaluate("document.getElementById('bg-clear-btn').style.display") == "none"
+
+    def test_bg_oversized_file_rejected(self):
+        load_view(self.page)
+        self.page.evaluate("""(() => {
+          window.alert = (m) => { window.__lastAlert = m; };
+          function BigReader() {}
+          BigReader.prototype.readAsDataURL = function() {
+            const self = this;
+            setTimeout(() => { if (self.onload) self.onload({ target: { result: 'data:image/png;base64,' + 'A'.repeat(4500000) } }); }, 0);
+          };
+          window.FileReader = BigReader;
+          return 1;
+        })()""")
+        self._set_file()
+        assert "слишком большая" in (self.page.evaluate("window.__lastAlert") or "")
+        assert self.page.evaluate("'blattam-bg-image' in chrome.storage.local._data") is False
+        assert self._body_bg() == "none"
+        assert self.page.evaluate("document.getElementById('bg-preview').style.display") == "none"
+
+    def test_bg_onchanged_updates_live(self):
+        load_view(self.page)
+        data_url = "data:image/png;base64," + "Q" * 100
+        self.page.evaluate("chrome.storage.local.set({'blattam-bg-image': " + json.dumps(data_url) + "})")
+        self.page.wait_for_timeout(50)
+        assert self._body_bg().startswith("url(") and data_url in self._body_bg()
+        assert self.page.evaluate("document.getElementById('bg-preview').style.display") == "block"
+        # внешняя запись '' — снимает фон
+        self.page.evaluate("chrome.storage.local.set({'blattam-bg-image': ''})")
+        self.page.wait_for_timeout(50)
+        assert self._body_bg() == "none"
+        assert self.page.evaluate("document.getElementById('bg-preview').style.display") == "none"
+
+    def test_bg_dark_theme_visible(self):
+        data_url = "data:image/png;base64," + "Q" * 100
+        load_view(self.page, theme="dark", bg=data_url)
+        assert self.page.evaluate("document.documentElement.dataset.theme") == "dark"
+        assert self._body_bg().startswith("url(") and data_url in self._body_bg()
+        # центр (тёмный непрозрачный --bg) тоже держит картинку — фон виден
+        assert self._center_bg().startswith("url(") and data_url in self._center_bg()
+        assert self.page.evaluate("document.getElementById('bg-preview').style.display") == "block"
+
+    def test_bg_flow_no_page_errors(self):
+        load_view(self.page)
+        self._open()
+        self._set_file()
+        self.page.locator("#bg-clear-btn").click()
+        data_url = "data:image/png;base64," + "Q" * 100
+        self.page.evaluate("chrome.storage.local.set({'blattam-bg-image': " + json.dumps(data_url) + "})")
+        self.page.wait_for_timeout(50)
+        load_view(self.page, bg=data_url)
+        assert self.page_errors == [], self.page_errors
+
+
+class TestSettingsTabColor:
+    """«Цвет вкладок» в настройках: кастомный фон карточек (blattam-tab-color, hex, local)."""
+
+    LIGHT_DEFAULT = "rgb(245, 245, 245)"   # --card-bg / --tab-card-bg светлой темы
+    DARK_DEFAULT = "rgb(54, 49, 45)"       # --card-bg / --tab-card-bg тёмной темы
+    LIGHT_SELECTED = "rgb(239, 232, 233)"  # --selected-bg светлой темы
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self.page_errors = []
+        self._on_pageerror = lambda exc: self.page_errors.append(str(exc))
+        self.page.on("pageerror", self._on_pageerror)
+        yield
+        self.page.remove_listener("pageerror", self._on_pageerror)
+
+    def _inject_css(self):
+        # реальный CSS (theme.css + <style> view.html) — для computed-style проверок
+        theme = open(f"{EXT_PATH}/theme.css", encoding="utf-8").read()
+        html = open(f"{EXT_PATH}/view.html", encoding="utf-8").read()
+        style = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate(
+            "(() => { const st = document.createElement('style'); st.textContent = "
+            + json.dumps(theme + style)
+            + "; (document.head || document.documentElement).appendChild(st); })()")
+
+    def _load(self, **kw):
+        load_view(self.page, **kw)
+        self._inject_css()
+
+    def _open(self):
+        self.page.locator("#settings-btn").click()
+
+    def _card_bg(self, selector=".tab-card"):
+        return self.page.evaluate(
+            "getComputedStyle(document.querySelector(" + json.dumps(selector)
+            + ")).backgroundColor")
+
+    def _set_color(self, hex_val):
+        self.page.evaluate(
+            "(() => { const i = document.getElementById('tab-color-input'); i.value = "
+            + json.dumps(hex_val)
+            + "; i.dispatchEvent(new Event('input', {bubbles: true})); })()")
+
+    def _stored(self):
+        return self.page.evaluate("chrome.storage.local._data['blattam-tab-color']")
+
+    def _reset_visible(self):
+        return self.page.evaluate(
+            "document.getElementById('tab-color-reset').style.display") != "none"
+
+    def _tabs(self, n=2):
+        return [{"name": f"Вкладка {i}", "url": f"https://example.com/{i}"} for i in range(1, n + 1)]
+
+    def test_tab_color_section_present_default(self):
+        for theme, default, picker in ((None, self.LIGHT_DEFAULT, "#f5f5f5"),
+                                       ("dark", self.DARK_DEFAULT, "#36312d")):
+            self._load(tabs=self._tabs(), theme=theme)
+            self._open()
+            # «Цвет вкладок» — раздел между «Фоном» и «Частыми вопросами»
+            titles = json.loads(self.page.evaluate(
+                "JSON.stringify([...document.querySelectorAll('#settings-modal .settings-section-title')]"
+                ".map(el => el.textContent.trim()))"))
+            assert titles == ["Фон", "Цвет вкладок", "Частые вопросы"]
+            assert self.page.evaluate("document.getElementById('tab-color-input').type") == "color"
+            assert self.page.evaluate(
+                "document.getElementById('tab-color-reset').textContent.trim()") == "Сбросить"
+            assert not self._reset_visible()
+            # дефолт — фон карточки темы; пикер показывает активный цвет темы
+            assert self._card_bg() == default
+            assert self.page.evaluate("document.getElementById('tab-color-input').value") == picker
+            assert self._stored() is None
+
+    def test_tab_color_set_applies(self):
+        self._load(tabs=self._tabs())
+        self._open()
+        self._set_color("#336699")
+        assert self._stored() == "#336699"
+        assert self._card_bg() == "rgb(51, 102, 153)"
+        assert self._reset_visible()
+
+    def test_tab_color_dark_theme(self):
+        self._load(tabs=self._tabs(), theme="dark")
+        assert self.page.evaluate("document.documentElement.dataset.theme") == "dark"
+        assert self._card_bg() == self.DARK_DEFAULT
+        self._open()
+        self._set_color("#336699")
+        assert self._stored() == "#336699"
+        assert self._card_bg() == "rgb(51, 102, 153)"
+        assert self._reset_visible()
+
+    def test_tab_color_persists_across_reload(self):
+        self._load(tabs=self._tabs())
+        self._open()
+        self._set_color("#336699")
+        stored = self._stored()
+        assert stored == "#336699"
+        # пересоздаём страницу с тем же ключом в local — цвет применяется при init
+        self._load(tabs=self._tabs(), tab_color=stored)
+        assert self._card_bg() == "rgb(51, 102, 153)"
+        assert self.page.evaluate("document.getElementById('tab-color-input').value") == "#336699"
+        assert self._reset_visible()
+
+    def test_tab_color_reset(self):
+        for theme, default in ((None, self.LIGHT_DEFAULT), ("dark", self.DARK_DEFAULT)):
+            self._load(tabs=self._tabs(), theme=theme, tab_color="#336699")
+            assert self._card_bg() == "rgb(51, 102, 153)"
+            self._open()
+            assert self._reset_visible()
+            self.page.locator("#tab-color-reset").click()
+            assert self._stored() is None
+            assert self._card_bg() == default
+            assert not self._reset_visible()
+
+    def test_tab_color_onchanged_updates_live(self):
+        self._load(tabs=self._tabs())
+        self.page.evaluate("chrome.storage.local.set({'blattam-tab-color': '#123456'})")
+        self.page.wait_for_timeout(50)
+        assert self._card_bg() == "rgb(18, 52, 86)"
+        assert self._reset_visible()
+        # внешняя запись '' — цвет сбрасывается
+        self.page.evaluate("chrome.storage.local.set({'blattam-tab-color': ''})")
+        self.page.wait_for_timeout(50)
+        assert self._card_bg() == self.LIGHT_DEFAULT
+        assert not self._reset_visible()
+
+    def test_tab_color_selected_card_keeps_selected_bg(self):
+        self._load(tabs=self._tabs(2))
+        self._open()
+        self._set_color("#336699")
+        self.page.keyboard.press("Escape")  # закрыть модалку, чтобы кликнуть карточку
+        self.page.evaluate("document.querySelector('.tab-card .tab-select').click()")
+        cards = json.loads(self.page.evaluate(
+            "JSON.stringify([...document.querySelectorAll('.tab-card')].map(c => ({cls: c.className, bg: getComputedStyle(c).backgroundColor})))"))
+        sel = [c for c in cards if "selected" in c["cls"]]
+        base = [c for c in cards if "selected" not in c["cls"]]
+        assert len(sel) == 1 and len(base) == 1
+        assert sel[0]["bg"] == self.LIGHT_SELECTED
+        assert base[0]["bg"] == "rgb(51, 102, 153)"
+
+    def test_tab_color_flow_no_page_errors(self):
+        self._load(tabs=self._tabs())
+        self._open()
+        self._set_color("#336699")
+        self.page.locator("#tab-color-reset").click()
+        self.page.evaluate("chrome.storage.local.set({'blattam-tab-color': '#123456'})")
+        self.page.wait_for_timeout(50)
+        self._load(tabs=self._tabs(), tab_color="#336699")
+        self._open()
+        assert self._reset_visible()
+        assert self.page_errors == [], self.page_errors

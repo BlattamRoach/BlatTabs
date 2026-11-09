@@ -15,6 +15,68 @@ chrome.storage.local.get(['blattam-theme'], (result) => {
   applyTheme(result['blattam-theme'] === 'dark' ? 'dark' : 'light');
 });
 
+// === Фон (кастомная картинка-фон) ===
+// blattam-bg-image — data URL (большой ключ — только chrome.storage.local;
+// лимит ~4 МБ, проверка по длине data URL при выборе файла). Применяем
+// сохранённый фон там же, где тему — ДО первого рендера (без «вспышки»).
+function applyBackgroundImage(dataUrl) {
+  // .center (центр) имеет собственный непрозрачный фон var(--bg), перекрывающий
+  // body (рейки — var(--rail-bg)) — картинку вешаем и на body, и на центр:
+  // визуально фон за центральной областью (обработчик вешает оба инлайн-стиля,
+  // тема не влияет: background-color темы остаётся под картинкой).
+  const targets = [document.body, document.getElementById('center-pane')];
+  targets.forEach((el) => {
+    if (!el) return;
+    if (dataUrl) {
+      el.style.backgroundImage = 'url("' + dataUrl + '")';
+      el.style.backgroundSize = 'cover';
+      el.style.backgroundPosition = 'center';
+      el.style.backgroundAttachment = 'fixed';
+    } else {
+      ['background-image', 'background-size', 'background-position', 'background-attachment']
+        .forEach((prop) => el.style.removeProperty(prop));
+    }
+  });
+  const preview = document.getElementById('bg-preview');
+  const clearBtn = document.getElementById('bg-clear-btn');
+  if (preview) {
+    preview.style.display = dataUrl ? 'block' : 'none';
+    if (dataUrl) preview.src = dataUrl;
+  }
+  if (clearBtn) clearBtn.style.display = dataUrl ? '' : 'none';
+}
+
+chrome.storage.local.get(['blattam-bg-image'], (result) => {
+  applyBackgroundImage(result['blattam-bg-image'] || '');
+});
+
+// === Цвет вкладок (кастомный фон карточек) ===
+// blattam-tab-color — hex (например '#8a6d5c'); пустое значение — токены темы.
+// Применяем там же, где тему и фон — ДО первого рендера (без «вспышки»):
+// цвет живёт в инлайн-стиле documentElement (переопределяет --tab-card-bg),
+// поэтому переживает перерисовку карточек и смену темы (токен сбрасывается).
+function themeCardBgHex() {
+  // текущий фон карточки темы (для дефолтного значения пикера) — из токена, не литерала
+  return getComputedStyle(document.documentElement).getPropertyValue('--card-bg').trim();
+}
+
+function applyTabCardColor(hex) {
+  const root = document.documentElement;
+  if (hex) root.style.setProperty('--tab-card-bg', hex);
+  else root.style.removeProperty('--tab-card-bg'); // токены темы возвращают дефолт
+  const input = document.getElementById('tab-color-input');
+  const resetBtn = document.getElementById('tab-color-reset');
+  if (input) {
+    const val = hex || themeCardBgHex();
+    if (val) input.value = val;
+  }
+  if (resetBtn) resetBtn.style.display = hex ? '' : 'none';
+}
+
+chrome.storage.local.get(['blattam-tab-color'], (result) => {
+  applyTabCardColor(result['blattam-tab-color'] || '');
+});
+
 themeBtn.addEventListener('click', () => {
   const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
   applyTheme(next);
@@ -488,6 +550,11 @@ const settingsBtn = document.getElementById('settings-btn');
 function openSettingsModal() {
   settingsModal.classList.add('open');
   setModalOpen('settings');
+  setSettingsSection('customization'); // при каждом открытии — «Кастомизация»
+  // пикер «Цвет вкладок» показывает актуальное значение (из local-хранилища)
+  chrome.storage.local.get(['blattam-tab-color'], (r) => {
+    applyTabCardColor(r['blattam-tab-color'] || '');
+  });
 }
 
 function closeSettingsModal() {
@@ -505,6 +572,74 @@ settingsModal.addEventListener('click', (e) => {
 document.addEventListener('keydown', (e) => {
   if (settingsModal.classList.contains('open') && e.key === 'Escape') closeSettingsModal();
 });
+
+// Двухпанное окно: слева навигация разделов («Кастомизация»/«FAQ» — кнопки
+// .settings-nav-item), справа — контент; виден только активный
+// (#settings-pane-customization / #settings-pane-faq, display:none у неактивной).
+// Состояние — module-переменная по id раздела (переживает перерисовку, идемпотентна);
+// клик по навигации модалку НЕ закрывает — close-по-фону скоуплен на сам оверлей
+// (e.target === settingsModal), а клик по пункту — только по внутренней кнопке.
+let settingsSection = 'customization';
+const settingsNavItems = [...settingsModal.querySelectorAll('.settings-nav-item')];
+function setSettingsSection(id) {
+  if (!settingsNavItems.some((b) => b.dataset.section === id)) id = 'customization';
+  settingsSection = id;
+  settingsNavItems.forEach((b) => b.classList.toggle('active', b.dataset.section === id));
+  ['customization', 'faq'].forEach((s) => {
+    const pane = document.getElementById('settings-pane-' + s);
+    if (pane) pane.style.display = (s === id) ? '' : 'none';
+  });
+}
+settingsNavItems.forEach((btn) => {
+  btn.addEventListener('click', () => setSettingsSection(btn.dataset.section));
+});
+
+// «Фон» в настройках: картинка → data URL → blattam-bg-image (local).
+const bgFileBtn = document.getElementById('bg-file-btn');
+const bgFileInput = document.getElementById('bg-file-input');
+const bgClearBtn = document.getElementById('bg-clear-btn');
+
+bgFileBtn.addEventListener('click', () => bgFileInput.click());
+
+bgFileInput.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  e.target.value = ''; // сброс input — тот же файл можно выбрать повторно
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (event) => {
+    const dataUrl = String(event.target.result || '');
+    if (dataUrl.length > 4000000) {
+      alert('Картинка слишком большая (максимум ~4 МБ)');
+      return;
+    }
+    chrome.storage.local.set({ 'blattam-bg-image': dataUrl });
+    applyBackgroundImage(dataUrl);
+  };
+  reader.readAsDataURL(file);
+});
+
+bgClearBtn.addEventListener('click', () => {
+  chrome.storage.local.remove('blattam-bg-image');
+  applyBackgroundImage('');
+});
+
+// «Цвет вкладок» в настройках: пикер → blattam-tab-color (local), live-применение.
+const tabColorInput = document.getElementById('tab-color-input');
+const tabColorResetBtn = document.getElementById('tab-color-reset');
+
+if (tabColorInput) {
+  tabColorInput.addEventListener('input', () => {
+    chrome.storage.local.set({ 'blattam-tab-color': tabColorInput.value });
+    applyTabCardColor(tabColorInput.value);
+  });
+}
+
+if (tabColorResetBtn) {
+  tabColorResetBtn.addEventListener('click', () => {
+    chrome.storage.local.remove('blattam-tab-color');
+    applyTabCardColor('');
+  });
+}
 
 // === Открытие вкладок (единый путь: background создаёт browser-tab) ===
 
@@ -2034,6 +2169,17 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
       browserTabs = changes['blattam-browser-tabs'].newValue || [];
       renderBrowserTabs();
       return;
+    }
+    // «Фон»: применяем/снимаем картинку как при записи из настроек, так и
+    // при внешнем изменении (другое окно расширения); идемпотентно,
+    // перерисовка карточек не нужна.
+    if (changes['blattam-bg-image']) {
+      applyBackgroundImage(changes['blattam-bg-image'].newValue || '');
+    }
+    // «Цвет вкладок» (blattam-tab-color): применяем/снимаем кастомный цвет;
+    // идемпотентно (инлайн-стиль documentElement), перерисовка карточек не нужна.
+    if (changes['blattam-tab-color']) {
+      applyTabCardColor(changes['blattam-tab-color'].newValue || '');
     }
     return;
   }
