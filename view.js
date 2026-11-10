@@ -821,9 +821,21 @@ function appendGroupBar(g, memberCount) {
   bar.appendChild(chev);
   bar.appendChild(name);
   bar.appendChild(count);
+  // ⧉ — открыть ВСЕ вкладки группы в новых вкладках браузера (hover-контрол,
+  // тот же путь, что клик по карточке — openUrl для каждой вкладки группы)
+  const gopenall = document.createElement('button');
+  gopenall.className = 'gopenall';
+  gopenall.textContent = '\u29C9';
+  gopenall.title = 'Открыть все вкладки группы';
+  gopenall.addEventListener('click', (e) => {
+    e.stopPropagation();
+    allTabs.filter(t => t.spaceId === g.spaceId && t.groupId === g.id).forEach(t => openUrl(t.url));
+  });
+
   bar.appendChild(gselect);
   bar.appendChild(grename);
   bar.appendChild(del);
+  bar.appendChild(gopenall);
 
   // DnD-источник: шапку можно перетащить на другую шапку (reorder групп
   // внутри пространства). Пейлоад: id группы (у карточки — индекс вкладки).
@@ -831,7 +843,7 @@ function appendGroupBar(g, memberCount) {
   // Кнопки шапки (☑/✎/✕) не стартуют drag: нажатие на них временно снимает
   // draggable, иначе движение >~5px во время press уносит drag-ом шапку и
   // click по кнопке теряется (реальный Chrome).
-  guardDragOverButtons(bar, '.gselect, .grename, .gdel');
+  guardDragOverButtons(bar, '.gselect, .grename, .gdel, .gopenall');
   bar.addEventListener('dragstart', (e) => {
     if (!bar.draggable) { e.preventDefault(); return; } // press начался на кнопке
     // Нативный HTML5-драг отменяется, когда press ведёт pointer-путь: свой

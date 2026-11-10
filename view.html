@@ -204,16 +204,16 @@
     }
     .gbar:hover .gdel { opacity: 1; }
     .gbar .gdel:hover { background: var(--bg); box-shadow: 0 0 0 1px var(--line); color: var(--text); }
-    /* Hover-контролы шапки группы: ☑ выбрать все вкладки группы / ✎ переименовать */
-    .gbar .gselect, .gbar .grename {
+    /* Hover-контролы шапки группы: ☑ выбрать все вкладки группы / ✎ переименовать / ⧉ открыть все вкладки группы */
+    .gbar .gselect, .gbar .grename, .gbar .gopenall {
       flex: none; width: 18px; height: 18px; border: 0; border-radius: 50%; padding: 0;
       display: grid; place-items: center; background: transparent;
       font: 400 11px/1 var(--font-ui); color: var(--text-faint);
       opacity: 0; transition: opacity .12s, background .1s, color .1s;
     }
     /* Контролы идут сразу после счётчика (слева), а не прижаты к правому краю */
-    .gbar:hover .gselect, .gbar:hover .grename { opacity: 1; }
-    .gbar .gselect:hover, .gbar .grename:hover { background: var(--bg); box-shadow: 0 0 0 1px var(--line); color: var(--text); }
+    .gbar:hover .gselect, .gbar:hover .grename, .gbar:hover .gopenall { opacity: 1; }
+    .gbar .gselect:hover, .gbar .grename:hover, .gbar .gopenall:hover { background: var(--bg); box-shadow: 0 0 0 1px var(--line); color: var(--text); }
     .gbar .gselect.on { opacity: 1; background: var(--ink); color: var(--on-ink); box-shadow: none; }
     /* Инлайн-ренейм группы — как .tab-name-input, но по высоте шапки */
     .gbar .gname-input {

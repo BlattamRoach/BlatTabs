@@ -6878,6 +6878,103 @@ class TestGroupControlsDragGuard:
 
 
 # ==========================================
+#  VIEW.JS: ⧉ ОТКРЫТЬ ВСЕ ВКЛАДКИ ГРУППЫ (кнопка в шапке)
+# ==========================================
+
+class TestGroupOpenAll:
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    SP = [{"id": "sp1", "name": "Main"}]
+    GROUPS = [
+        {"id": "g1", "name": "Dev", "spaceId": "sp1", "collapsed": False},
+        {"id": "g2", "name": "Work", "spaceId": "sp1", "collapsed": False},
+    ]
+    TABS = [
+        {"name": "D1", "url": "https://d1.com", "spaceId": "sp1", "groupId": "g1"},
+        {"name": "D2", "url": "https://d2.com", "spaceId": "sp1", "groupId": "g1"},
+        {"name": "W1", "url": "https://w1.com", "spaceId": "sp1", "groupId": "g2"},
+        {"name": "L1", "url": "https://l1.com", "spaceId": "sp1"},
+    ]
+
+    def _opened_urls(self):
+        return json.loads(self.page.evaluate(
+            "JSON.stringify(chrome.runtime.messagesSent.filter(m => m.action === 'open-one').map(m => m.url))"))
+
+    def test_button_in_gbar_controls(self):
+        load_view(self.page, spaces=self.SP, groups=self.GROUPS, tabs=self.TABS)
+        d = self.page.evaluate("""(() => {
+          return Array.from(document.querySelectorAll('.gbar')).map(b => {
+            const el = b.querySelector('.gopenall');
+            return el ? { text: el.textContent, title: el.title, isLast: b.lastElementChild === el } : null;
+          });
+        })()""")
+        assert len(d) == 2, d
+        for b in d:
+            assert b is not None, d
+            assert b["text"] == "\u29c9" and b["title"] == "Открыть все вкладки группы", b
+            assert b["isLast"], "⧉ идёт в конце ряда контролов (после ✕)"
+
+    def test_click_opens_group_tabs(self):
+        load_view(self.page, spaces=self.SP, groups=self.GROUPS, tabs=self.TABS)
+        self.page.evaluate('document.querySelector(".gbar[data-group-id=\\"g1\\"] .gopenall").click()')
+        assert self._opened_urls() == ["https://d1.com", "https://d2.com"]
+        assert self.page.evaluate("chrome.tabs.createdTabs.length") == 2
+
+    def test_other_groups_and_loose_tabs_not_opened(self):
+        load_view(self.page, spaces=self.SP, groups=self.GROUPS, tabs=self.TABS)
+        self.page.evaluate('document.querySelector(".gbar[data-group-id=\\"g1\\"] .gopenall").click()')
+        created = json.loads(self.page.evaluate(
+            "JSON.stringify(chrome.tabs.createdTabs.map(t => t.url))"))
+        assert set(created) == {"https://d1.com", "https://d2.com"}, created
+        assert "https://w1.com" not in created and "https://l1.com" not in created
+
+    def test_works_when_group_collapsed(self):
+        groups = [{"id": "g1", "name": "Dev", "spaceId": "sp1", "collapsed": True}]
+        tabs = [
+            {"name": "D1", "url": "https://d1.com", "spaceId": "sp1", "groupId": "g1"},
+            {"name": "D2", "url": "https://d2.com", "spaceId": "sp1", "groupId": "g1"},
+        ]
+        load_view(self.page, spaces=self.SP, groups=groups, tabs=tabs)
+        bar = self.page.evaluate(
+            "document.querySelector('.gbar[data-group-id=\"g1\"]').classList.contains('gbar-collapsed')")
+        assert bar is True
+        self.page.evaluate('document.querySelector(".gbar[data-group-id=\\"g1\\"] .gopenall").click()')
+        assert self._opened_urls() == ["https://d1.com", "https://d2.com"]
+
+    def test_empty_group_noop(self):
+        groups = [{"id": "g3", "name": "Empty", "spaceId": "sp1", "collapsed": False}]
+        load_view(self.page, spaces=self.SP, groups=groups, tabs=[])
+        self.page.evaluate('document.querySelector(".gbar[data-group-id=\\"g3\\"] .gopenall").click()')
+        assert self.page.evaluate(
+            "chrome.runtime.messagesSent.filter(m => m.action === 'open-one').length") == 0
+        assert self.page.evaluate("chrome.tabs.createdTabs.length") == 0
+
+    def test_button_present_expanded_and_collapsed(self):
+        groups = [
+            {"id": "g1", "name": "Dev", "spaceId": "sp1", "collapsed": False},
+            {"id": "g2", "name": "Work", "spaceId": "sp1", "collapsed": True},
+        ]
+        load_view(self.page, spaces=self.SP, groups=groups, tabs=self.TABS)
+        d = self.page.evaluate("""(() => {
+          const b1 = document.querySelector('.gbar[data-group-id="g1"]');
+          const b2 = document.querySelector('.gbar[data-group-id="g2"]');
+          return {
+            expanded: !!b1 && !!b1.querySelector('.gopenall'),
+            collapsed: !!b2 && !!b2.querySelector('.gopenall'),
+          };
+        })()""")
+        assert d["expanded"] and d["collapsed"], d
+
+    def test_click_does_not_collapse_group(self):
+        load_view(self.page, spaces=self.SP, groups=self.GROUPS, tabs=self.TABS)
+        self.page.evaluate('document.querySelector(".gbar[data-group-id=\\"g1\\"] .gopenall").click()')
+        assert self.page.evaluate(
+            'document.querySelector(".gbar[data-group-id=\\"g1\\"]").classList.contains("gbar-collapsed")') is False
+
+
+# ==========================================
 #  VIEW.JS: ☑ «Без группы» — ВЫБОР ВСЕХ НЕГРУППОВЫХ ВКЛАДОК ПРОСТРАНСТВА
 # ==========================================
 
