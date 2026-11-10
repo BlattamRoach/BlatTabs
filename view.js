@@ -125,6 +125,11 @@ let activeSpaceId = ''; // активное пространство (по id �
 let modalCallback = null;
 let modalAllowEmpty = false; // модалки создания допускают пустое имя (авто-«Пространство N» / «Группа N»)
 let selectedUrls = new Set(); // выбор вкладок для массового открытия
+// Параметры анимаций pointer-драга (читаются ПЕРЕД каждым использованием —
+// тесты могут их обнулить). slideMs — FLIP-сдвиг соседей, settleMs —
+// «посадка» клона в слот, liftScale — масштаб подъёма клона.
+window.blatamFx = { slideMs: 200, settleMs: 180, liftScale: 1.02 };
+
 let dragSourceUrl = null; // URL перетаскиваемой карточки (для reorder; индексы в payload могут устареть)
 let dragSourceCardEl = null; // DOM-элемент перетаскиваемой карточки (исключается из расчёта зазора)
 let dragGhostSlot = null; // ghost-slot: пустая заглушка размера карточки на её месте в сетке
@@ -366,8 +371,14 @@ function renderSpaces() {
     // guardDragOverButtons снимает draggable на время press
     chip.draggable = true;
     guardDragOverButtons(chip, '.chip-icon-btn');
+    pcdBindChip(chip, sp.id); // pointer-путь (реальный Chrome) — см. ниже
     chip.addEventListener('dragstart', (e) => {
       if (!chip.draggable) { e.preventDefault(); return; } // press начался на кнопке
+      // Нативный HTML5-драг отменяется в реальном Chrome (цикл ведёт
+      // pointer-путь, см. «Pointer drag of space chips» ниже); синтетический
+      // dragstart харнесса (не-trusted) проходит дальше и работает без изменений
+      e.preventDefault();
+      if (e.isTrusted) return;
       e.dataTransfer.setData('text/plain', sp.id);
       e.dataTransfer.effectAllowed = 'move';
       dragSourceSpaceId = sp.id;
@@ -820,6 +831,11 @@ function appendGroupBar(g, memberCount) {
   guardDragOverButtons(bar, '.gselect, .grename, .gdel');
   bar.addEventListener('dragstart', (e) => {
     if (!bar.draggable) { e.preventDefault(); return; } // press начался на кнопке
+    // Нативный HTML5-драг отменяется, когда press ведёт pointer-путь: свой
+    // (gbarPointerPress — ставится на pointerdown pointer-путём шапки, более поздняя волна)
+    // или чужой pointer-драг пересекает шапку (pdForeignActive). Синтетическая
+    // цепочка харнесса (не-trusted) всегда проходит без изменений
+    if (e.isTrusted && (gbarPointerPress || pdForeignActive())) { e.preventDefault(); return; }
     e.dataTransfer.setData('text/plain', g.id);
     e.dataTransfer.effectAllowed = 'move';
     dragSourceGroupId = g.id;
@@ -1223,69 +1239,20 @@ function appendCard(tab) {
   guardDragOverButtons(card, '.tab-select, .tab-remove, .tab-edit');
   card.addEventListener('dragstart', (e) => {
     if (!card.draggable) { e.preventDefault(); return; } // press начался на кнопке
+    // Нативный HTML5-драг заменён pointer-системой (см. «Pointer drag» ниже):
+    // preventDefault отменяет нативный drag-образ и всю нативную ленту
+    // dragover/drop/dragend в реальном Chrome. Синтетическая диспетч-цепочка
+    // DragEvent (тест-харнесс) проходит через этот же обработчик и работает
+    // без изменений.
+    e.preventDefault();
+    if (e.isTrusted) return; // trusted dragstart — нативный HTML5-драг отменён preventDefault,
+    // цикл ведёт pointer-путь (см. «Pointer drag»); синтетический dragstart харнесса идёт дальше
     e.dataTransfer.setData('text/plain', String(allTabs.indexOf(tab)));
     e.dataTransfer.effectAllowed = 'move';
-    dragSourceUrl = tab.url;
-    dragSourceCardEl = card;
-    dragRowKeeper = null;
-    dragOverTarget = null; // свежий драг — целевой dragover ещё не приходил
-    dragOverTargetXY = null;
-    // Вооружаем подавление ложного клика по шапке уже на dragstart: реальный
-    // Chrome генерирует его на drop-цели ДО dragend источника — флаг, поставленный
-    // только на dragend, его не поймаешь
-    pendingGbarClickAfterDrag = true;
-    pendingCardClickAfterDrag = true; // дроп на другую карточку — ложный клик её не открывает
-    // Выделенный батч: перетаскивая ЛЮБУЮ выделенную карточку, переезжают ВСЕ
-    // выделенные вкладки (батч — в исходном порядке). В рендере — как одна:
-    // скрывается только эта карточка, заглушка одна.
-    dragBatchUrls = (selectedUrls.size > 1 && selectedUrls.has(tab.url))
-      ? allTabs.filter(t => selectedUrls.has(t.url)).map(t => t.url)
-      : [tab.url];
-    card.classList.add('dragging');
-    // Оригинал исчезает из слота (нативный drag-образ браузера следует за
-    // курсором); место занимает тёплая заглушка (ghost-slot) — отложенно:
-    // display:none в самом dragstart «залипает» HTML5-drag в Chrome
-    setTimeout(() => {
-      // Перерисовка во время драга уносит карточку из DOM, а поздний drop/dragend
-      // уже решил драг — заглушку для отсоединённой карточки не вставляем
-      if (dragSourceUrl !== tab.url || !card.isConnected) return;
-      if (!dragGhostSlot) {
-        // Меряем ДО display:none (у скрытой карточки offsetWidth/Height = 0)
-        dragGhostSlot = makeGhostSlot(card);
-        card.insertAdjacentElement('afterend', dragGhostSlot);
-        // row keeper — created while card still visible (for its size); it attaches
-        // in syncRowKeeper when the ghost slot leaves the SOURCE SECTION
-        dragRowKeeper = makeRowKeeper(card);
-      }
-      card.style.display = 'none';
-      // Гонка: первый dragover мог попасть на шапку/слот/пустую зону карт.области
-      // группы ПЕРЕД этим таймером (заглушки ещё не существовало). Повторяем
-      // состояние по dragOverTarget (зона — по её координатам), иначе свежая
-      // заглушка неверно «замигает» дома.
-      const overGbarOrSlot = dragOverTarget && dragOverTarget.closest &&
-          (dragOverTarget.closest('.gbar') || dragOverTarget.closest('.group-empty-slot'));
-      const overGroupEmptyZone = dragOverTargetXY !== null &&
-          groupCardAreaEmptyZone(dragOverTargetXY[0], dragOverTargetXY[1]) !== null;
-      if (overGbarOrSlot || overGroupEmptyZone) {
-        setGhostDisplay('none');
-        ensureSourceRowKeeper();
-      }
-    }, 0);
+    beginCardDrag(tab, card);
   });
-  card.addEventListener('dragend', () => {
-    lastDragEndAt = Date.now();
-    pendingGbarClickAfterDrag = true;
-    dragSourceUrl = null;
-    dragSourceCardEl = null;
-    dragBatchUrls = null;
-    dragOverTarget = null; // не держим ссылку на DOM-узел после драга
-    dragOverTargetXY = null;
-    card.classList.remove('dragging');
-    removeGhostSlot(); // заглушка + row keeper снимаются первыми, затем карточка
-                       // возвращается в свой слот
-    if (card.isConnected) card.style.display = ''; // drag без drop — вернуть карточку в слот
-    document.querySelectorAll('.space-chip.drag-over').forEach(c => c.classList.remove('drag-over'));
-  });
+  card.addEventListener('dragend', () => endCardDrag(card));
+  pdBindCard(card, tab); // pointer-путь (реальный Chrome) — см. «Pointer drag»
 
   tabsList.appendChild(card);
 }
@@ -1904,44 +1871,13 @@ function groupCardAreaEmptyZone(clientX, clientY) {
 
 document.addEventListener('dragover', (e) => {
   if (!dragSourceUrl || dragSourceGroupId || !e.dataTransfer) return;
-  const t = e.target;
-  dragOverTarget = t;
-  dragOverTargetXY = [e.clientX, e.clientY];
-  // Над ЛЮБОЙ шапкой группы (.gbar — развёрнутой, свёрнутой или пустой) и над
-  // слотом пустой группы (.group-empty-slot) карточка дропается ВНУТРЬ этой
-  // группы (свой обработчик drop на этом элементе). Прячем заглушку ЦЕЛИКОМ
-  // (display:none — её ячейка сетки освобождается, сетка перетекает: ни «тёплая»
-  // заглушка на старом месте, ни дырка на её месте), а row-keeper держит число
-  // строк исходной секции. Заглушка вернётся, когда курсор снова попадёт в список
-  // (list-путь ниже). НЕ removeGhostSlot: отложенное создание заглушки — только в
-  // dragstart, удалённая заглушка больше не появится.
-  if (t && t.closest && (t.closest('.gbar') || t.closest('.group-empty-slot'))) {
-    setGhostDisplay('none');
-    ensureSourceRowKeeper();
+  // Логика слежения за заглушкой — в trackCardDragAt (общая с pointer-путём).
+  // preventDefault/dropEffect — только там, где и раньше: над шапкой/слотом
+  // пустой группы, пустой зоной карт.области и в пределах списка.
+  if (trackCardDragAt(e.clientX, e.clientY, e.target)) {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
-    return;
   }
-  // Чип пространства: заглушка замирает на месте (поведение без изменений).
-  if (t && t.closest && t.closest('.space-chip')) return;
-  // Пустая зона собственной карт.области группы (пустая строка ВЫШЕ первой / НИЖЕ
-  // последней строки карточек группы): дроп ставит вкладку в начало/конец группы —
-  // как над шапкой — прячем заглушку целиком; row-keeper держит число строк
-  // исходной секции. Пустые ячейки СЕБЕ строки — не зона: заглушка остаётся
-  // видимой в потенциальном слоте (list-путь ниже).
-  if (groupCardAreaEmptyZone(e.clientX, e.clientY) !== null) {
-    setGhostDisplay('none');
-    ensureSourceRowKeeper();
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    return;
-  }
-  if (!tabsList.contains(t)) return;
-  const anchor = slotAnchor(cardGapIndex(e.clientX, e.clientY), e.clientY);
-  setGhostDisplay('');
-  moveGhostSlot(anchor);
-  e.preventDefault();
-  e.dataTransfer.dropEffect = 'move';
 });
 
 document.addEventListener('drop', (e) => {
@@ -1956,6 +1892,577 @@ document.addEventListener('drop', (e) => {
   placeCardToSlot(src, slotAnchor(cardGapIndex(e.clientX, e.clientY), e.clientY));
   removeGhostSlot();
 });
+
+// Ядро драга карточки, общее для HTML5-обработчиков и pointer-пути.
+// Захват карточки: исходник + флаги ложного клика + батч выбора, затем
+// скрываем карточку и ставим тёплую заглушку (ghost-slot). sync=true —
+// синхронно (pointer-путь); HTML5-путь сохраняет отложенное создание
+// setTimeout(0) — display:none в самом dragstart «залипает» HTML5-drag в Chrome.
+function beginCardDrag(tab, cardEl, sync) {
+  dragSourceUrl = tab.url;
+  dragSourceCardEl = cardEl;
+  dragRowKeeper = null;
+  dragOverTarget = null; // свежий драг — целевой dragover ещё не приходил
+  dragOverTargetXY = null;
+  // Вооружаем подавление ложного клика по шапке уже на dragstart: реальный
+  // Chrome генерирует его на drop-цели ДО dragend источника — флаг, поставленный
+  // только на dragend, его не поймаешь
+  pendingGbarClickAfterDrag = true;
+  pendingCardClickAfterDrag = true; // дроп на другую карточку — ложный клик её не открывает
+  // Выделенный батч: перетаскивая ЛЮБУЮ выделенную карточку, переезжают ВСЕ
+  // выделенные вкладки (батч — в исходном порядке). В рендере — как одна:
+  // скрывается только эта карточка, заглушка одна.
+  dragBatchUrls = (selectedUrls.size > 1 && selectedUrls.has(tab.url))
+    ? allTabs.filter(t => selectedUrls.has(t.url)).map(t => t.url)
+    : [tab.url];
+  cardEl.classList.add('dragging');
+  const applyGhost = () => {
+    // Перерисовка во время драга уносит карточку из DOM, а поздний drop/dragend
+    // уже решил драг — заглушку для отсоединённой карточки не вставляем
+    if (dragSourceUrl !== tab.url || !cardEl.isConnected) return;
+    if (!dragGhostSlot) {
+      // Меряем ДО display:none (у скрытой карточки offsetWidth/Height = 0)
+      dragGhostSlot = makeGhostSlot(cardEl);
+      cardEl.insertAdjacentElement('afterend', dragGhostSlot);
+      // row keeper — created while card still visible (for its size); it attaches
+      // in syncRowKeeper when the ghost slot leaves the SOURCE SECTION
+      dragRowKeeper = makeRowKeeper(cardEl);
+    }
+    cardEl.style.display = 'none';
+    // Гонка: первый dragover мог попасть на шапку/слот/пустую зону карт.области
+    // группы ПЕРЕД этим таймером (заглушки ещё не существовало). Повторяем
+    // состояние по dragOverTarget (зона — по её координатам), иначе свежая
+    // заглушка неверно «замигает» дома.
+    const overGbarOrSlot = dragOverTarget && dragOverTarget.closest &&
+        (dragOverTarget.closest('.gbar') || dragOverTarget.closest('.group-empty-slot'));
+    const overGroupEmptyZone = dragOverTargetXY !== null &&
+        groupCardAreaEmptyZone(dragOverTargetXY[0], dragOverTargetXY[1]) !== null;
+    if (overGbarOrSlot || overGroupEmptyZone) {
+      setGhostDisplay('none');
+      ensureSourceRowKeeper();
+    }
+  };
+  if (sync) applyGhost();
+  else setTimeout(applyGhost, 0);
+}
+
+// Конец драга карточки (dragend / конец pointer-драга): заглушка + row keeper
+// снимаются первыми, затем карточка возвращается в свой слот, сброс исходника
+// и флагов ложных кликов.
+function endCardDrag(cardEl) {
+  lastDragEndAt = Date.now();
+  pendingGbarClickAfterDrag = true;
+  dragSourceUrl = null;
+  dragSourceCardEl = null;
+  dragBatchUrls = null;
+  dragOverTarget = null; // не держим ссылку на DOM-узел после драга
+  dragOverTargetXY = null;
+  if (cardEl) {
+    cardEl.classList.remove('dragging');
+    cardEl.style.cursor = '';
+    removeGhostSlot(); // заглушка + row keeper снимаются первыми, затем карточка
+                       // возвращается в свой слот
+    if (cardEl.isConnected) cardEl.style.display = ''; // drag без drop — вернуть карточку в слот
+  }
+  document.querySelectorAll('.space-chip.drag-over').forEach(c => c.classList.remove('drag-over'));
+}
+
+// Tracks the card drag at coordinates (clientX, clientY): ghost hidden (over
+// .gbar / .group-empty-slot / group card-area empty zone), frozen (over a
+// space chip) or moved (slot in the list). Returns true when the point is a
+// valid card-drag position (HTML5 dragover needs preventDefault there).
+// targetEl — event target (HTML5 path); the pointer path passes null and the
+// target is resolved via document.elementFromPoint.
+function trackCardDragAt(clientX, clientY, targetEl) {
+  if (!dragSourceUrl || dragSourceGroupId) return false;
+  const t = targetEl || document.elementFromPoint(clientX, clientY);
+  dragOverTarget = t;
+  dragOverTargetXY = [clientX, clientY];
+  // Over ANY group header (.gbar) and over an empty-group slot
+  // (.group-empty-slot) the card drops INTO that group (own drop handler on
+  // the element) — hide the ghost WHOLLY; row-keeper holds the source
+  // section's row count. NOT removeGhostSlot: deferred ghost creation is only
+  // in dragstart, a removed ghost never reappears.
+  if (t && t.closest && (t.closest('.gbar') || t.closest('.group-empty-slot'))) {
+    setGhostDisplay('none');
+    ensureSourceRowKeeper();
+    return true;
+  }
+  // Space chip: ghost stands still in place (behavior unchanged).
+  if (t && t.closest && t.closest('.space-chip')) return false;
+  // Empty zone of a group's own card area (empty row ABOVE the first / BELOW
+  // the last row of the group's cards): hide the ghost wholly; row-keeper
+  // holds the source section's row count. Empty cells of its OWN row — not a
+  // zone: ghost stays visible in the potential slot (list path below).
+  if (groupCardAreaEmptyZone(clientX, clientY) !== null) {
+    setGhostDisplay('none');
+    ensureSourceRowKeeper();
+    return true;
+  }
+  if (!t || !tabsList.contains(t)) return false;
+  const anchor = slotAnchor(cardGapIndex(clientX, clientY), clientY);
+  setGhostDisplay('');
+  if (anchor) {
+    // FLIP (pointer path ONLY): when the slot anchor actually CHANGES — record
+    // rects of the visible cards before the move, then apply the slide
+    // transform after it. One FLIP pass per anchor change. The synthetic
+    // HTML5 path never FLIPs — its geometry is untouched.
+    const changed = pd && pd.armed &&
+        (!pdLastAnchor || pdLastAnchor.el !== anchor.el || pdLastAnchor.side !== anchor.side);
+    const firstRects = changed ? snapshotCardRects() : null;
+    moveGhostSlot(anchor);
+    pdLastAnchor = anchor;
+    if (firstRects) applyFlipFrom(firstRects);
+  }
+  return true;
+}
+
+// FLIP: record rects of visible elements (the hidden drag source is excluded).
+// Без аргументов — карточки #tabs-list (card path); selector + excludeEl —
+// chip path ('#space-chips .space-chip', скрытый исходный чип).
+function snapshotCardRects(selector, excludeEl) {
+  const m = new Map();
+  const scope = selector || '#tabs-list .tab-card';
+  for (const c of document.querySelectorAll(scope)) {
+    if (c === excludeEl || c === dragSourceCardEl || c.style.display === 'none') continue;
+    m.set(c, c.getBoundingClientRect());
+  }
+  return m;
+}
+
+// FLIP (after the move): for every card whose slot shifted by more than
+// 0.5 px — first the "old" position (transition:none,
+// transform:translate(dx,dy)), then next frame(s) a transition to its own
+// slot over slideMs (cubic-bezier(0.22, 1, 0.36, 1)); the inline transition
+// is removed on transitionend. slideMs=0 — skipped entirely.
+function applyFlipFrom(firstRects) {
+  const ms = window.blatamFx && window.blatamFx.slideMs;
+  if (!ms) return;
+  for (const entry of firstRects) {
+    const el = entry[0], r = entry[1];
+    if (!el.isConnected || el.style.display === 'none') continue;
+    const n = el.getBoundingClientRect();
+    const dx = r.left - n.left;
+    const dy = r.top - n.top;
+    if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) continue;
+    el.style.transition = 'none';
+    el.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
+    let done = false;
+    const go = () => {
+      if (done || !el.isConnected) return;
+      done = true;
+      el.style.transition = 'transform ' + ms + 'ms cubic-bezier(0.22, 1, 0.36, 1)';
+      el.style.transform = '';
+      const clear = (ev) => {
+        if (ev.propertyName !== 'transform') return;
+        el.style.transition = '';
+        el.removeEventListener('transitionend', clear);
+      };
+      el.addEventListener('transitionend', clear);
+    };
+    requestAnimationFrame(() => requestAnimationFrame(go));
+    setTimeout(go, 50); // fallback if rAF is delayed
+  }
+}
+
+
+// Commits a card drop at coordinates (pointer path): target —
+// document.elementFromPoint. Mirrors the HTML5 drop handlers:
+// .gbar / .group-empty-slot — the tab goes INTO the group (place-tab /
+// place-tabs, end of list), .space-chip — INTO the space (moveTabTo), inside
+// #tabs-list — INTO the ghost slot (placeCardToSlot). Returns {rect} — the
+// destination rect for the clone settle animation, or null when the point is
+// not a valid card drop target (cancel).
+function commitCardDropAt(clientX, clientY) {
+  if (!dragSourceUrl || dragSourceGroupId) return null;
+  const t = document.elementFromPoint(clientX, clientY);
+  if (!t || !t.closest) return null;
+  const src = allTabs.find(tb => tb.url === dragSourceUrl);
+  if (!src) return null;
+  const moveIntoGroup = (gid) => {
+    const batch = dragBatchUrls && dragBatchUrls.length > 1 ? dragBatchUrls : null;
+    if (batch) {
+      if (batch.some(u => {
+        const tb = allTabs.find(x => x.url === u);
+        return !tb || tabGroupOf(tb) !== gid;
+      })) chrome.runtime.sendMessage({ action: 'place-tabs', urls: batch,
+        anchorUrl: null, side: 'after', groupId: gid });
+    } else if (src.groupId !== gid) {
+      chrome.runtime.sendMessage({ action: 'place-tab', index: allTabs.indexOf(src),
+        anchorIndex: null, side: 'after', groupId: gid });
+    }
+  };
+  const gbar = t.closest('.gbar');
+  if (gbar) {
+    // The false click on the header is born in this moment (before dragend of
+    // the source) — arm the one-shot suppression and take the warm ghost away
+    // (like the HTML5 drop on the header does)
+    pendingGbarClickAfterDrag = true;
+    const rect = gbar.getBoundingClientRect();
+    removeGhostSlot();
+    // Only an empty/collapsed group (no visible cards) accepts a card
+    if (!groupVisibleCardCount(gbar.dataset.groupId)) moveIntoGroup(gbar.dataset.groupId);
+    return { rect };
+  }
+  const slot = t.closest('.group-empty-slot');
+  if (slot) {
+    const rect = slot.getBoundingClientRect();
+    removeGhostSlot();
+    moveIntoGroup(slot.dataset.groupId);
+    return { rect };
+  }
+  const chip = t.closest('.space-chip');
+  if (chip) {
+    const rect = chip.getBoundingClientRect();
+    chip.classList.remove('drag-over');
+    const batch = dragBatchUrls;
+    if (batch && batch.length > 1) {
+      for (const u of batch) {
+        const tb = allTabs.find(x => x.url === u);
+        if (tb) moveTabTo(tb, chip.dataset.spaceId, undefined);
+      }
+    } else moveTabTo(src, chip.dataset.spaceId, undefined);
+    return { rect };
+  }
+  if (!tabsList.contains(t)) return null;
+  // The ghost slot (when visible) is the destination: measure BEFORE the
+  // commit — the commit re-renders and removes the ghost
+  let rect = null;
+  if (dragGhostSlot && dragGhostSlot.isConnected && dragGhostSlot.style.display !== 'none')
+    rect = dragGhostSlot.getBoundingClientRect();
+  placeCardToSlot(src, slotAnchor(cardGapIndex(clientX, clientY), clientY));
+  removeGhostSlot();
+  return { rect };
+}
+
+// === Pointer drag (real Chrome UX) ===
+// The pointer path replaces the native HTML5 drag image: press on the card +
+// move over 8 px — the original disappears from its slot (warm ghost slot in
+// its place), a LIFT CLONE (fixed-position copy of the card, scale liftScale
+// + drop shadow) tracks the cursor 1:1, the ghost slot walks the grid
+// (siblings — FLIP slide of slideMs). On release the state commits
+// synchronously and the clone "lands" in the destination over settleMs
+// (fade + scale to 0.96). Escape / release outside a drop target — cancel
+// (clone returns to the original slot). The HTML5 path (dragstart/dragover/
+// drop/dragend) stays for the synthetic test harness.
+let pd = null; // active press: {tab, card, rect, startX, startY, ox, oy, armed}
+let pdClone = null; // lift clone (copy of the card, position:fixed, in body)
+let pdLastAnchor = null; // last ghost-slot anchor (FLIP-pass dedup)
+// Свой pointer-путь обрабатывает press на элементе (ставится на pointerdown
+// pointer-путём шапки группы / рейки — более поздние волны): guard в dragstart
+// убивает trusted нативный драг. Синтетическая цепочка харнесса (untrusted)
+// всегда проходит
+let gbarPointerPress = false;
+let railPointerPress = false;
+// Живой pointer-драг ЧУЖОГО элемента (карточка — pd, чип — pcd, рейка — btl;
+// состояние гbar добавится в его волне): пересекающий trusted dragstart
+// гасится, чтобы не украсть drag-source из-под идущего pointer-драга
+function pdForeignActive() {
+  return !!(pd && pd.armed) || !!(pcd && pcd.armed) || !!(btl && btl.armed);
+}
+
+// Press target is a nested interactive element (button/checkbox/link/label) —
+// do not arm the drag (hover controls keep their own job)
+function pdInteractiveTarget(el) {
+  return !!(el instanceof Element && el.closest('button, input, a, label'));
+}
+
+function pdScale() { return (window.blatamFx && window.blatamFx.liftScale) || 1.02; }
+function pdSettleMs() { const v = window.blatamFx && window.blatamFx.settleMs; return v == null ? 180 : v; }
+
+function pdCloneXf(x, y) {
+  return 'translate3d(' + x + 'px,' + y + 'px,0) scale(' + pdScale() + ')';
+}
+
+// LIFT CLONE: a fixed-position copy of the card (no id; cloneNode copies no
+// listeners), card-sized, under the cursor, no transition while dragging
+function pdCreateClone(card, rect, x, y) {
+  const clone = card.cloneNode(true);
+  clone.id = '';
+  clone.classList.add('pd-clone');
+  clone.style.cssText = 'position:fixed;top:0;left:0;margin:0;box-sizing:border-box;' +
+    'width:' + rect.width + 'px;height:' + rect.height + 'px;overflow:hidden;' +
+    'z-index:2147483000;pointer-events:none;transition:none;will-change:transform;' +
+    'transform:' + pdCloneXf(x, y) +
+    ';filter:drop-shadow(0 6px 14px rgba(0,0,0,0.18))';
+  document.body.appendChild(clone);
+  return clone;
+}
+
+function pdCloneMove(x, y) {
+  if (pdClone) pdClone.style.transform = pdCloneXf(x, y);
+}
+
+// Clone finish: over `ms` — move to the rect, fade out, scale to 0.96 (curve
+// cubic-bezier(0.22, 1, 0.36, 1)); ms=0 — removed immediately.
+function pdFinishClone(rect, ms) {
+  const clone = pdClone;
+  pdClone = null;
+  if (!clone || !clone.isConnected) return;
+  const C = 'cubic-bezier(0.22, 1, 0.36, 1)';
+  const finish = () => { if (clone.isConnected) clone.remove(); };
+  if (!ms || !rect) { clone.remove(); return; }
+  clone.style.transition = 'transform ' + ms + 'ms ' + C + ',opacity ' + ms + 'ms ' + C +
+    ',width ' + ms + 'ms ' + C + ',height ' + ms + 'ms ' + C;
+  clone.style.transform = 'translate3d(' + rect.left + 'px,' + rect.top + 'px,0) scale(0.96)';
+  clone.style.width = rect.width + 'px';
+  clone.style.height = rect.height + 'px';
+  clone.style.opacity = '0';
+  clone.addEventListener('transitionend', (ev) => { if (ev.propertyName === 'transform') finish(); });
+  setTimeout(finish, ms + 80); // fallback: remove even if transitionend does not fire
+}
+
+function pdTeardown() {
+  window.removeEventListener('pointermove', pdOnMove);
+  window.removeEventListener('pointerup', pdOnUp);
+  window.removeEventListener('pointercancel', pdOnCancel);
+  window.removeEventListener('keydown', pdOnKey);
+  document.body.style.cursor = '';
+}
+
+// Cancel: no commit — the card returns to its slot, the clone "goes home"
+function pdCancelEnd() {
+  endCardDrag(pd.card);
+  pdFinishClone(pd.rect, pdSettleMs());
+  pd = null;
+}
+
+function pdOnKey(e) {
+  if (!pd || !pd.armed || e.key !== 'Escape') return;
+  pdTeardown();
+  pdCancelEnd();
+}
+
+function pdOnCancel(e) {
+  if (!pd) return;
+  const armed = pd.armed;
+  pdTeardown();
+  if (armed) pdCancelEnd();
+  else pd = null;
+}
+
+function pdOnUp(e) {
+  if (!pd) return;
+  const armed = pd.armed;
+  const cardEl = pd.card;
+  const homeRect = pd.rect;
+  pdTeardown();
+  if (!armed) { pd = null; return; } // plain press — the click passes through
+  const info = commitCardDropAt(e.clientX, e.clientY);
+  endCardDrag(cardEl);
+  // Committed — the clone "lands" in the destination; not a valid target —
+  // it returns home
+  pdFinishClone(info && info.rect ? info.rect : homeRect,
+    pdSettleMs());
+  pd = null;
+}
+
+function pdOnMove(e) {
+  if (!pd) return;
+  if (!pd.armed) {
+    const dx = e.clientX - pd.startX, dy = e.clientY - pd.startY;
+    if (dx * dx + dy * dy <= 8 * 8) return; // not a drag until over 8 px
+    pd.armed = true;
+    pdLastAnchor = null;
+    beginCardDrag(pd.tab, pd.card, true);
+    pdClone = pdCreateClone(pd.card, pd.rect, e.clientX - pd.ox, e.clientY - pd.oy);
+    // Armed: cursor grabbing on body and on the card
+    document.body.style.cursor = 'grabbing';
+    if (pd.card.isConnected) pd.card.style.cursor = 'grabbing';
+  }
+  e.preventDefault();
+  pdCloneMove(e.clientX - pd.ox, e.clientY - pd.oy);
+  trackCardDragAt(e.clientX, e.clientY);
+}
+
+function pdBindCard(card, tab) {
+  card.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    if (card.dataset.pressBtn || pdInteractiveTarget(e.target)) return;
+    const rect = card.getBoundingClientRect();
+    pd = { tab, card, rect, startX: e.clientX, startY: e.clientY,
+           ox: e.clientX - rect.left, oy: e.clientY - rect.top, armed: false };
+    window.addEventListener('pointermove', pdOnMove);
+    window.addEventListener('pointerup', pdOnUp);
+    window.addEventListener('pointercancel', pdOnCancel);
+    window.addEventListener('keydown', pdOnKey);
+  });
+}
+// === Pointer drag of space chips (real Chrome UX) ===
+// Chip-путь зеркалирует карточный: press по чипу + движение больше 8 px —
+// нативный drag-образ отменяется (dragstart чипа: preventDefault + e.isTrusted),
+// оригинал исчезает из ряда (тёплая .space-ghost-slot в его месте, синхронно —
+// без setTimeout), LIFT-КЛОН (.pd-clone в body, position:fixed, liftScale +
+// тень) следует за курсором 1:1, ghost-slot ходит по ряду с FLIP-слайдом
+// соседних чипов (slideMs). Отпускание: на чип — reorderSpaces (левая/правая
+// половина цели), на ряд (зазор/«+ Пространство») — по ТЕКУЩЕЙ DOM-позиции
+// заглушки (то же правило, что row-drop), в остальном — cancel (без записи);
+// клон «приземляется» в цель за settleMs, при cancel — возвращается домой.
+// Escape — cancel. Обычный клик (без движения) по-прежнему переключает
+// пространство (click-хендлер не тронут). Своё состояние (pcd) — не пересекается
+// с card path (одна мышь); pdCreateClone/pdCloneMove/pdFinishClone/pdScale/
+// pdSettleMs/applyFlipFrom общие (pdClone-переменная — безопасно: драг один).
+// Синтетическая HTML5-цепочка (не-trusted DragEvents) идёт своим dragstart.
+let pcd = null; // active press: {spId, chip, homeRect, startX, startY, ox, oy, armed, lastAnchor}
+
+// .space-chip под точкой (elementFromPoint — клон/заглушка pointer-events:none,
+// «видят сквозь» курсор)
+function pcdChipAt(x, y) {
+  const t = document.elementFromPoint(x, y);
+  return t && t.closest ? t.closest('.space-chip') : null;
+}
+
+function pcdTeardown() {
+  window.removeEventListener('pointermove', pcdOnMove);
+  window.removeEventListener('pointerup', pcdOnUp);
+  window.removeEventListener('pointercancel', pcdOnCancel);
+  window.removeEventListener('keydown', pcdOnKey);
+  document.body.style.cursor = '';
+}
+
+// Cancel: чип возвращается в ряд, заглушка снята, клон «возвращается домой»
+// (p — состояние драга; передаётся из pcdOnUp, где pcd уже обнулён)
+function pcdCancelState(p) {
+  p = p || pcd;
+  pcd = null;
+  dragSourceSpaceId = null;
+  removeSpaceGhostSlot();
+  if (p.chip.isConnected) p.chip.style.display = '';
+  pdFinishClone(p.homeRect, pdSettleMs());
+}
+
+function pcdOnKey(e) {
+  if (!pcd || !pcd.armed || e.key !== 'Escape') return;
+  pcdTeardown();
+  pcdCancelState();
+}
+
+function pcdOnCancel(e) {
+  if (!pcd) return;
+  const armed = pcd.armed;
+  pcdTeardown();
+  if (armed) pcdCancelState();
+  else pcd = null;
+}
+
+// Release: over a chip — reorderSpaces (side by X-half); over the row — commit
+// ghost's CURRENT DOM position (neighbouring .space-chip; «+ Пространство»/null
+// — not a target; no-op-guard — внутри reorderSpaces); elsewhere — null (cancel).
+// Rects измеряются ДО commit — commit ре-рендерит чипы и снимает заглушку.
+function pcdCommitAt(x, y, p) {
+  const fromId = p.spId;
+  const chipEl = pcdChipAt(x, y);
+  if (chipEl) {
+    // скрытый источник не попадает под курсор — дроп в собственный слот
+    // уходит в row-ветку ниже (заглушка дома — no-op)
+    const rect = chipEl.getBoundingClientRect();
+    reorderSpaces(fromId, chipEl.dataset.spaceId, reorderSideX(chipEl, x));
+    return rect;
+  }
+  const t = document.elementFromPoint(x, y);
+  if (t && t.closest && t.closest('#spaces-bar')) {
+    const slot = dragGhostChipSlot;
+    const rect = (slot && slot.isConnected) ? slot.getBoundingClientRect() : p.homeRect;
+    if (slot && slot.isConnected) {
+      const next = slot.nextElementSibling;
+      const prev = slot.previousElementSibling;
+      if (next && next.classList.contains('space-chip')) {
+        reorderSpaces(fromId, next.dataset.spaceId, 'before');
+      } else if (prev && prev.classList.contains('space-chip')) {
+        reorderSpaces(fromId, prev.dataset.spaceId, 'after');
+      }
+      // заглушка не у чипов (пустой ряд) — no-op
+    }
+    return rect;
+  }
+  return null;
+}
+
+function pcdOnUp(e) {
+  if (!pcd) return;
+  const armed = pcd.armed;
+  const p = pcd;
+  pcd = null;
+  pcdTeardown();
+  if (!armed) return; // plain press — the click passes through (switch space)
+  const rect = pcdCommitAt(e.clientX, e.clientY, p);
+  if (rect) {
+    dragSourceSpaceId = null;
+    removeSpaceGhostSlot();
+    // no-op-коммит (порядок не изменился — reorderSpaces не записал):
+    // перерисовки не было — чип возвращается в ряд сам
+    if (p.chip.isConnected && p.chip.style.display === 'none') p.chip.style.display = '';
+    pdFinishClone(rect, pdSettleMs()); // committed — клон «приземляется» в цель
+  } else {
+    pcdCancelState(p); // вне ряда — cancel
+  }
+}
+
+// Ghost slot walks the row by the cursor: over a chip — before/after it by the
+// half; when the anchor CHANGES — FLIP pass (rect snapshot of visible chips,
+// excluding the hidden source, BEFORE the move → move ghost → applyFlipFrom);
+// over the row — ghost keeps its DOM position; elsewhere — no anchor (a cancel
+// candidate on release)
+function pcdTrackAt(x, y) {
+  const chipEl = pcdChipAt(x, y);
+  if (chipEl) {
+    const side = reorderSideX(chipEl, x);
+    if (pcd.lastAnchor && pcd.lastAnchor.el === chipEl && pcd.lastAnchor.side === side) return;
+    const firstRects = snapshotCardRects('#space-chips .space-chip', pcd.chip);
+    moveSpaceGhostSlot({ el: chipEl, side: side });
+    pcd.lastAnchor = { el: chipEl, side: side };
+    applyFlipFrom(firstRects);
+    return;
+  }
+  const t = document.elementFromPoint(x, y);
+  pcd.lastAnchor = (t && t.closest && t.closest('#spaces-bar')) ? { row: true } : null;
+}
+
+function pcdOnMove(e) {
+  if (!pcd) return;
+  if (!pcd.armed) {
+    const dx = e.clientX - pcd.startX, dy = e.clientY - pcd.startY;
+    if (dx * dx + dy * dy <= 8 * 8) return; // not a drag until over 8 px
+    // ARM: меряем rect и заглушку ДО display:none (у скрытого чипа 0-размеры),
+    // прячем источник, тёплая заглушка дома, lift-клон под курсором
+    const chip = pcd.chip;
+    pcd.homeRect = chip.getBoundingClientRect();
+    dragSourceSpaceId = pcd.spId;
+    pendingChipClickAfterDrag = true; // ложный post-drag клик не переключает пространство
+    const ghost = makeSpaceGhostSlot(chip);
+    chip.insertAdjacentElement('afterend', ghost);
+    dragGhostChipSlot = ghost;
+    chip.style.display = 'none';
+    pdClone = pdCreateClone(chip, pcd.homeRect, e.clientX - pcd.ox, e.clientY - pcd.oy);
+    pcd.armed = true;
+    pcd.lastAnchor = null;
+    // Armed: cursor grabbing on body and on the chip
+    document.body.style.cursor = 'grabbing';
+    if (chip.isConnected) chip.style.cursor = 'grabbing';
+  }
+  e.preventDefault();
+  pdCloneMove(e.clientX - pcd.ox, e.clientY - pcd.oy);
+  pcdTrackAt(e.clientX, e.clientY);
+}
+
+function pcdBindChip(chip, spId) {
+  chip.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    if (!chip.draggable) return; // guardDragOverButtons снял draggable — press на ✎/✕
+    if (e.target.closest('.chip-icon-btn')) return; // кнопки держат свою работу
+    const rect = chip.getBoundingClientRect();
+    pcd = { spId: spId, chip: chip, homeRect: rect,
+            startX: e.clientX, startY: e.clientY,
+            ox: e.clientX - rect.left, oy: e.clientY - rect.top,
+            armed: false, lastAnchor: null };
+    window.addEventListener('pointermove', pcdOnMove);
+    window.addEventListener('pointerup', pcdOnUp);
+    window.addEventListener('pointercancel', pcdOnCancel);
+    window.addEventListener('keydown', pcdOnKey);
+  });
+}
+
+
 
 // 'before'/'after' — по позиции курсора относительно середины элемента
 function reorderSide(card, clientY) {
@@ -2428,6 +2935,7 @@ function makeBtItem(t) {
   });
   item.addEventListener('dragstart', (e) => onBtDragStart(e, item, t));
   item.addEventListener('dragend', () => onBtDragEnd());
+  btlBindItem(item, t); // pointer-путь (реальный Chrome UX)
   return item;
 }
 
@@ -2445,6 +2953,11 @@ function makeBtGhostSlot(height) {
 }
 
 function onBtDragStart(e, item, t) {
+  // Нативный HTML5-драг отменяется, когда press ведёт pointer-путь: свой
+  // (railPointerPress — ставится на pointerdown pointer-путём рейки, более поздняя волна)
+  // или чужой pointer-драг пересекает рейку (pdForeignActive). Синтетическая
+  // цепочка харнесса (не-trusted) всегда проходит без изменений
+  if (e.isTrusted && (railPointerPress || pdForeignActive())) { e.preventDefault(); return; }
   dragSourceBrowserTab = { id: t.id, url: t.url || '', title: t.title || '',
                            favIconUrl: t.favIconUrl || '', windowId: t.windowId, index: t.index };
   btDragItem = item;
@@ -2558,7 +3071,11 @@ function syncRailFromTabs() {
 }
 
 function commitBtRailMove(src) {
-  const ghostPos = btGhostIndex(); // число видимых вкл. рейки ПЕРЕД заглушкой
+  // Индекс ЗАГЛУШКИ фиксируем синхронно (ЧИСЛО): async-ветка ниже отработает
+  // уже ПОСЛЕ cleanup pointer-пути, где заглушка снята — читать DOM-позицию в
+  // микрозадаче pointer-путь прочёл бы index источника (no-op). HTML5-путь не
+  // тронут: там ghostPos и есть индекс (источник не двигался)
+  const ghostPos = typeof btGhostIndex === 'function' ? btGhostIndex() : 0;
   btDropCommitted = true;
   // Снимаем guard ДО записи: onChanged (мок) перерисует рейку сразу
   dragSourceBrowserTab = null;
@@ -2721,6 +3238,229 @@ document.addEventListener('drop', (e) => {
 document.addEventListener('dragend', () => {
   if (dragSourceBrowserTab) onBtDragEnd();
 });
+
+// === Pointer drag of rail browser tabs (real Chrome UX) ===
+// Путь зеркалирует карточный (pd) и чиповый (pcd): press по элементу рейки
+// + движение больше 8 px — нативный HTML5-драг отменяется (guard в
+// onBtDragStart: isTrusted и (railPointerPress или pdForeignActive) —
+// preventDefault), источник прячется (тёплая .bt-ghost-slot на его месте —
+// синхронно, без setTimeout), LIFT-КЛОН (.pd-clone в body, position:fixed,
+// liftScale + тень) следует за курсором 1:1, заглушка ходит по рейке по
+// midpoint-правилу (btSlotAnchor — то же, что у HTML5-пути) с FLIP-слайдом
+// соседей (snapshotCardRects '#browser-tabs-list .bt-tab' + applyFlipFrom).
+// Отпускание — те же цели, что у drop-хендлера: шапка группы/слот пустой
+// группы — saveBtToGroup, рейка — commitBtRailMove (индекс РЕАЛЬНОГО окна по
+// DOM-позиции заглушки), центральный список — saveBtToCenter (тёплая
+// центральная заглушка следует за курсором через moveCentralBtGhost),
+// чип пространства/повсюду остальном — cancel; клон «приземляется» в цель
+// за settleMs, при cancel — возвращается домой. Escape — cancel. Обычный
+// клик (без движения) по-прежнему открывает вкладку (click-хендлер не
+// тронут). Заглушка — общий dragBrowserTabGhost (синхронная вставка —
+// btGhostIndex корректен при коммите). Своё состояние (btl) — не
+// пересекается с карточным/чиповым путями (одна мышь);
+// pdCreateClone/pdCloneMove/pdFinishClone/pdScale/pdSettleMs/applyFlipFrom
+// общие (pdClone — безопасно: драг один). Синтетическая HTML5-цепочка
+// (ne-trusted DragEvents) идёт своим dragstart — не тронута.
+let btl = null; // активный press: {t, item, homeRect, startX, startY, ox, oy, armed, lastAnchor}
+
+function btlTeardown() {
+  window.removeEventListener('pointermove', btlOnMove);
+  window.removeEventListener('pointerup', btlOnUp);
+  window.removeEventListener('pointercancel', btlOnCancel);
+  window.removeEventListener('keydown', btlOnKey);
+  document.body.style.cursor = '';
+}
+
+// После коммита: центральная заглушка снята самими save-функциями, рейку
+// снимаем и перерисовываем (источник мог уже перерисоваться onChanged-ом —
+// по id, как в onBtDragEnd)
+function btlAfterCommit(p) {
+  btDropCommitted = true;
+  // Центральная заглушка (рейка → центр) снимается явно: save-функции
+  // центра/группы снимают сами, а коммит в рейку — нет, без неё заглушка
+  // остаётся в центральном списке (идемпотентно)
+  removeGhostSlot();
+  if (dragBrowserTabGhost && dragBrowserTabGhost.isConnected) dragBrowserTabGhost.remove();
+  dragBrowserTabGhost = null;
+  if (p && p.t && browserTabsList) {
+    const el = browserTabsList.querySelector('.bt-tab[data-id="' + CSS.escape(String(p.t.id)) + '"]');
+    if (el) el.style.display = '';
+  }
+  renderBrowserTabs();
+}
+
+// Cancel: элемент возвращается в рейку, заглушка снята, клон «возвращается
+// домой» (p — состояние драга; передаётся из btlOnUp, где btl уже обнулён)
+function btlCancelState(p) {
+  p = p || btl;
+  btl = null;
+  railPointerPress = false;
+  dragSourceBrowserTab = null;
+  btDragItem = null;
+  pendingBtClickAfterDrag = false; // драг отменён — ложного клика не будет
+  if (dragBrowserTabGhost && dragBrowserTabGhost.isConnected) dragBrowserTabGhost.remove();
+  dragBrowserTabGhost = null;
+  removeGhostSlot(); // центральная заглушка (рейка → центр) при отмене
+  if (p && p.item && p.item.isConnected) p.item.style.display = '';
+  renderBrowserTabs();
+  if (p) pdFinishClone(p.homeRect, pdSettleMs());
+}
+
+function btlOnKey(e) {
+  if (!btl || !btl.armed || e.key !== 'Escape') return;
+  btlTeardown();
+  btlCancelState();
+}
+
+function btlOnCancel(e) {
+  if (!btl) return;
+  const armed = btl.armed;
+  btlTeardown();
+  if (armed) btlCancelState();
+  else { btl = null; railPointerPress = false; }
+}
+
+// Commit at (x, y) — те же цели, что у HTML5-дропа (document drop). Rect
+// цели (для клон-сета) снимаем ДО commit — commit ре-рендерит рейку и
+// снимает заглушки. null — не целевая точка (cancel).
+function btlCommitAt(x, y, p) {
+  const t = document.elementFromPoint(x, y);
+  const closest = (sel) => (t && t.closest) ? t.closest(sel) : null;
+  const src = dragSourceBrowserTab;
+  if (!src || !t || !t.closest) return null;
+  if (closest('.space-chip')) return null; // no-target — отмена (не переключает пространство)
+  const gbar = closest('.gbar');
+  if (gbar && gbar.dataset.groupId) {
+    const rect = gbar.getBoundingClientRect();
+    saveBtToGroup(src, gbar.dataset.groupId);
+    btlAfterCommit(p);
+    return rect;
+  }
+  const ges = closest('.group-empty-slot');
+  if (ges && ges.dataset.groupId) {
+    const rect = ges.getBoundingClientRect();
+    saveBtToGroup(src, ges.dataset.groupId);
+    btlAfterCommit(p);
+    return rect;
+  }
+  if (closest('#browser-tabs-list')) {
+    // Точка релиза — тот же midpoint-якорь, что dragover; индекс — по РЕАЛЬНОМУ
+    // окну (commitBtRailMove), DOM-позиция заглушки уже верна (синхронная)
+    moveBtGhostSlot(btSlotAnchor(y));
+    const rect = (dragBrowserTabGhost && dragBrowserTabGhost.isConnected)
+      ? dragBrowserTabGhost.getBoundingClientRect() : p.homeRect;
+    commitBtRailMove(src);
+    btlAfterCommit(p);
+    return rect;
+  }
+  if (closest('#tabs-list')) {
+    const anchor = slotAnchor(cardGapIndex(x, y), y);
+    ensureCentralBtGhost();
+    moveCentralBtGhost(anchor);
+    let rect = p.homeRect;
+    if (dragGhostSlot && dragGhostSlot.isConnected) rect = dragGhostSlot.getBoundingClientRect();
+    saveBtToCenter(src, anchor);
+    btlAfterCommit(p);
+    return rect;
+  }
+  return null; // повсюду остальном — отмена
+}
+
+function btlOnUp(e) {
+  if (!btl) return;
+  const armed = btl.armed;
+  const p = btl;
+  btl = null;
+  btlTeardown();
+  railPointerPress = false;
+  if (!armed) return; // обычный press — клик проходит (открывает вкладку)
+  const rect = btlCommitAt(e.clientX, e.clientY, p);
+  if (rect) {
+    pdFinishClone(rect, pdSettleMs()); // зафиксировано — клон «приземляется» в цель
+  } else {
+    btlCancelState(p); // вне целей — отмена
+  }
+}
+
+// Заглушка следует за курсором: рейка — midpoint-якорь (btSlotAnchor, то же
+// правило, что у HTML5-пути), при СМЕНЕ якоря — FLIP-проход соседей
+// (снапшот ДО перемещения, скроуп строго в рейку — body-клон не считается);
+// центральный список — центральная заглушка за курсором; повсюду остальном —
+// заглушки стоят (cancel-кандидат при отпускании)
+function btlTrackAt(x, y) {
+  const t = document.elementFromPoint(x, y);
+  if (t && t.closest && t.closest('#browser-tabs-list')) {
+    const anchor = btSlotAnchor(y);
+    // FLIP — только при РЕАЛЬНОЙ смене места (заглушка не на якорном месте):
+    // повторная установка в ту же позицию слайда не требует
+    const atPlace = anchor.side === 'before'
+      ? (dragBrowserTabGhost && dragBrowserTabGhost.nextElementSibling === anchor.el)
+      : (dragBrowserTabGhost && dragBrowserTabGhost.previousElementSibling === anchor.el);
+    const same = btl.lastAnchor && btl.lastAnchor.el === anchor.el && btl.lastAnchor.side === anchor.side;
+    if (!same || !atPlace) {
+      const firstRects = atPlace ? null : snapshotCardRects('#browser-tabs-list .bt-tab', btl.item);
+      moveBtGhostSlot(anchor);
+      btl.lastAnchor = anchor;
+      if (firstRects) applyFlipFrom(firstRects);
+    }
+    return;
+  }
+  if (t && t.closest && t.closest('#tabs-list')) {
+    ensureCentralBtGhost();
+    moveCentralBtGhost(slotAnchor(cardGapIndex(x, y), y));
+  }
+  btl.lastAnchor = null; // вне рейки — якорь сбрасывается (в рейке заново FLIP-нет)
+}
+
+function btlOnMove(e) {
+  if (!btl) return;
+  if (!btl.armed) {
+    const dx = e.clientX - btl.startX, dy = e.clientY - btl.startY;
+    if (dx * dx + dy * dy <= 8 * 8) return; // не драг, пока больше 8 px нет
+    // ARM: меряем rect и высоту ДО display:none (у скрытого элемента 0-размеры),
+    // прячем источник, тёплая заглушка дома (синхронно), lift-клон под курсором
+    const item = btl.item;
+    btl.homeRect = item.getBoundingClientRect();
+    dragSourceBrowserTab = { id: btl.t.id, url: btl.t.url || '', title: btl.t.title || '',
+                             favIconUrl: btl.t.favIconUrl || '', windowId: btl.t.windowId, index: btl.t.index };
+    btDragItem = item;
+    btDragHeight = item.offsetHeight || 30;
+    btDropCommitted = false;
+    pendingBtClickAfterDrag = true; // ложный post-drag-клик не открывает вкладку
+    pendingCardClickAfterDrag = true; // дроп в центр: ложный клик не открывает карточку
+    pendingChipClickAfterDrag = true; // дроп на чип: ложный клик не переключает пространство
+    dragBrowserTabGhost = makeBtGhostSlot(btDragHeight);
+    item.before(dragBrowserTabGhost);
+    item.style.display = 'none';
+    pdClone = pdCreateClone(item, btl.homeRect, e.clientX - btl.ox, e.clientY - btl.oy);
+    btl.armed = true;
+    btl.lastAnchor = null;
+    // Вооружено: курсор grabbing на body и на элементе
+    document.body.style.cursor = 'grabbing';
+    if (item.isConnected) item.style.cursor = 'grabbing';
+  }
+  e.preventDefault();
+  pdCloneMove(e.clientX - btl.ox, e.clientY - btl.oy);
+  btlTrackAt(e.clientX, e.clientY);
+}
+
+function btlBindItem(item, t) {
+  item.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    if (!item.draggable) return; // guardDragOverButtons снял draggable — press на кнопке
+    const rect = item.getBoundingClientRect();
+    btl = { t: t, item: item, homeRect: rect,
+            startX: e.clientX, startY: e.clientY,
+            ox: e.clientX - rect.left, oy: e.clientY - rect.top,
+            armed: false, lastAnchor: null };
+    railPointerPress = true; // guard в onBtDragStart отменит trusted нативный драг
+    window.addEventListener('pointermove', btlOnMove);
+    window.addEventListener('pointerup', btlOnUp);
+    window.addEventListener('pointercancel', btlOnCancel);
+    window.addEventListener('keydown', btlOnKey);
+  });
+}
+
 // === Start ===
 loadData();
 loadBrowserTabs();

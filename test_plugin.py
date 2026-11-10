@@ -10657,3 +10657,437 @@ class TestSettingsTabColor:
         self._open()
         assert self._reset_visible()
         assert self.page_errors == [], self.page_errors
+
+
+class TestPointerDragSettle:
+    """Pointer drag (real Chrome UX): lift-clone, FLIP slide of siblings,
+    drop settle. Real Playwright mouse (real pointer events, stepped moves).
+    The synthetic HTML5 DragEvent path stays intact — see
+    test_synthetic_drag_path_still_reorders."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        page.set_viewport_size({"width": 1280, "height": 900})
+        load_view(page, tabs=[
+            {"name": "A", "url": "https://a.com"},
+            {"name": "B", "url": "https://b.com"},
+            {"name": "C", "url": "https://c.com"},
+        ])
+
+    # === helpers ===
+
+    def _card_box(self, i):
+        return self.page.evaluate("""(i) => {
+            const c = document.querySelectorAll('.tab-card')[i];
+            const r = c.getBoundingClientRect();
+            return {left: r.left, top: r.top, width: r.width, height: r.height,
+                    right: r.right, x: r.left + r.width / 2, y: r.top + r.height / 2};
+        }""", i)
+
+    def _pd_move(self, from_pt, to_pt, steps=10):
+        pg = self.page
+        pg.mouse.move(from_pt["x"], from_pt["y"])
+        pg.mouse.down()
+        for i in range(1, steps + 1):
+            pg.mouse.move(from_pt["x"] + (to_pt["x"] - from_pt["x"]) * i / steps,
+                          from_pt["y"] + (to_pt["y"] - from_pt["y"]) * i / steps)
+
+    def _names(self):
+        return json.loads(self.page.evaluate("""(async () => {
+            var d = await chrome.storage.get('blattam-tabs');
+            return JSON.stringify((d['blattam-tabs'] || []).map(t => t.name));
+        })()"""))
+
+    def _clone_state(self):
+        return self.page.evaluate("""() => {
+            const c = document.querySelector('.pd-clone');
+            if (!c) return null;
+            const m = c.style.transform.match(/translate3d\\(([\\d.e-]+)px,\\s*([\\d.e-]+)px/);
+            return {inBody: c.parentElement === document.body,
+                    fixed: getComputedStyle(c).position === 'fixed',
+                    x: m ? parseFloat(m[1]) : null,
+                    y: m ? parseFloat(m[2]) : null};
+        }""")
+
+    def _any_flip_transform(self):
+        return self.page.evaluate("""() => [...document.querySelectorAll('#tabs-list .tab-card')]
+            .some(c => c.style.display !== 'none' &&
+                       c.style.transform !== '' && c.style.transform !== 'none')""")
+
+    # === tests ===
+
+    def test_plain_click_opens_tab_no_clone_no_ghost(self):
+        pt = self._card_box(0)
+        self.page.mouse.move(pt["x"], pt["y"])
+        self.page.mouse.down()
+        self.page.mouse.up()
+        self.page.wait_for_timeout(400)  # name-click opens after 300ms delay
+        assert self.page.evaluate("chrome.tabs.createdTabs.length") == 1
+        assert self._clone_state() is None
+        assert self.page.evaluate("!!document.querySelector('.tab-ghost-slot')") is False
+        assert self._names() == ["A", "B", "C"]
+
+    def test_small_move_does_not_arm(self):
+        pt = self._card_box(0)
+        self.page.mouse.move(pt["x"], pt["y"])
+        self.page.mouse.down()
+        self.page.mouse.move(pt["x"] + 5, pt["y"])  # under 8 px threshold
+        self.page.mouse.up()
+        assert self._clone_state() is None
+        assert self.page.evaluate("!!document.querySelector('.tab-ghost-slot')") is False
+        assert self.page.evaluate("document.querySelectorAll('.tab-card')[0].style.display") != 'none'
+        assert self._names() == ["A", "B", "C"]
+
+    def test_arm_lifts_clone_hides_card_ghost_at_home(self):
+        pt = self._card_box(0)
+        self._pd_move(pt, {"x": pt["x"] + 40, "y": pt["y"] + 10}, steps=8)
+        c = self._clone_state()
+        assert c is not None and c["inBody"] and c["fixed"]
+        # original card hidden, warm ghost slot in its slot
+        assert self.page.evaluate("document.querySelectorAll('.tab-card')[0].style.display") == 'none'
+        assert self.page.evaluate("""() => {
+            const g = document.querySelector('.tab-ghost-slot');
+            const a = document.querySelectorAll('.tab-card')[0];
+            return !!g && g.previousElementSibling === a;
+        }""") is True
+        # cursor grabbing while armed
+        assert self.page.evaluate("document.body.style.cursor") == 'grabbing'
+        self.page.mouse.up()
+        self.page.wait_for_timeout(400)  # settle completes, no leftovers
+        assert self._clone_state() is None
+        assert self.page.evaluate("!!document.querySelector('.tab-ghost-slot')") is False
+        assert self._names() == ["A", "B", "C"]  # dropped home — no-op
+
+    def test_clone_tracks_cursor_1to1(self):
+        pt = self._card_box(0)
+        self._pd_move(pt, {"x": pt["x"] + 30, "y": pt["y"] + 10}, steps=6)
+        p1 = self._clone_state()
+        assert p1 is not None
+        self.page.mouse.move(pt["x"] + 60, pt["y"] + 30)
+        p2 = self._clone_state()
+        assert abs((p2["x"] - p1["x"]) - 30) < 1.5
+        assert abs((p2["y"] - p1["y"]) - 20) < 1.5
+        self.page.mouse.up()
+        self.page.wait_for_timeout(400)
+
+# ==========================================
+#  VIEW.JS: POINTER-ДРАГ РЕЙКИ (реальный Chrome UX)
+# ===========================================
+
+class TestRailPointerDrag:
+    """Pointer drag of RAIL browser tabs (real Chrome UX): press + move >8px
+    arms it — lift-clone tracks the cursor, the rail ghost slot follows by
+    midpoint rule with a FLIP slide of siblings, and release commits to the
+    rail / group / center (or cancels). Real Playwright mouse. The synthetic
+    HTML5 DragEvent path stays intact (test_synthetic_rail_drag_still_reorders)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        page.set_viewport_size({"width": 1280, "height": 900})
+        load_view(page, tabs=self.TABS, spaces=self.SPACES,
+                  groups=self.GROUPS, browser_tabs=self.BT)
+        page.wait_for_timeout(80)
+
+    BT = [
+        {"id": "bt1", "title": "Wiki", "url": "https://wiki.example",
+         "favIconUrl": "https://fav.example/1.ico", "windowId": 1, "index": 0},
+        {"id": "bt2", "title": "Mail", "url": "https://mail.example",
+         "favIconUrl": "https://fav.example/2.ico", "windowId": 1, "index": 1},
+        {"id": "bt3", "title": "News", "url": "https://news.example",
+         "favIconUrl": "https://fav.example/3.ico", "windowId": 1, "index": 2},
+    ]
+    SPACES = [{"id": "sp1", "name": "Alpha"}]
+    TABS = [{"name": "Saved", "url": "https://saved.example", "spaceId": "sp1"}]
+    GROUPS = [{"id": "g1", "name": "Grp", "spaceId": "sp1", "collapsed": False}]
+
+    # === helpers ===
+
+    def _pd_move(self, from_pt, to_pt, steps=10):
+        pg = self.page
+        pg.mouse.move(from_pt["x"], from_pt["y"])
+        pg.mouse.down()
+        for i in range(1, steps + 1):
+            pg.mouse.move(from_pt["x"] + (to_pt["x"] - from_pt["x"]) * i / steps,
+                          from_pt["y"] + (to_pt["y"] - from_pt["y"]) * i / steps)
+
+    def _clone_state(self):
+        return self.page.evaluate("""() => {
+            const c = document.querySelector('.pd-clone');
+            if (!c) return null;
+            const m = c.style.transform.match(/translate3d\\(([\\d.e-]+)px,\\s*([\\d.e-]+)px/);
+            return {inBody: c.parentElement === document.body,
+                    fixed: getComputedStyle(c).position === 'fixed',
+                    x: m ? parseFloat(m[1]) : null,
+                    y: m ? parseFloat(m[2]) : null};
+        }""")
+
+    def _item_box(self, id):
+        return self.page.evaluate("""(id) => {
+            const c = document.querySelector('#browser-tabs-list .bt-tab[data-id="' + id + '"]');
+            const r = c.getBoundingClientRect();
+            return {left: r.left, top: r.top, width: r.width, height: r.height,
+                    right: r.right, x: r.left + r.width / 2, y: r.top + r.height / 2};
+        }""", id)
+
+    def _any_rail_flip(self):
+        return self.page.evaluate("""() => [...document.querySelectorAll('#browser-tabs-list .bt-tab')]
+            .some(c => c.style.display !== 'none' &&
+                       c.style.transform !== '' && c.style.transform !== 'none')""")
+
+    def _tabs_order(self):
+        return json.loads(self.page.evaluate(
+            "JSON.stringify([...document.querySelectorAll('#browser-tabs-list .bt-tab')].map(e => e.dataset.id))"))
+
+    def _rail_titles(self):
+        return json.loads(self.page.evaluate(
+            "JSON.stringify([...document.querySelectorAll('#browser-tabs-list .bt-tab .bt-title')].map(e => e.textContent))"))
+
+    def _center_card_box(self):
+        return self.page.evaluate("""() => {
+            const c = document.querySelector('#tabs-list .tab-card');
+            const r = c.getBoundingClientRect();
+            return {left: r.left, top: r.top, width: r.width, height: r.height,
+                    x: r.left + r.width / 2, y: r.top + r.height / 2};
+        }""")
+
+    def _gbar_box(self):
+        return self.page.evaluate("""() => {
+            const g = document.querySelector('.gbar');
+            const r = g.getBoundingClientRect();
+            return {x: r.left + r.width / 2, y: r.top + r.height / 2};
+        }""")
+
+    def _central_ghost_count(self):
+        return self.page.evaluate("document.querySelectorAll('#tabs-list .tab-ghost-slot').length")
+
+    # === tests ===
+
+    def test_flip_slide_on_anchor_change(self):
+        # FLIP при СМЕНЕ якоря: transform на соседнем элементе → слайд
+        # (transitionstart transform) → уборка (transitionend). Inline-transform
+        # живёт коротко (go() — двойной rAF / fallback-таймер 50 ms — снимает его
+        # и включает transition), поэтому не читаем его «сразу после хода», а
+        # ловим СТАРТ слайда событием. Релиз — в no-op-якоре (слот самой
+        # заглушки — выше mid-линии bt2): move не вызывается, порядок и
+        # элементы не меняются — весь цикл виден на тех же элементах.
+        self.page.evaluate("""() => {
+            window.__flipStarts = 0;
+            document.addEventListener('transitionstart', (e) => {
+                if (e.propertyName === 'transform' && e.target.closest &&
+                    e.target.closest('#browser-tabs-list')) window.__flipStarts++;
+            }, true);
+        }""")
+        b1, b2 = self._item_box('bt1'), self._item_box('bt2')
+        self._pd_move(b1, {"x": b2["x"], "y": b2["top"] + b2["height"] * 0.75}, steps=8)
+        self.page.wait_for_timeout(60)  # go() ≤ 50 ms после постановки transform
+        assert self.page.evaluate("window.__flipStarts") >= 1  # слайд стартовал
+        mid = self.page.evaluate("""() => [...document.querySelectorAll('#browser-tabs-list .bt-tab')]
+            .some(c => (c.style.transition || '').indexOf('transform') !== -1)""")
+        assert mid is True  # FLIP (200 ms) ещё идёт — inline transition стоит
+        self.page.wait_for_timeout(350)  # слайд дошёл — transitionend снял transition
+        all_clear = self.page.evaluate("""() => [...document.querySelectorAll('#browser-tabs-list .bt-tab')]
+            .every(c => (c.style.transform === '' || c.style.transform === 'none') && !c.style.transition)""")
+        assert all_clear is True
+        # релиз в no-op-якоре (заглушка уже дома) — порядок не изменился
+        rail = self.page.evaluate("""() => {
+            const r = document.getElementById('browser-tabs-list').getBoundingClientRect();
+            return {x: r.left + r.width / 2, y: r.top + 5};
+        }""")
+        self.page.mouse.move(rail["x"], rail["y"])  # выше mid-линии bt2 — «before bt2» (no-op)
+        self.page.mouse.up()
+        self.page.wait_for_timeout(150)
+        assert self._tabs_order() == ["bt1", "bt2", "bt3"]  # no-op — move не было
+        self.page.wait_for_timeout(400)  # клон сел
+        assert self._clone_state() is None
+
+    def test_reorder_to_lower_slot(self):
+        b1, b3 = self._item_box('bt1'), self._item_box('bt3')
+        self._pd_move(b1, {"x": b3["x"], "y": b3["y"] + b3["height"] / 4}, steps=10)
+        self.page.mouse.up()
+        self.page.wait_for_timeout(150)  # mock move: зеркало + onChanged — синхронно
+        assert self._tabs_order() == ["bt2", "bt3", "bt1"]
+        mirror = read_local(self.page, 'blattam-browser-tabs')
+        assert [t["id"] for t in mirror] == ["bt2", "bt3", "bt1"]  # blattam-browser-tabs обновлено
+        assert self._rail_titles() == ["Mail", "News", "Wiki"]  # рейка перерисована
+        assert self.page.evaluate("!!document.querySelector('#browser-tabs-list .bt-ghost-slot')") is False
+
+    def test_reorder_to_upper_slot(self):
+        b3, b1 = self._item_box('bt3'), self._item_box('bt1')
+        self._pd_move(b3, {"x": b1["x"], "y": b1["top"] + 2}, steps=10)
+        self.page.mouse.up()
+        self.page.wait_for_timeout(150)
+        assert self._tabs_order() == ["bt3", "bt1", "bt2"]
+        assert self._rail_titles() == ["News", "Wiki", "Mail"]
+
+    def test_drop_over_tabs_list_creates_saved_card(self):
+        b1 = self._item_box('bt1')
+        card = self.page.evaluate("""() => {
+            const c = document.querySelector('#tabs-list .tab-card');
+            const r = c.getBoundingClientRect();
+            return {x: r.left + r.width / 2, y: r.top + r.height / 2};
+        }""")
+        self._pd_move(b1, {"x": card["x"], "y": card["y"]}, steps=12)
+        self.page.mouse.up()
+        self.page.wait_for_timeout(100)
+        tabs = read_local(self.page, 'blattam-tabs')
+        # НОВАЯ карточка в позиции слота заглушки (рядом с «Saved») — браузерная
+        # вкладка остаётся открытой
+        assert len(tabs) == 2, tabs
+        w = [t for t in tabs if t["url"] == "https://wiki.example"]
+        assert len(w) == 1, tabs
+        w = w[0]
+        assert w["title"] == "Wiki" and w["spaceId"] == "sp1" and w["groupId"] is None
+        assert self._tabs_order() == ["bt1", "bt2", "bt3"]  # рейка не тронута
+        self.page.wait_for_timeout(400)
+        assert self._clone_state() is None
+
+    def test_drop_over_gbar_saves_into_group(self):
+        b1 = self._item_box('bt1')
+        gbar = self.page.evaluate("""() => {
+            const g = document.querySelector('.gbar');
+            const r = g.getBoundingClientRect();
+            return {x: r.left + r.width / 2, y: r.top + r.height / 2};
+        }""")
+        self._pd_move(b1, {"x": gbar["x"], "y": gbar["y"]}, steps=12)
+        self.page.mouse.up()
+        self.page.wait_for_timeout(100)
+        tabs = read_local(self.page, 'blattam-tabs')
+        assert len(tabs) == 2 and tabs[1]["url"] == "https://wiki.example"
+        assert tabs[1]["groupId"] == "g1"
+        assert self._tabs_order() == ["bt1", "bt2", "bt3"]  # рейка не тронута
+        self.page.wait_for_timeout(400)
+        assert self._clone_state() is None
+
+    def test_drop_on_own_slot_noop_no_write(self):
+        self.page.evaluate("""() => {
+            window.__btMoves = [];
+            const orig = chrome.tabs.move.bind(chrome.tabs);
+            chrome.tabs.move = (id, opts) => { window.__btMoves.push(id); return orig(id, opts); };
+            window.__btWrites = [];
+            const origSet = chrome.storage.local.set.bind(chrome.storage.local);
+            chrome.storage.local.set = (d, cb) => {
+                if (d) Object.keys(d).forEach(k => window.__btWrites.push(k));
+                return origSet(d, cb);
+            };
+        }""")
+        b1 = self._item_box('bt1')
+        self._pd_move(b1, {"x": b1["x"], "y": b1["y"] + 10}, steps=4)  # в своей заглушке
+        assert self._clone_state() is not None
+        self.page.mouse.up()
+        self.page.wait_for_timeout(150)
+        assert self.page.evaluate("window.__btMoves") == []  # tabs.move не вызывался
+        assert "blattam-browser-tabs" not in self.page.evaluate("window.__btWrites")
+        assert "blattam-tabs" not in self.page.evaluate("window.__btWrites")
+        assert self._tabs_order() == ["bt1", "bt2", "bt3"]
+        assert self.page.evaluate("!!document.querySelector('#browser-tabs-list .bt-ghost-slot')") is False
+        self.page.wait_for_timeout(400)
+        assert self._clone_state() is None
+
+    def test_escape_cancels_mid_drag(self):
+        b1, b3 = self._item_box('bt1'), self._item_box('bt3')
+        self._pd_move(b1, {"x": b3["x"], "y": b3["y"]}, steps=10)
+        assert self._clone_state() is not None
+        self.page.keyboard.press("Escape")
+        assert self._tabs_order() == ["bt1", "bt2", "bt3"]  # no commit
+        assert self._rail_titles() == ["Wiki", "Mail", "News"]
+        assert self.page.evaluate("!!document.querySelector('#browser-tabs-list .bt-ghost-slot')") is False
+        assert self.page.evaluate("document.body.style.cursor") == ""
+        self.page.wait_for_timeout(300)  # cancel animation finished
+        assert self._clone_state() is None
+        self.page.mouse.up()  # release after cancel — nothing to do
+        assert self._tabs_order() == ["bt1", "bt2", "bt3"]
+
+    def test_release_over_space_chip_cancels(self):
+        b1 = self._item_box('bt1')
+        chip = self.page.evaluate("""() => {
+            const c = document.querySelector('.space-chip');
+            const r = c.getBoundingClientRect();
+            return {x: r.left + r.width / 2, y: r.top + r.height / 2};
+        }""")
+        self._pd_move(b1, {"x": chip["x"], "y": chip["y"]}, steps=12)
+        assert self._clone_state() is not None
+        self.page.mouse.up()
+        assert self._tabs_order() == ["bt1", "bt2", "bt3"]
+        tabs = read_local(self.page, 'blattam-tabs')
+        assert len(tabs) == 1 and tabs[0]["url"] == "https://saved.example"  # центр не тронут
+        assert self.page.evaluate("!!document.querySelector('#browser-tabs-list .bt-ghost-slot')") is False
+        assert self.page.evaluate("document.body.style.cursor") == ""
+        self.page.wait_for_timeout(300)
+        assert self._clone_state() is None
+
+    def test_synthetic_rail_drag_still_reorders(self):
+        # HTML5-совместимый путь жив: untrusted DragEvent-цепочка проходит
+        # isTrusted-guard без изменений
+        self.page.evaluate("""() => {
+            const src = document.querySelector('#browser-tabs-list .bt-tab[data-id="bt1"]');
+            const dst = document.querySelector('#browser-tabs-list .bt-tab[data-id="bt3"]');
+            const r = dst.getBoundingClientRect();
+            const dt = new DataTransfer();
+            src.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true, cancelable: true}));
+            window.__w2bDt = dt;
+        }""")
+        self.page.wait_for_timeout(60)  # отложенное создание заглушки (setTimeout 0)
+        self.page.evaluate("""() => {
+            const src = document.querySelector('#browser-tabs-list .bt-tab[data-id="bt1"]');
+            const dst = document.querySelector('#browser-tabs-list .bt-tab[data-id="bt3"]');
+            const r = dst.getBoundingClientRect();
+            const clientX = r.left + r.width * 0.75, clientY = r.bottom - Math.max(r.height * 0.25, 0.001);
+            const dt = window.__w2bDt;
+            dst.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true,
+                cancelable: true, clientX, clientY}));
+            dst.dispatchEvent(new DragEvent('drop', {dataTransfer: dt, bubbles: true,
+                cancelable: true, clientX, clientY}));
+            src.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        }""")
+        self.page.wait_for_timeout(200)  # mock move — promise: даём рейке добегать
+        assert self._tabs_order() == ["bt2", "bt3", "bt1"]
+        assert self._rail_titles() == ["Mail", "News", "Wiki"]
+
+    def test_central_ghost_removed_on_gbar_commit(self):
+        # Pointer drag crosses the tabs list (central ghost appears), release on the
+        # group header — the central ghost is removed, tab saved into the group
+        b1 = self._item_box('bt1')
+        card = self._center_card_box()
+        gbar = self._gbar_box()
+        self._pd_move(b1, card, steps=8)
+        assert self._central_ghost_count() == 1  # pointer crossed #tabs-list
+        self.page.mouse.move(gbar["x"], gbar["y"])
+        self.page.mouse.up()
+        self.page.wait_for_timeout(100)
+        assert self._central_ghost_count() == 0  # central ghost removed
+        tabs = read_local(self.page, 'blattam-tabs')
+        assert len(tabs) == 2 and tabs[1]["url"] == "https://wiki.example"
+        assert tabs[1]["groupId"] == "g1"
+
+    def test_central_ghost_removed_on_rail_recommit(self):
+        # Pointer drag crosses the tabs list (central ghost appears), then returns to
+        # the rail and reorders — the central ghost is removed, not left over
+        b1, b3 = self._item_box('bt1'), self._item_box('bt3')
+        card = self._center_card_box()
+        self._pd_move(b1, card, steps=8)
+        assert self._central_ghost_count() == 1  # pointer crossed #tabs-list
+        # The harness page is UNSTYLED: the central ghost (inserted in the
+        # center column ABOVE the rail) shifts the whole rail down — re-fetch
+        # bt3's box, else the release point (computed pre-drag) lands above the
+        # shifted rail's midline → no-op anchor → no reorder
+        b3 = self._item_box('bt3')
+        self.page.mouse.move(b3["x"], b3["y"] + b3["height"] / 4)  # back to the rail
+        self.page.mouse.up()
+        self.page.wait_for_timeout(150)
+        assert self._central_ghost_count() == 0  # central ghost removed (the fix)
+        assert self.page.evaluate("document.querySelectorAll('.bt-ghost-slot').length") == 0
+        assert self._tabs_order() == ["bt2", "bt3", "bt1"]  # rail reordered
+
+    def test_central_ghost_removed_on_cancel(self):
+        # Pointer drag crosses the tabs list (central ghost appears), then cancels
+        # (Escape) — the central ghost is removed, not left over
+        b1 = self._item_box('bt1')
+        card = self._center_card_box()
+        self._pd_move(b1, card, steps=8)
+        assert self._central_ghost_count() == 1  # pointer crossed #tabs-list
+        self.page.keyboard.press("Escape")
+        self.page.wait_for_timeout(100)
+        assert self._central_ghost_count() == 0  # central ghost removed
+        assert self._tabs_order() == ["bt1", "bt2", "bt3"]  # rail unchanged
