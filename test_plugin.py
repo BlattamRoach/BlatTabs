@@ -150,6 +150,11 @@ var chrome = {
       chrome.storage._fire({ 'blattam-browser-tabs': { newValue: entries, oldValue: oldVal } }, 'local');
       return Promise.resolve(undefined);
     },
+    update: function(tabId, opts) {
+      this._lastUpdate = { tabId: tabId, opts: opts || {} };
+      for (var i = 0; i < this._tabs.length; i++) if (this._tabs[i].id === tabId) this._tabs[i].active = (opts && opts.active !== false);
+      return Promise.resolve(undefined);
+    },
     onCreated: mockEvent('tabs.onCreated'),
     onRemoved: mockEvent('tabs.onRemoved'),
     onMoved: mockEvent('tabs.onMoved'),
@@ -158,6 +163,8 @@ var chrome = {
   },
   windows: {
     _current: { id: 1 },
+    _lastFocus: null,
+    update: function(winId, opts) { this._lastFocus = { winId: winId, opts: opts || {} }; return Promise.resolve({ id: winId }); },
     getCurrent: function(cb) { if (cb) { cb(this._current); return undefined; } return Promise.resolve(this._current); },
   },
   commands: {
@@ -1688,7 +1695,8 @@ class TestGroupBarDrop:
 
     def test_click_right_after_drop_does_not_toggle_collapsed_group(self):
         # Свернутая группа: клик по шапке сразу ПОСЛЕ дропа (некоторые
-        # браузеры генерируют клик после drop) группу НЕ раскрывает;
+        # браузеры генерируют клик после drop) группу НЕ сворачивает;
+        # дроп в свёрнутую группу её РАЗВЁРТЫВАЕТ (вкладка видна),
         # вкладка уезжает в группу (счётчик «1 вкладка»)
         load_view(self.page, spaces=[{"id": "sp1", "name": "Main"}], groups=[
             {"id": "g1", "name": "Dev", "spaceId": "sp1", "collapsed": True},
@@ -1698,7 +1706,7 @@ class TestGroupBarDrop:
         self.page.evaluate("document.querySelector('.gbar').click()")
         self.page.wait_for_timeout(30)
         assert read_storage_raw(self.page, "blattam-tabs")[0]["groupId"] == "g1"
-        assert read_storage_raw(self.page, "blattam-groups")[0]["collapsed"] is True
+        assert read_storage_raw(self.page, "blattam-groups")[0]["collapsed"] is False
         count = self.page.evaluate("document.querySelector('.gbar .gcount').textContent")
         assert count == "1 вкладка"
 
@@ -1742,6 +1750,160 @@ class TestGroupBarDrop:
 
 
 # ==========================================
+#  VIEW.JS: ДРОП В СВЁРНУТУЮ ГРУППУ — АВТОРАЗВЁРТЫВАНИЕ (вкладка видна)
+# ==========================================
+
+class TestCollapsedGroupDropExpand:
+    """Дроп вкладки (карточка/батч/вкладка рейки) в СВЁРНУТУЮ группу разворачивает
+    её, чтобы вставленная вкладка была видна (blattam-groups collapsed=false →
+    onChanged → перерисовка). Дроп-семантика и подавление ложного post-drop клика
+    без изменений (покрыто TestGroupBarDrop/TestPostDropClick*); регрессии —
+    развёрнутая пустая группа и шапка группы с видимыми карточками."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    SP = [{"id": "sp1", "name": "Main"}]
+
+    def _drag_drop_to_gbar(self, src_idx):
+        self.page.evaluate("""(idx) => {
+          const card = document.querySelectorAll('.tab-card')[idx];
+          const bar = document.querySelector('.gbar[data-group-id="g1"]');
+          const dt = new DataTransfer();
+          card.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true}));
+          bar.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true}));
+          bar.dispatchEvent(new DragEvent('drop', {dataTransfer: dt, bubbles: true, cancelable: true}));
+          card.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        }""", src_idx)
+
+    def _g1_dom(self):
+        # Класс шапки g1 + число ВИДИМЫХ карточек под ней (до след. шапки/«+ Группа»)
+        return json.loads(self.page.evaluate("""(() => {
+          const bar = document.querySelector('.gbar[data-group-id="g1"]');
+          let cur = bar.nextElementSibling, n = 0;
+          while (cur && !cur.classList.contains('gbar') && !cur.classList.contains('add-group-row')) {
+            if (cur.classList.contains('tab-card') && cur.style.display !== 'none' &&
+                cur.__tab && cur.__tab.groupId === 'g1') n++;
+            cur = cur.nextElementSibling;
+          }
+          return JSON.stringify({barClass: bar.className, g1Cards: n});
+        })()"""))
+
+    def test_drop_card_on_collapsed_group_expands_it(self):
+        # Дроп карточки на шапку свёрнутой группы: вкладка в ней (place-tab,
+        # anchorIndex null), blattam-groups collapsed=false, карточка ВИДНА
+        # под шапкой (и до того свёрнутая группа больше не даёт слота-подвоха)
+        load_view(self.page, spaces=self.SP, groups=[
+            {"id": "g1", "name": "Dev", "spaceId": "sp1", "collapsed": True},
+        ], tabs=[
+            {"name": "M", "url": "https://m.com", "spaceId": "sp1", "groupId": "g1"},
+            {"name": "T", "url": "https://t.com", "spaceId": "sp1"},
+        ])
+        self._drag_drop_to_gbar(0)  # T — единственная видимая карточка (M в свёрнутой g1 не видна)
+        self.page.wait_for_timeout(30)
+        msg = json.loads(self.page.evaluate("JSON.stringify(window.lastMessage)"))
+        assert msg["action"] == "place-tab" and msg["anchorIndex"] is None and msg["groupId"] == "g1"
+        tabs = {t["name"]: t for t in read_storage_raw(self.page, "blattam-tabs")}
+        assert tabs["T"]["groupId"] == "g1"
+        assert read_storage_raw(self.page, "blattam-groups")[0]["collapsed"] is False
+        d = self._g1_dom()
+        assert "gbar-collapsed" not in d["barClass"]
+        assert d["g1Cards"] == 2  # T (новая) + M (теперь видна)
+
+    def test_drop_selected_batch_on_collapsed_group_expands_it(self):
+        # Выделенный батч на шапку свёрнутой группы: ВСЕ вкладки батча в ней
+        # (place-tabs), группа развёрнута, карточки видны под шапкой
+        load_view(self.page, spaces=self.SP, groups=[
+            {"id": "g1", "name": "Dev", "spaceId": "sp1", "collapsed": True},
+        ], tabs=[
+            {"name": "M", "url": "https://m.com", "spaceId": "sp1", "groupId": "g1"},
+            {"name": "A", "url": "https://a.com", "spaceId": "sp1"},
+            {"name": "B", "url": "https://b.com", "spaceId": "sp1"},
+        ])
+        self.page.evaluate("""() => {
+          const sel = document.querySelectorAll('.tab-card .tab-select');
+          sel[0].click(); sel[1].click();  // A + B (M не видна — её чекбокса в DOM нет)
+        }""")
+        self._drag_drop_to_gbar(0)  # A — первая видимая карточка
+        self.page.wait_for_timeout(30)
+        msg = json.loads(self.page.evaluate("JSON.stringify(window.lastMessage)"))
+        assert msg["action"] == "place-tabs" and msg["groupId"] == "g1" and msg["anchorUrl"] is None
+        assert msg["urls"] == ["https://a.com", "https://b.com"]
+        tabs = {t["name"]: t for t in read_storage_raw(self.page, "blattam-tabs")}
+        assert tabs["A"]["groupId"] == "g1" and tabs["B"]["groupId"] == "g1"
+        assert read_storage_raw(self.page, "blattam-groups")[0]["collapsed"] is False
+        d = self._g1_dom()
+        assert "gbar-collapsed" not in d["barClass"]
+        assert d["g1Cards"] == 3  # M + A + B — теперь все видны
+
+    def test_drop_rail_tab_on_collapsed_group_expands_it(self):
+        # Вкладка правой рейки на шапку свёрнутой группы (saveBtToGroup):
+        # новая карточка в ней, группа развёрнута, карточка видна; зеркало не тронуто
+        BT = [{"id": "bt3", "title": "News", "url": "https://news.example",
+               "favIconUrl": "https://fav.example/3.ico", "windowId": 1, "index": 2}]
+        load_view(self.page, spaces=self.SP, groups=[
+            {"id": "g1", "name": "Dev", "spaceId": "sp1", "collapsed": True},
+        ], tabs=[{"name": "T", "url": "https://t.com", "spaceId": "sp1"}], browser_tabs=BT)
+        self.page.wait_for_timeout(60)
+        self.page.evaluate("""() => {
+          const src = document.querySelector('.bt-tab[data-id="bt3"]');
+          const bar = document.querySelector('.gbar[data-group-id="g1"]');
+          const r = bar.getBoundingClientRect();
+          const dt = new DataTransfer();
+          src.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true, cancelable: true}));
+          bar.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true,
+                                                       clientX: r.left + 10, clientY: r.top + 5}));
+          bar.dispatchEvent(new DragEvent('drop', {dataTransfer: dt, bubbles: true, cancelable: true,
+                                                   clientX: r.left + 10, clientY: r.top + 5}));
+          src.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        }""")
+        self.page.wait_for_timeout(50)
+        tabs = read_storage_raw(self.page, "blattam-tabs")
+        assert tabs[-1]["url"] == "https://news.example" and tabs[-1]["groupId"] == "g1"
+        assert read_storage_raw(self.page, "blattam-groups")[0]["collapsed"] is False
+        d = self._g1_dom()
+        assert "gbar-collapsed" not in d["barClass"]
+        assert d["g1Cards"] == 1
+        assert self.page.evaluate("chrome.tabs._tabs.map(t => t.id)") == ["bt3"]
+
+    def test_drop_on_expanded_empty_group_stays_expanded(self):
+        # Регрессия: пустая РАЗВЁРНУТАЯ группа — дроп работает как раньше,
+        # группа остаётся развёрнутой, слот-заглушка уходит (карточка в группе)
+        load_view(self.page, spaces=self.SP, groups=[
+            {"id": "g1", "name": "Dev", "spaceId": "sp1", "collapsed": False},
+        ], tabs=[{"name": "T", "url": "https://t.com", "spaceId": "sp1"}])
+        self._drag_drop_to_gbar(0)
+        self.page.wait_for_timeout(30)
+        tabs = read_storage_raw(self.page, "blattam-tabs")
+        assert tabs[0]["groupId"] == "g1"
+        assert read_storage_raw(self.page, "blattam-groups")[0]["collapsed"] is False
+        d = self._g1_dom()
+        assert "gbar-collapsed" not in d["barClass"]
+        assert d["g1Cards"] == 1
+        assert self.page.evaluate("!!document.querySelector('.group-empty-slot')") is False
+
+    def test_drop_on_expanded_nonempty_gbar_is_noop(self):
+        # Регрессия: шапка группы С видимыми карточками — дроп карточки на неё
+        # остаётся no-op: ни сообщения, ни изменения состояния
+        load_view(self.page, spaces=self.SP, groups=[
+            {"id": "g1", "name": "Dev", "spaceId": "sp1", "collapsed": False},
+        ], tabs=[
+            {"name": "M", "url": "https://m.com", "spaceId": "sp1", "groupId": "g1"},
+            {"name": "T", "url": "https://t.com", "spaceId": "sp1"},
+        ])
+        before_t = json.dumps(read_storage_raw(self.page, "blattam-tabs"), sort_keys=True)
+        before_g = json.dumps(read_storage_raw(self.page, "blattam-groups"), sort_keys=True)
+        self._drag_drop_to_gbar(0)
+        self.page.wait_for_timeout(30)
+        assert json.dumps(read_storage_raw(self.page, "blattam-tabs"), sort_keys=True) == before_t
+        assert json.dumps(read_storage_raw(self.page, "blattam-groups"), sort_keys=True) == before_g
+        tabs = read_storage_raw(self.page, "blattam-tabs")
+        assert tabs[1].get("groupId") in (None, "")
+        act = self.page.evaluate("window.lastMessage ? window.lastMessage.action : null")
+        assert act not in ("place-tab", "place-tabs")
+
+# ==========================================
 #  VIEW.JS: ЛОЖНЫЙ КЛИК ПО ШАПКЕ ПОСЛЕ ДРОПА (медленная перерисовка)
 # ==========================================
 
@@ -1777,10 +1939,10 @@ class TestPostDropClickSlowRender:
             {"name": "B", "url": "https://b.com", "spaceId": "sp1", "groupId": "g3"},
         ])
 
-    def test_slow_postdrop_click_does_not_open_collapsed_target(self):
+    def test_slow_postdrop_click_does_not_recollapse_expanded_target(self):
         # Ложный post-drop клик (без mousedown) приходит >500ms после
-        # dragend — за окном временной защиты: g2 остаётся свёрнутой,
-        # а вкладка в ней (groupId = g2)
+        # dragend — за окном временной защиты: дроп РАЗВЁРНУЛ g2
+        # (вкладка в ней — groupId = g2), а ложный клик не сворачивает её
         self._load_three_groups()
         self._drag_card_to_g2(0)
         self.page.wait_for_timeout(600)
@@ -1789,7 +1951,7 @@ class TestPostDropClickSlowRender:
         tabs = read_storage_raw(self.page, "blattam-tabs")
         assert [t for t in tabs if t["url"] == "https://a.com"][0]["groupId"] == "g2"
         groups = {g["id"]: g for g in read_storage_raw(self.page, "blattam-groups")}
-        assert groups["g2"]["collapsed"] is True
+        assert groups["g2"]["collapsed"] is False
         # g1 auto-collapse: drop moved its last tab out (g3 keeps its member)
         assert groups["g1"]["collapsed"] is True and groups["g3"]["collapsed"] is False
 
@@ -1816,12 +1978,12 @@ class TestPostDropClickSlowRender:
         self.page.locator('.gbar[data-group-id="g2"]').click()
         self.page.wait_for_timeout(30)
         groups = {g["id"]: g for g in read_storage_raw(self.page, "blattam-groups")}
-        assert groups["g2"]["collapsed"] is False
-        # флаг гасится одноразово — второй клик сворачивает обратно
+        assert groups["g2"]["collapsed"] is True
+        # флаг гасится одноразово — second real click re-expands
         self.page.locator('.gbar[data-group-id="g2"]').click()
         self.page.wait_for_timeout(30)
         groups = {g["id"]: g for g in read_storage_raw(self.page, "blattam-groups")}
-        assert groups["g2"]["collapsed"] is True
+        assert groups["g2"]["collapsed"] is False
 
 
 class TestPostDropClickBeforeDragend:
@@ -1846,9 +2008,9 @@ class TestPostDropClickBeforeDragend:
             {"name": "S", "url": "https://s.com", "spaceId": "sp1", "groupId": "g2"},
         ])
 
-    def test_spurious_click_at_drop_time_does_not_open_collapsed_target(self):
-        # Ложный клик приходит в момент дропа — ДО dragend источника: группа
-        # остаётся свёрнутой, а вкладка в неё переезжает
+    def test_spurious_click_at_drop_time_does_not_recollapse_target(self):
+        # Ложный клик приходит в момент дропа — ДО dragend источника:
+        # дроп РАЗВЁРНУЛ группу (вкладка в ней видна), а ложный клик не сворачивает
         self._load_seeded()
         self.page.evaluate("""(() => {
           const card = document.querySelector('.tab-card');
@@ -1864,7 +2026,7 @@ class TestPostDropClickBeforeDragend:
         })()""")
         self.page.wait_for_timeout(30)
         groups = {g["id"]: g for g in read_storage_raw(self.page, "blattam-groups")}
-        assert groups["g1"]["collapsed"] is True
+        assert groups["g1"]["collapsed"] is False
         # g2 auto-collapse: drop moved its only tab into g1
         assert groups["g2"]["collapsed"] is True
         tabs = read_storage_raw(self.page, "blattam-tabs")
@@ -1877,9 +2039,9 @@ class TestPostDropClickBeforeDragend:
           }
           return n;
         })()""")
-        assert rendered == 0
+        assert rendered == 4  # A–C (были свёрнуты — теперь видны) + S (новая в g1)
 
-    def test_spurious_click_after_slow_render_before_dragend(self):
+    def test_spurious_click_after_slow_render_before_dragend_does_not_recollapse(self):
         # Ложный клик приходит ПОСЛЕ медленной перерисовки (свежий элемент
         # шапки), но всё ещё до dragend источника — one-shot флаг должен
         # пережить перерисовку
@@ -1900,7 +2062,7 @@ class TestPostDropClickBeforeDragend:
         })()""")
         self.page.wait_for_timeout(30)
         groups = {g["id"]: g for g in read_storage_raw(self.page, "blattam-groups")}
-        assert groups["g1"]["collapsed"] is True
+        assert groups["g1"]["collapsed"] is False
         tabs = read_storage_raw(self.page, "blattam-tabs")
         assert [t for t in tabs if t["url"] == "https://s.com"][0]["groupId"] == "g1"
 
@@ -1921,7 +2083,7 @@ class TestPostDropClickBeforeDragend:
         self.page.locator('.gbar[data-group-id="g1"]').click()  # реальное нажатие
         self.page.wait_for_timeout(30)
         groups = {g["id"]: g for g in read_storage_raw(self.page, "blattam-groups")}
-        assert groups["g1"]["collapsed"] is False
+        assert groups["g1"]["collapsed"] is True
 
     def test_ghost_slot_not_created_for_detached_source_card(self):
         # Перерисовка во время драга уносит исходную карточку из DOM: отложенная
@@ -4338,9 +4500,9 @@ class TestDragGhostOverCollapsed:
         assert self.page.evaluate("document.querySelectorAll('.tab-ghost-slot').length") == 0
         self._end_drag()
 
-    def test_drop_on_collapsed_gbar_moves_tab_group_stays_collapsed(self):
+    def test_drop_on_collapsed_gbar_moves_tab_group_expands(self):
         # Дроп на шапку свёрнутой g2: вкладка уезжает в g2 (storage),
-        # заглушка убрана, ложный клик в момент дропа не раскрывает g2
+        # г2 РАЗВЁРТЫВАЕТСЯ (вкладка видна), заглушка убрана, ложный клик в момент дропа не сворачивает её
         self._load()
         self._start_drag("A")
         self.page.evaluate("""(() => {
@@ -4359,7 +4521,7 @@ class TestDragGhostOverCollapsed:
         g2 = [g for g in groups if g["id"] == "g2"][0]
         a = [t for t in tabs if t["name"] == "A"][0]
         assert a["groupId"] == "g2", tabs
-        assert g2["collapsed"] is True, g2
+        assert g2["collapsed"] is False, g2
         assert self.page.evaluate("document.querySelectorAll('.tab-ghost-slot').length") == 0
 
     def test_ghost_hidden_over_expanded_gbar(self):
@@ -5434,7 +5596,7 @@ class TestEmptyGroupDrop:
         # Слот — внутри секции группы (между шапкой g1 и шапкой g2)
         assert json.loads(self.page.evaluate(
             "JSON.stringify([...document.getElementById('tabs-list').children].map(e => e.className))")) == \
-            ["gbar", "group-empty-slot", "gbar", "add-group-row"]
+            ["gbar", "group-empty-slot", "gbar gbar-collapsed", "add-group-row"]
 
 
 # ==========================================
@@ -5995,8 +6157,9 @@ class TestNoResultsOnlyOnSearch:
         assert self.page.evaluate("document.querySelectorAll('.tab-card').length") == 0
         # Вся группа свёрнута — «Ничего не найдено» НЕ показывается
         assert self.page.evaluate("document.getElementById('no-results').style.display") == "none"
-        # Группа осталась наверху списка (не ушла ниже пустого состояния)
-        assert self.page.evaluate("document.getElementById('tabs-list').firstElementChild.className") == "gbar"
+        # Группа осталась наверху списка (не ушла ниже пустого состояния);
+        # свёрнутая шапка — полноширинная (класс gbar-collapsed)
+        assert self.page.evaluate("document.getElementById('tabs-list').firstElementChild.className") == "gbar gbar-collapsed"
 
     def test_no_results_follows_search_after_collapse(self):
         self._load_collapsible()
@@ -9013,6 +9176,22 @@ class TestDarkGbarTuning:
             assert light_part.count(f"{tok}:") == 1, tok
             assert dark_part.count(f"{tok}:") == 1, tok
 
+    def test_dark_gbar_top_line_weakened(self):
+        # (f) тёмная: divider над шапкой группы ослаблен ещё сильнее — центр < 0.16
+        css = load_file("theme.css")
+        dark_at = css.index('[data-theme="dark"] {')
+        dark_part, light_part = css[dark_at:], css[:dark_at]
+        m = re.search(r'--gbar-top-line:\s*([^;]+);', dark_part)
+        assert m, 'dark --gbar-top-line not found'
+        dark = m.group(1).strip()
+        assert 'linear-gradient' in dark, dark
+        alphas = [float(a) for a in re.findall(r'rgba\(255,\s*255,\s*255,\s*([0-9.]+)\)', dark)]
+        assert len(alphas) >= 3, dark
+        assert max(alphas) < 0.10, ('dark divider not weakened enough (was 0.16)', dark)
+        assert alphas[0] == 0.0 and alphas[-1] == 0.0, ('edges must fade to 0', dark)
+        lm = re.search(r'--gbar-top-line:\s*([^;]+);', light_part)
+        assert lm and lm.group(1).strip() == 'var(--line2)', (lm.group(1) if lm else None)  # light unchanged
+
 
 # ==========================================
 #  БОРДОВЫЙ ТОН ВЫБРАННОЙ КАРТОЧКИ: темнее фон --selected-bg, бордовое кольцо
@@ -9860,12 +10039,15 @@ class TestRailBrowserTabs:
         m = json.loads(src)
         assert "tabs" in m.get("permissions", []), m.get("permissions")
 
-    def test_rail_item_click_opens_url(self):
+    def test_rail_item_click_focuses_tab(self):
         load_view(self.page, tabs=self.TABS, spaces=self.SP, browser_tabs=self.BT)
         self.page.wait_for_timeout(80)
-        self.page.evaluate("window.__opened = null; window.open = (u) => { window.__opened = u; };")
         self.page.evaluate("document.querySelector('.bt-tab[data-id=\"bt2\"]').click()")
-        assert self.page.evaluate("window.__opened") == "https://mail.example"
+        upd = json.loads(self.page.evaluate("JSON.stringify(chrome.tabs._lastUpdate)"))
+        assert upd == {"tabId": "bt2", "opts": {"active": True}}
+        foc = json.loads(self.page.evaluate("JSON.stringify(chrome.windows._lastFocus)"))
+        assert foc == {"winId": 1, "opts": {"focused": True}}
+        assert self.page.evaluate("chrome.tabs.createdTabs.length") == 0
 
 
 class TestRailReorderMirror:
@@ -10092,17 +10274,17 @@ class TestRailPostDropClick:
         data = json.loads(self.page.evaluate("JSON.stringify(chrome.storage.local._data)"))
         assert data["blattam-tabs"][-1]["groupId"] == "g1", data["blattam-tabs"]
 
-    def test_rail_reorder_committed_real_click_still_opens(self):
+    def test_rail_reorder_committed_real_click_still_focuses(self):
         load_view(self.page, tabs=self.TABS, spaces=[{"id": "sp1", "name": "Alpha"}], browser_tabs=self.BT)
         self.page.wait_for_timeout(80)
-        self.page.evaluate("window.__opened = null; window.open = (u) => { window.__opened = u; };")
         self._rail_drag("bt1", "#browser-tabs-list .bt-tab[data-id='bt3']", 'after')
         self._rail_over_and_drop("#browser-tabs-list .bt-tab[data-id='bt3']", 'after')
-        # ложный клик по элементу рейки гасится, настоящее нажатие работает
+        # ложный клик по элементу рейки гасится, настоящее нажатие переключает вкладку
         self._synthetic_click(".bt-tab[data-id='bt2']")
-        assert self.page.evaluate("window.__opened") is None
+        assert self.page.evaluate("chrome.tabs._lastUpdate") is None
         self.page.click(".bt-tab[data-id='bt2']")
-        assert self.page.evaluate("window.__opened") == "https://mail.example"
+        upd = json.loads(self.page.evaluate("JSON.stringify(chrome.tabs._lastUpdate)"))
+        assert upd == {"tabId": "bt2", "opts": {"active": True}}
 
     def test_rail_reorder_to_front_with_newtab_page(self):
         # окно: [view.html, bt1, bt2, bt3]; рейка не показывает newtab —
@@ -11091,3 +11273,234 @@ class TestRailPointerDrag:
         self.page.wait_for_timeout(100)
         assert self._central_ghost_count() == 0  # central ghost removed
         assert self._tabs_order() == ["bt1", "bt2", "bt3"]  # rail unchanged
+
+
+# ==========================================
+#  ВКЛАДКА РЕЙКИ: КЛИК = ПЕРЕКЛЮЧЕНИЕ НА ОТКРЫТУЮ ВКЛАДКУ
+# ==========================================
+
+class TestRailTabClickFocus:
+    """Клик по вкладке правой рейки переключает браузер на УЖЕ ОТКРЫТУЮ вкладку
+    (chrome.tabs.update active + chrome.windows.update focused), а не открывает
+    новую. Зеркало сидится в chrome.tabs._tabs; ключ blattam-browser-tabs пуст —
+    view берёт вкладки через chrome.tabs.query (окно = windows._current)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self._errors = []
+        page.on("pageerror", self._on_err)
+        yield
+        assert not self._errors, self._errors
+        page.remove_listener("pageerror", self._on_err)
+
+    def _on_err(self, err):
+        self._errors.append(str(err))
+
+    def test_click_focuses_existing_tab(self):
+        load_view(self.page, browser_tabs=[
+            {"id": 101, "title": "A", "url": "https://a.example", "windowId": 1, "index": 0},
+            {"id": 102, "title": "B", "url": "https://b.example", "windowId": 1, "index": 1},
+        ])
+        assert self.page.locator(".bt-tab").count() == 2
+        self.page.evaluate("document.querySelector('.bt-tab[data-id=\"102\"]').click()")
+        self.page.wait_for_timeout(120)
+        upd = json.loads(self.page.evaluate("JSON.stringify(chrome.tabs._lastUpdate)"))
+        assert upd == {"tabId": 102, "opts": {"active": True}}
+        foc = json.loads(self.page.evaluate("JSON.stringify(chrome.windows._lastFocus)"))
+        assert foc == {"winId": 1, "opts": {"focused": True}}
+
+    def test_click_does_not_open_new_tab(self):
+        load_view(self.page, browser_tabs=[
+            {"id": 101, "title": "A", "url": "https://a.example", "windowId": 1, "index": 0},
+            {"id": 102, "title": "B", "url": "https://b.example", "windowId": 1, "index": 1},
+        ])
+        self.page.evaluate("window.__btOpen = null; window.open = (u) => { window.__btOpen = u; };")
+        self.page.evaluate("document.querySelector('.bt-tab[data-id=\"101\"]').click()")
+        self.page.wait_for_timeout(120)
+        assert self.page.evaluate("chrome.tabs.createdTabs.length") == 0
+        assert self.page.evaluate("window.__btOpen") is None  # старый путь window.open ушёл
+
+    def test_click_focuses_the_clicked_tab_window(self):
+        load_view(self.page, browser_tabs=[
+            {"id": 201, "title": "W1", "url": "https://w1.example", "windowId": 1, "index": 0},
+            {"id": 202, "title": "W2", "url": "https://w2.example", "windowId": 2, "index": 0},
+        ])
+        # текущее окно -> 2: зеркало перечитывается, в рейке остаётся вкладка окна 2
+        self.page.evaluate("chrome.windows._current = { id: 2 }; loadBrowserTabs();")
+        self.page.wait_for_timeout(150)
+        assert self.page.locator(".bt-tab").count() == 1
+        self.page.evaluate("document.querySelector('.bt-tab[data-id=\"202\"]').click()")
+        self.page.wait_for_timeout(120)
+        foc = json.loads(self.page.evaluate("JSON.stringify(chrome.windows._lastFocus)"))
+        assert foc["winId"] == 2
+        assert foc["opts"]["focused"] is True
+
+
+# ==========================================
+#  КОМПАКТНАЯ ШАПКА ГРУППЫ: развёрнутая группа — «пилюля» по ширине
+#  содержимого (hover/клик — только по ней), свёрнутая — на всю строку
+# ==========================================
+
+class TestCompactGbar:
+    """Шапка группы: РАЗВЁРНУТАЯ группа — компактная «пилюля» по ширине
+    содержимого (шеvron + имя + счётчик + hover-контролы): hover-подсветка
+    и клик-сворачивание действуют только на компактную область, а не на
+    пустое место справа. Свёрнутая группа — шапка на всю ширину строки:
+    подсветка и клик по любой её точке. Drag/дроп-семантика без изменений:
+    1px-линия (::before) и drop-индикаторы — left:0/right:0 оверлеи,
+    сужаются вместе с пилюлей; заглушка прячется над шапкой, как раньше."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self._errors = []
+        page.on("pageerror", self._on_err)
+        yield
+        assert not self._errors, self._errors
+        page.remove_listener("pageerror", self._on_err)
+
+    def _on_err(self, err):
+        self._errors.append(str(err))
+
+    SP = [{"id": "sp1", "name": "Main"}]
+    GROUPS = [
+        {"id": "gA", "name": "Dev", "spaceId": "sp1", "collapsed": False},
+        {"id": "gB", "name": "Life", "spaceId": "sp1", "collapsed": True},
+    ]
+    TABS = [
+        {"name": "D1", "url": "https://d1.com", "spaceId": "sp1", "groupId": "gA"},
+        {"name": "D2", "url": "https://d2.com", "spaceId": "sp1", "groupId": "gA"},
+        {"name": "L1", "url": "https://l1.com", "spaceId": "sp1", "groupId": "gB"},
+    ]
+
+    def _load(self, theme="light"):
+        load_view(self.page, theme=theme, spaces=self.SP, groups=self.GROUPS,
+                  tabs=self.TABS)
+        css = load_file("theme.css")
+        html = load_file("view.html")
+        style = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate(
+            "(styles) => { var st = document.createElement('style'); st.textContent = styles; document.head.appendChild(st); }",
+            [css + "\n" + style])
+        self.page.set_viewport_size({"width": 1280, "height": 900})
+        self.page.mouse.move(0, 0)  # нейтраль: :hover не переживает load_view
+        self.page.wait_for_timeout(300)  # конец транзишенов background .1s
+
+    def _rect(self, sel):
+        r = self.page.evaluate(
+            "JSON.stringify(document.querySelector(" + json.dumps(sel) + ").getBoundingClientRect())")
+        return json.loads(r)
+
+    def _bar_rect(self, gid):
+        return self._rect('#tabs-list .gbar[data-group-id="%s"]' % gid)
+
+    def _collapsed(self, gid):
+        gs = read_storage_raw(self.page, "blattam-groups")
+        return [g for g in gs if g["id"] == gid][0]["collapsed"]
+
+    def test_expanded_gbar_is_compact_pill(self):
+        # (a) развёрнутая шапка — fit-content: значительно уже списка,
+        #     не уже своего содержимого, левый край у левого края списка
+        self._load()
+        bar = self._bar_rect("gA")
+        lst = self._rect("#tabs-list")
+        content = self.page.evaluate("""(() => {
+          const b = document.querySelector('#tabs-list .gbar[data-group-id="gA"]');
+          let w = 0;
+          b.childNodes.forEach(n => { w += n.getBoundingClientRect().width; });
+          return w + (b.childNodes.length - 1) * 8; // gap 8px
+        })()""")
+        assert bar["width"] < lst["width"] * 0.5, (bar["width"], lst["width"])
+        assert bar["width"] >= content - 1, (bar["width"], content)
+        assert bar["width"] - content <= 20, (bar["width"], content)  # +padding 16px
+        assert bar["left"] - lst["left"] <= 4, (bar["left"], lst["left"])
+        assert not self.page.evaluate(
+            "document.querySelector('#tabs-list .gbar[data-group-id=\"gA\"]').classList.contains('gbar-collapsed')")
+
+    def test_hover_background_only_on_compact_area(self):
+        # (b) hover пустого места ПРАВО от пилюли — без подсветки (точка
+        #     даже не над шапкой); hover внутри пилюли — подсветка есть
+        self._load()
+        bar = self._bar_rect("gA")
+        lst = self._rect("#tabs-list")
+        x = lst["left"] + lst["width"] * 0.85
+        y = bar["top"] + bar["height"] / 2
+        self.page.mouse.move(x, y)
+        self.page.wait_for_timeout(300)
+        hit = self.page.evaluate("(xy) => { const e = document.elementFromPoint(xy[0], xy[1]); return e && (e.classList ? e.classList.contains('gbar') : false); }", [x, y])
+        assert not hit, (x, y)
+        bg_empty = self.page.evaluate(
+            "getComputedStyle(document.querySelector('#tabs-list .gbar[data-group-id=\"gA\"]')).backgroundColor")
+        assert bg_empty == "rgba(0, 0, 0, 0)", bg_empty
+        self.page.mouse.move(bar["left"] + 30, y)  # внутри пилюли (над .gname)
+        self.page.wait_for_timeout(300)
+        bg_in = self.page.evaluate(
+            "getComputedStyle(document.querySelector('#tabs-list .gbar[data-group-id=\"gA\"]')).backgroundColor")
+        assert bg_in != "rgba(0, 0, 0, 0)", bg_in
+
+    def test_click_empty_area_does_not_toggle(self):
+        # (c) клик в пустом месте справа от пилюли — блаттамы-группы не меняются;
+        #     клик внутри пилюли — группа сворачивается
+        self._load()
+        bar = self._bar_rect("gA")
+        lst = self._rect("#tabs-list")
+        before = read_storage_raw(self.page, "blattam-groups")
+        y = bar["top"] + bar["height"] / 2
+        self.page.mouse.click(lst["left"] + lst["width"] * 0.85, y)
+        self.page.wait_for_timeout(200)
+        assert read_storage_raw(self.page, "blattam-groups") == before
+        self.page.mouse.click(bar["left"] + 30, y)
+        self.page.wait_for_timeout(200)
+        assert self._collapsed("gA") is True
+
+    def test_collapsed_gbar_full_width_and_click_toggles(self):
+        # (d) свёрнутая шапка — на всю ширину контента списка; клик в её
+        #     правой половине разворачивает группу
+        self._load()
+        bar = self._bar_rect("gB")
+        lst = self._rect("#tabs-list")
+        assert self.page.evaluate(
+            "document.querySelector('#tabs-list .gbar[data-group-id=\"gB\"]').classList.contains('gbar-collapsed')")
+        assert abs(bar["width"] - lst["width"]) <= 4, (bar["width"], lst["width"])
+        self.page.mouse.click(lst["left"] + lst["width"] * 0.75, bar["top"] + bar["height"] / 2)
+        self.page.wait_for_timeout(200)
+        assert self._collapsed("gB") is False
+
+    def test_toggle_roundtrip_renders_full_then_compact(self):
+        # (e) сворачивание — шапка перерисовывается полноширинной;
+        #     повторное разворачивание — снова компактная пилюля
+        self._load()
+        lst = self._rect("#tabs-list")
+        bar = self._bar_rect("gA")
+        self.page.mouse.click(bar["left"] + 30, bar["top"] + bar["height"] / 2)
+        self.page.wait_for_timeout(200)
+        full = self._bar_rect("gA")
+        assert abs(full["width"] - lst["width"]) <= 4, (full["width"], lst["width"])
+        assert self._collapsed("gA") is True
+        self.page.mouse.click(lst["left"] + lst["width"] * 0.75, full["top"] + full["height"] / 2)
+        self.page.wait_for_timeout(200)
+        again = self._bar_rect("gA")
+        assert self._collapsed("gA") is False
+        assert again["width"] < lst["width"] * 0.5, (again["width"], lst["width"])
+
+    def test_ghost_still_hidden_over_compact_bar(self):
+        # (f) заглушка карточки ПРЯЧЕТСЯ над компактной шапкой — механика
+        #     ghost-hiding (element-based closest('.gbar')) не сломана
+        self._load()
+        self.page.evaluate("""(() => {
+          const card = document.querySelector('#tabs-list .tab-card');
+          const bar = document.querySelector('#tabs-list .gbar[data-group-id="gA"]');
+          const dt = new DataTransfer();
+          card.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true, cancelable: true}));
+          const r = bar.getBoundingClientRect();
+          document.getElementById('tabs-list').dispatchEvent(new DragEvent('dragover', {
+            dataTransfer: dt, bubbles: true, cancelable: true,
+            clientX: r.left + r.width / 2, clientY: r.top + r.height / 2
+          }));
+          const slot = document.querySelector('.tab-ghost-slot');
+          window.__gdisp = slot ? getComputedStyle(slot).display : 'none';
+          card.dispatchEvent(new DragEvent('dragend', {bubbles: true, cancelable: true}));
+        })()""")
+        self.page.wait_for_timeout(100)
+        assert self.page.evaluate("window.__gdisp") == "none"

@@ -159,8 +159,17 @@
       grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 2px;
       background: transparent;
       cursor: pointer; user-select: none; transition: background .1s;
+      /* Развёрнутая группа — компактная «пилюля» по ширине содержимого
+         (шеvron + имя + счётчик + hover-контролы): hover-подсветка и
+         клик-сворачивание действуют только на компактную область, а не на
+         пустое место справа. 1px-линия (::before) и drop-индикаторы —
+         left:0/right:0 оверлеи шапки: сужаются вместе с ней сами */
+      width: fit-content; padding: 2px 8px; margin-left: 2px; border-radius: 6px;
     }
     .gbar:hover { background: var(--gbar-hover); }
+    /* Свёрнутая группа — шапка во всю ширину строки, как раньше:
+       hover-подсветка и клик-сворачивание по любой точке строки */
+    .gbar.gbar-collapsed { width: auto; padding: 0 2px; margin-left: 0; border-radius: 0; }
     .gbar.dragging { opacity: 0.4; }
     /* 1px-линия сверху — оверлей ::before (без border-top — layout-neutral);
        ниже drop-индикаторы (.drop-before/.drop-after) перекрывают её при драге */

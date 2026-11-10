@@ -766,6 +766,9 @@ function guardDragOverButtons(parent, selector) {
 function appendGroupBar(g, memberCount) {
   const bar = document.createElement('div');
   bar.className = 'gbar';
+  // Свёрнутая группа — полноширинная шапка (gbar-collapsed); развёрнутая —
+  // компактная область по ширине содержимого (CSS — view.html, .gbar)
+  if (g.collapsed) bar.classList.add('gbar-collapsed');
   bar.dataset.groupId = g.id;
 
   const chev = document.createElement('span');
@@ -885,6 +888,8 @@ function appendGroupBar(g, memberCount) {
     if (dragSourceUrl && !groupVisibleCardCount(g.id)) {
       const src = allTabs.find(t => t.url === dragSourceUrl);
       if (!src) return;
+      // Свернутая группа: вкладка в неё ушла — разворачиваем (вкладка видна)
+      expandGroupForDrop(g.id);
       const batch = dragBatchUrls && dragBatchUrls.length > 1 ? dragBatchUrls : null;
       if (batch) {
         if (batch.some(u => {
@@ -976,6 +981,18 @@ function toggleGroupCollapsed(groupId) {
   if (!g) return;
   g.collapsed = !g.collapsed;
   chrome.storage.sync.set({ 'blattam-groups': allGroups });
+}
+
+// Дроп вкладки В группу: развёртываем Свёрнутую группу, чтобы вставленная
+// вкладка была видна (запись blattam-groups → onChanged → перерисовка).
+// No-op, если группа не свёрнута (или неизвестна).
+function expandGroupForDrop(groupId) {
+  if (groupId == null) return;
+  const g = allGroups.find(x => x.id === groupId);
+  if (g && g.collapsed) {
+    g.collapsed = false;
+    chrome.storage.sync.set({ 'blattam-groups': allGroups });
+  }
 }
 
 // ☑ — выбор ВСЕХ вкладок группы (независимо от сворачивания): если все члены
@@ -1776,6 +1793,8 @@ function placeCardToSlot(src, anchor) {
   const finalAt = side === 'before' ? a : Math.min(a + 1, allTabs.length - 1);
   if (finalAt === from && section === tabGroupOf(src)) return;
   chrome.runtime.sendMessage({ action: 'place-tab', index: from, anchorIndex, side, groupId: section });
+  // Свернутая группа-секция слота: вкладка в неё ушла — разворачиваем
+  expandGroupForDrop(section);
 }
 
 // Перенос выделенного батча в слот: ВСЕ вкладки `batch` (порядок между ними —
@@ -1802,6 +1821,8 @@ function placeBatchToSlot(batch, anchorUrl, side, section) {
   }
   if (!changed) return;
   chrome.runtime.sendMessage({ action: 'place-tabs', urls: batch, anchorUrl, side, groupId: section });
+  // Свернутая группа-секция слота: батч в неё ушёл — разворачиваем
+  expandGroupForDrop(section);
 }
 
 // Новое нажатие мыши — реальное действие пользователя: сбрасываем one-shot
@@ -2091,6 +2112,8 @@ function commitCardDropAt(clientX, clientY) {
       chrome.runtime.sendMessage({ action: 'place-tab', index: allTabs.indexOf(src),
         anchorIndex: null, side: 'after', groupId: gid });
     }
+    // Свернутая группа (шапка/слот принимает карточку): разворачиваем
+    expandGroupForDrop(gid);
   };
   const gbar = t.closest('.gbar');
   if (gbar) {
@@ -2928,15 +2951,32 @@ function makeBtItem(t) {
   label.className = 'bt-title';
   label.textContent = t.title || t.url || '—';
   item.appendChild(label);
-  // Клик — открыть браузерную вкладку (ложный post-drop-клик гасится one-shot)
+  // Клик — переключить браузер на уже открытую вкладку (ложный post-drop-клик гасится one-shot)
   item.addEventListener('click', () => {
     if (pendingBtClickAfterDrag) { pendingBtClickAfterDrag = false; return; }
-    if (t.url) window.open(t.url, '_blank');
+    focusBrowserTab(t);
   });
   item.addEventListener('dragstart', (e) => onBtDragStart(e, item, t));
   item.addEventListener('dragend', () => onBtDragEnd());
   btlBindItem(item, t); // pointer-путь (реальный Chrome UX)
   return item;
+}
+
+// Переключение браузера на уже открытую вкладку: активировать её (chrome.tabs.update
+// active) + фокус её окна (chrome.windows.update focused). НЕ открывает новую вкладку.
+function focusBrowserTab(t) {
+  if (!t || t.id == null) return;
+  let done = null;
+  if (chrome.tabs && typeof chrome.tabs.update === 'function') {
+    try { done = chrome.tabs.update(t.id, { active: true }); } catch (_) { done = null; }
+  }
+  const focusWindow = () => {
+    if (t.windowId != null && chrome.windows && typeof chrome.windows.update === 'function') {
+      try { chrome.windows.update(t.windowId, { focused: true }); } catch (_) {}
+    }
+  };
+  if (done && typeof done.then === 'function') done.then(focusWindow).catch(focusWindow);
+  else focusWindow();
 }
 
 // Заглушка рейки: тёплая (как ghost-slot карточек: --ghost-bg + пунктир
@@ -3148,6 +3188,8 @@ function saveBtToCenter(src, anchor) {
   const tabs = allTabs.slice();
   tabs.splice(at, 0, makeSavedTabFromBrowser(src, section));
   chrome.storage.local.set({ 'blattam-tabs': tabs });
+  // Свернутая группа-секция слота: новая карточка в неё ушла — разворачиваем
+  expandGroupForDrop(section);
   removeGhostSlot();
 }
 
@@ -3159,6 +3201,8 @@ function saveBtToGroup(src, groupId) {
   const tabs = allTabs.slice();
   tabs.push(makeSavedTabFromBrowser(src, groupId));
   chrome.storage.local.set({ 'blattam-tabs': tabs });
+  // Свернутая группа: новая карточка в неё ушла — разворачиваем
+  expandGroupForDrop(groupId);
   removeGhostSlot();
 }
 
