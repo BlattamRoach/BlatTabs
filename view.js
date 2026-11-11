@@ -1949,6 +1949,8 @@ function beginCardDrag(tab, cardEl, sync) {
     ? allTabs.filter(t => selectedUrls.has(t.url)).map(t => t.url)
     : [tab.url];
   cardEl.classList.add('dragging');
+  // Состояние «идёт перетаскивание карточки» — для тонировки шапок групп при hover
+  document.body.classList.add('dragging-card');
   const applyGhost = () => {
     // Перерисовка во время драга уносит карточку из DOM, а поздний drop/dragend
     // уже решил драг — заглушку для отсоединённой карточки не вставляем
@@ -1990,6 +1992,8 @@ function endCardDrag(cardEl) {
   dragBatchUrls = null;
   dragOverTarget = null; // не держим ссылку на DOM-узел после драга
   dragOverTargetXY = null;
+  // Снимаем состояние «идёт перетаскивание карточки» (тонировка шапок групп)
+  document.body.classList.remove('dragging-card');
   if (cardEl) {
     cardEl.classList.remove('dragging');
     cardEl.style.cursor = '';

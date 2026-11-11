@@ -167,6 +167,11 @@
       width: fit-content; padding: 2px 8px; margin-left: 2px; border-radius: 6px;
     }
     .gbar:hover { background: var(--gbar-hover); }
+    /* Перетаскивание карточки: hover шапки свёрнутой группы — тёплый акцент
+       (--ghost-bg, как заглушка), а развёрнутая «пилюля» не меняет тон (база —
+       прозрачная), чтобы не подмигивала во время драга */
+    body.dragging-card .gbar:hover { background: transparent; }
+    body.dragging-card .gbar.gbar-collapsed:hover { background: var(--ghost-bg); }
     /* Свёрнутая группа — шапка во всю ширину строки, как раньше:
        hover-подсветка и клик-сворачивание по любой точке строки */
     .gbar.gbar-collapsed { width: auto; padding: 0 2px; margin-left: 0; border-radius: 0; }

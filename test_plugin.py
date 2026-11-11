@@ -9291,6 +9291,151 @@ class TestDarkGbarTuning:
 
 
 # ==========================================
+#  ТОН ШАПКИ ГРУППЫ ПРИ ПЕРЕТАСКИВАНИИ КАРТОЧКИ (drag-state gbar hover tone):
+#  свёрнутая шапка — тёплый --ghost-bg, развёрнутая «пилюля» — без смены тона
+# ==========================================
+class TestDragGbarHoverTone:
+    """Тонировка шапки группы при перетаскивании карточки (drag-state hover tone):
+    во время драга (body.dragging-card) hover шапки СВЁРНУТОЙ группы — тёплый
+    --ghost-bg (как заглушка), а развёрнутая «пилюля» не меняет тон (база —
+    прозрачная). Вне драга — обычное --gbar-hover. body.dragging-card ставится/
+    снимается в beginCardDrag/endCardDrag (view.js) для обоих путей драга."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    SP = [{"id": "sp1", "name": "Main"}]
+    GROUPS = [
+        {"id": "g1", "name": "Dev", "spaceId": "sp1", "collapsed": False},
+        {"id": "g2", "name": "Life", "spaceId": "sp1", "collapsed": True},
+    ]
+    TABS = [
+        {"name": "D1", "url": "https://d1.com", "spaceId": "sp1", "groupId": "g1"},
+        {"name": "L", "url": "https://l.com", "spaceId": "sp1", "groupId": "g2"},
+    ]
+    EXP = ".gbar:not(.gbar-collapsed)"   # развёрнутая компактная «пилюля»
+    COL = ".gbar.gbar-collapsed"         # свёрнутая полноширинная строка
+
+    def _inject_real_styles(self):
+        # Харнес ставит только body.innerHTML — подгружаем настоящие стили
+        # (theme.css + <style> view.html), чтобы computed-значения были реальными
+        theme = load_file("theme.css")
+        html = load_file("view.html")
+        style = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate(
+            "(styles) => { var st = document.createElement('style'); st.textContent = styles; document.head.appendChild(st); }",
+            [theme + "\n" + style])
+
+    def _load(self, theme):
+        load_view(self.page, theme=theme, spaces=self.SP, groups=self.GROUPS, tabs=self.TABS)
+        self._inject_real_styles()
+        self.page.mouse.move(0, 0)  # нейтральная позиция: :hover не переживает load_view
+        self.page.wait_for_timeout(300)  # конец транзишена background .1s
+
+    def _css_parts(self):
+        css = load_file("theme.css")
+        dark_at = css.index('[data-theme="dark"] {')
+        return {"light": css[:dark_at], "dark": css[dark_at:]}
+
+    def _token_color(self, css_part, token, _seen=None):
+        # Токен цвета из theme.css (hex / rgba() / var(--x)) → строка как отдаёт
+        # getComputedStyle (var(...) — рекурсивно, без захардкоженных значений)
+        _seen = _seen or set()
+        m = re.search(rf"{token}:\s*([^;]+);", css_part)
+        assert m, token
+        v = m.group(1).strip()
+        if v.startswith("var("):
+            inner = v[4:-1].strip()
+            assert inner not in _seen, f"циклический var в {token}"
+            return self._token_color(css_part, inner, _seen | {inner})
+        if v.startswith("#"):
+            h = v[1:]
+            if len(h) == 3:
+                h = "".join(c * 2 for c in h)
+            return "rgb({0}, {1}, {2})".format(
+                int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+        nums = [x.strip() for x in v.split("(", 1)[1].strip().rstrip(")").split(",")]
+        if len(nums) == 3:
+            return "rgb({0}, {1}, {2})".format(nums[0], nums[1], nums[2])
+        return "rgba({0}, {1}, {2}, {3})".format(nums[0], nums[1], nums[2], nums[3])
+
+    def _bg(self, selector):
+        # computed backgroundColor для селектора (реальный CSS-рассчёт браузера)
+        return self.page.evaluate(
+            "getComputedStyle(document.querySelector(" + json.dumps(selector) + ")).backgroundColor")
+
+    def _set_drag(self, on):
+        # Симуляция drag-state: тело помечает/снимает class через evaluate
+        self.page.evaluate(
+            "document.body.classList." + ("add" if on else "remove") + "('dragging-card')")
+
+    def test_html5_dragstart_sets_dragging_card_class(self):
+        # (1) HTML5-путь: dragstart на карточке → body.dragging-card; dragend → снят
+        self._load("light")
+        self.page.evaluate("""(() => {
+            const card = document.querySelector('.tab-card');
+            const dt = new DataTransfer();
+            card.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true}));
+        })()""")
+        self.page.wait_for_timeout(120)
+        assert self.page.evaluate("document.body.classList.contains('dragging-card')") is True
+        self.page.evaluate("""(() => {
+            const card = document.querySelector('.tab-card');
+            const dt = new DataTransfer();
+            card.dispatchEvent(new DragEvent('dragend', {dataTransfer: dt, bubbles: true}));
+        })()""")
+        self.page.wait_for_timeout(120)
+        assert self.page.evaluate("document.body.classList.contains('dragging-card')") is False
+
+    def test_expanded_gbar_hover_keeps_base_during_drag(self):
+        # (2) развёрнутая «пилюля»: вне драга hover = --gbar-hover; в драге hover =
+        #     база (прозрачная) — --gbar-hover НЕ проявляется
+        for theme in ("light", "dark"):
+            self._load(theme)
+            hover_tone = self._token_color(self._css_parts()[theme], "--gbar-hover")
+            # без драга: обычный hover-тон сохраняется
+            self.page.hover(self.EXP)
+            self.page.wait_for_timeout(300)
+            assert self._bg(self.EXP) == hover_tone, (theme, self._bg(self.EXP), hover_tone)
+            # в драге: тон не меняется (база — прозрачная)
+            self.page.mouse.move(0, 0)
+            self._set_drag(True)
+            self.page.hover(self.EXP)
+            self.page.wait_for_timeout(300)
+            c = self._bg(self.EXP)
+            self._set_drag(False)
+            assert c == "rgba(0, 0, 0, 0)", (theme, c)
+            assert c != hover_tone, (theme, c)
+
+    def test_collapsed_gbar_hover_warm_during_drag(self):
+        # (3) свёрнутая строка: в драге hover = тёплый --ghost-bg (обе темы)
+        for theme in ("light", "dark"):
+            self._load(theme)
+            ghost = self._token_color(self._css_parts()[theme], "--ghost-bg")
+            self._set_drag(True)
+            self.page.hover(self.COL)
+            self.page.wait_for_timeout(300)
+            c = self._bg(self.COL)
+            self._set_drag(False)
+            assert c == ghost, (theme, c, ghost)
+
+    def test_collapsed_gbar_hover_not_warm_without_drag(self):
+        # (4) тёплый тон привязан к драгу: вне драга свёрнутый hover = --gbar-hover,
+        #     а не --ghost-bg
+        for theme in ("light", "dark"):
+            self._load(theme)
+            parts = self._css_parts()[theme]
+            hover_tone = self._token_color(parts, "--gbar-hover")
+            ghost = self._token_color(parts, "--ghost-bg")
+            self.page.hover(self.COL)
+            self.page.wait_for_timeout(300)
+            c = self._bg(self.COL)
+            assert c == hover_tone, (theme, c, hover_tone)
+            assert c != ghost, (theme, c)
+
+
+# ==========================================
 #  БОРДОВЫЙ ТОН ВЫБРАННОЙ КАРТОЧКИ: темнее фон --selected-bg, бордовое кольцо
 #  --selected-ring (1px) и контурная галочка --selected-check (вместо сплошного чернила)
 # ==========================================
