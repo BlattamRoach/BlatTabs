@@ -263,7 +263,12 @@
       min-height: 74px;
     }
     .tab-card:hover { box-shadow: 0 0 0 1px var(--line), var(--shadow-hover); transform: translateY(-1px); }
-    .tab-card.dragging { opacity: 0.4; }
+    /* .tab-card.dragging — только класс-маркер (без CSS-видимости): схваченная
+       карточка вырвана из сетки инлайновым display:none (JS, оба пути драга);
+       тёплая ghost-slot того же размера держит слот (без reflow), единственная
+       видимая копия — под курсором (pointer-путь: клон .pd-clone; HTML5:
+       нативный drag-образ). Хайд CSS-правилом невозможен: клон копирует класс,
+       и правило скрыло бы и его. Возврат — в endCardDrag */
     /* Ghost-slot: тёплая пустая заглушка размера карточки на месте вставки (единственный индикатор дропа) */
     .tab-ghost-slot { pointer-events: none; background: var(--ghost-bg); border: 1px dashed var(--ghost-ring); }
     .tab-card.selected { background: var(--selected-bg); box-shadow: 0 0 0 1px var(--selected-ring); }

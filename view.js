@@ -132,13 +132,8 @@ window.blatamFx = { slideMs: 200, settleMs: 180, liftScale: 1.02 };
 
 let dragSourceUrl = null; // URL перетаскиваемой карточки (для reorder; индексы в payload могут устареть)
 let dragSourceCardEl = null; // DOM-элемент перетаскиваемой карточки (исключается из расчёта зазора)
+let dragCardSize = null; // размер схваченной карточки (w/h) — снят до хайда (display:none → rects 0×0)
 let dragGhostSlot = null; // ghost-slot: пустая заглушка размера карточки на её месте в сетке
-let dragRowKeeper = null; // invisible card-sized placeholder: holds the source
-                          // section's row count while the ghost slot is in ANOTHER
-                          // section — attaches at the section's TAIL (after its last
-                          // visible card / its gbar / before «+ Группа»), so the grid
-                          // reflows into the vacated slot (no hole) and nothing below
-                          // shifts when quickly dragging tabs
 let dragSourceGroupId = null; // id перетаскиваемой группы (reorder шапок внутри пространства)
 let dragSourceSpaceId = null; // id перетаскиваемого чипа (reorder пространств в ряду чипов)
 let dragGhostChipSlot = null; // ghost-slot чипа: тёплая заглушка размера чипа (26px) в ряду
@@ -176,6 +171,7 @@ let browserTabs = []; // все открытые вкладки браузера
 let browserWindowId = null; // id этого окна — рейка показывает вкладки только его
 let dragSourceBrowserTab = null; // вкладки рейки, которую тянут: {id,url,title,favIconUrl,windowId,index}
 let dragBrowserTabGhost = null;const browserTabsList = document.getElementById('browser-tabs-list'); // рейка: список открытых вкладок
+const railRight = document.getElementById('rail-right'); // правая рейка — цель дропа карточки (открыть сайт фоном)
 let btDragItem = null; // элемент рейки, который тащат (cleanup по id переживает перерисовку)
 let btDragHeight = 30; // высота элемента ДО display:none (размер заглушки)
 let btDropCommitted = false; // дроп обработан (рейка/центр) — ложный клик гасится
@@ -934,8 +930,9 @@ function appendGroupBar(g, memberCount) {
   tabsList.appendChild(bar);
 }
 
-// Число ВИДИМЫХ карточек группы в #tabs-list (перетаскиваемая скрыта —
-// не считается; свёрнутая группа — карточек в DOM нет → 0). По нему
+// Число ВИДИМЫХ карточек группы в #tabs-list (схваченная во время драга
+// остаётся видимой — считается: пока своя карточка в сетке, собственная
+// шапка не вооружается; свёрнутая группа — карточек в DOM нет → 0). По нему
 // шапка/слот пустой группы принимают карточку.
 function groupVisibleCardCount(groupId) {
   return [...document.querySelectorAll('#tabs-list .tab-card')]
@@ -1323,7 +1320,6 @@ function renderTabs(filter = '') {
   // Перерисовка во время перетаскивания уносит заглушку (и заменяет карточку) —
   // сбрасываем ссылку, чтобы ghost-slot не «воскрес» после dragend
   if (dragGhostSlot && !dragGhostSlot.isConnected) dragGhostSlot = null;
-  dragRowKeeper = null; // DOM списка пересоздан — элемент keeper унесён
 
   const sTabs = spaceTabs();
   const sGroups = spaceGroups();
@@ -1512,20 +1508,10 @@ function makeGhostSlot(card) {
   return slot;
 }
 
-// Row keeper: НЕВИДИМЫЙ placeholder (размер карточки) в КОНЦЕ исходной секции.
-// syncRowKeeper подключает его, когда ghost-slot УХОДИТ ИЗ исходной секции:
-// карточки закрывают высвобожденный слот (без дырки), а число строк секции не
-// меняется — список под ней не сдвигается при быстром перетаскивании.
-// Инлайн-стили — в тестах head-стили view.html не грузятся.
-function makeRowKeeper(card) {
-  const slot = document.createElement('div');
-  slot.className = 'tab-row-keeper';
-  slot.draggable = false;
-  slot.style.cssText =
-    'pointer-events:none;opacity:0;box-sizing:border-box;' +
-    'width:' + card.offsetWidth + 'px;height:' + card.offsetHeight + 'px';
-  return slot;
-}
+// Row keeper УБРАН: схваченная карточка скрыта инлайновым display:none, но
+// тёплая заглушка (тот же размер, сразу после карточки) занимает её слот — при
+// захвате рефлоу нет; когда заглушка уезжает от дома, соседи закрывают
+// высвобожденный слот естественным reflow сетки (FLIP-слайд на pointer-пути).
 
 // Переносит заглушку в потенциальный слот вставки: anchor — {el, side} из
 // slotAnchor(); соседи сдвигаются естественным reflow сетки. Своя (отложенная)
@@ -1538,14 +1524,11 @@ function moveGhostSlot(anchor) {
   if (!dragGhostSlot.isConnected) { dragGhostSlot = null; return; }
   if (anchor.side === 'before') anchor.el.before(dragGhostSlot);
   else anchor.el.after(dragGhostSlot);
-  syncRowKeeper();
 }
 
 function removeGhostSlot() {
   if (dragGhostSlot && dragGhostSlot.isConnected) dragGhostSlot.remove();
   dragGhostSlot = null;
-  if (dragRowKeeper && dragRowKeeper.isConnected) dragRowKeeper.remove();
-  dragRowKeeper = null;
 }
 
 // Ghost-slot чипа: тёплая заглушка размера чипа (высота 26px, радиус чипа)
@@ -1621,51 +1604,13 @@ spacesBar.addEventListener('drop', (e) => {
   removeSpaceGhostSlot();
 });
 
-// Секция, где ghost-slot стоит сейчас (по его DOM-позиции): ближайшая
-// предыдущая .gbar — её группа; .loose-label или шапки нет — null («Без группы»).
-function ghostDomSection() {
-  if (!dragGhostSlot || !dragGhostSlot.isConnected) return null;
-  return headerSection(sectionHeaderBefore(dragGhostSlot));
-}
+// (Row keeper и ghostDomSection убраны: схваченная карточка остаётся
+// видимой — держит слот и число строк секции; тёплая заглушка её размера
+// сразу после неё — индикатор слота вставки.)
 
-// Элемент, за который подключается row keeper (конец исходной секции):
-// последняя видимая карточка секции; без видимых карточек — её .gbar (группа)
-// или #add-group-btn (негрупповая секция).
-function rowKeeperAnchorEl() {
-  const section = tabGroupOf(dragSourceCardEl.__tab);
-  let last = null;
-  for (const c of visibleCards()) if (tabGroupOf(c.__tab) === section) last = c;
-  if (last) return last;
-  if (section !== null) {
-    const bar = document.querySelector('#tabs-list .gbar[data-group-id="' + CSS.escape(section) + '"]');
-    if (bar) return bar;
-  }
-  return document.getElementById('add-group-btn');
-}
-
-// Row keeper держит ЧИСЛО СТРОК исходной секции ровно тогда, когда ghost-slot
-// УШЁЛ ИЗ неё (заглушка в другой секции): сам ghost в исходной секции — дома
-// или где ещё — занимает один слот, keeper не нужен (секция рендерит K мест:
-// K-1 видимых карточек + ghost или keeper → число строк не меняется, а сетка
-// закрывает высвобожденный слот — без дырки на месте карточки). Keeper
-// вставляется в КОНЦЕ исходной секции. Вызывается из moveGhostSlot.
-function syncRowKeeper() {
-  if (!dragRowKeeper || !dragSourceCardEl || !dragGhostSlot) return;
-  if (ghostDomSection() === tabGroupOf(dragSourceCardEl.__tab)) {
-    if (dragRowKeeper.isConnected) dragRowKeeper.remove();
-    return;
-  }
-  if (!dragRowKeeper.isConnected) {
-    const anchorEl = rowKeeperAnchorEl();
-    if (anchorEl) {
-      if (anchorEl.id === 'add-group-btn') anchorEl.before(dragRowKeeper);
-      else anchorEl.insertAdjacentElement('afterend', dragRowKeeper);
-    }
-  }
-}
-
-// Видимые карточки для расчёта зазора: перетаскиваемая карточка
-// исключается (она скрыта во время перетаскивания; сетка уже закрыла её слот)
+// Видимые карточки для расчёта зазора: перетаскиваемая карточка исключается
+// (по флагу — во время драга она остаётся видимой), индекс зазора считается по
+// карточкам, которые курсор «обогнал» (собственный слот карточки в счёт не идёт)
 function visibleCards() {
   return [...document.querySelectorAll('#tabs-list .tab-card')]
     .filter(c => c !== dragSourceCardEl && c.style.display !== 'none');
@@ -1704,10 +1649,11 @@ function headerSection(header) {
 }
 
 // Слот самой исходной карточки (домой): в исходной секции НЕТ других видимых
-// карточек (скрытая карточка читается как «пусто»), а курсор в полосе исходной
-// секции (от низа её шапки до верха шапки следующей секции). Без проверки
-// геометрия прыгает через полосу исходной секции в соседнюю — заглушка
-// уезжает, и единственную вкладку нельзя вернуть на место.
+// карточек (схваченная исключена из visibleCards — секция читается «пустой»),
+// а курсор в полосе исходной секции (от низа её шапки до верха шапки
+// следующей секции). Без проверки геометрия прыгает через полосу исходной
+// секции в соседнюю — заглушка уезжает, и единственную вкладку нельзя
+// вернуть на место.
 function slotIsSourceHome(clientY) {
   const card = dragSourceCardEl;
   if (!card || !card.isConnected) return false;
@@ -1854,29 +1800,22 @@ function setGhostDisplay(v) {
   if (dragGhostSlot) dragGhostSlot.style.display = v;
 }
 
-// Подключает row-keeper в конец исходной секции, если он ещё не подключён:
-// когда заглушка скрыта, секция теряет один слот — keeper держит число строк,
-// а список под ней не сдвигается.
-function ensureSourceRowKeeper() {
-  if (!dragRowKeeper || !dragSourceCardEl) return;
-  if (dragRowKeeper.isConnected) return;
-  const a = rowKeeperAnchorEl();
-  if (!a) return;
-  if (a.id === 'add-group-btn') a.before(dragRowKeeper);
-  else a.insertAdjacentElement('afterend', dragRowKeeper);
-}
-
 // Пустая зона собственной карт.области группы: пустая строка сетки ВЫШЕ первой
 // строки видимых карточек группы (между её .gbar и первой строкой) или НИЖЕ
 // последней строки (между последней строкой и строкой заголовка следующей
 // секции). Дроп туда ставит вкладку в начало/конец группы — как над шапкой —
 // поэтому заглушка прячется целиком. Пустые ячейки СЕБЕ строки (справа от
 // последней карточки незаполненной строки) — НЕ зона: заглушка остаётся
-// видимой в потенциальном слоте. Возвращает groupId зоны под курсором или null.
+// видимой в потенциальном слоте. Строка ВИДИМОЙ ghost-slot — тоже не зона
+// (это потенциальный слот, а не пустота): без этого курсор над собственной
+// строкой заглушки прячет её и схлопывает сетку, и дроп уходит туда, куда
+// курсор уже не показывает. Возвращает groupId зоны под курсором или null.
 function groupCardAreaEmptyZone(clientX, clientY) {
   if (clientX == null || clientY == null) return null;
   const lr = tabsList.getBoundingClientRect();
   if (clientX < lr.left || clientX > lr.right) return null;
+  const g = (dragGhostSlot && dragGhostSlot.isConnected && dragGhostSlot.style.display !== 'none')
+    ? dragGhostSlot.getBoundingClientRect() : null;
   const bars = document.querySelectorAll('#tabs-list .gbar');
   for (const bar of bars) {
     const br = bar.getBoundingClientRect();
@@ -1892,11 +1831,17 @@ function groupCardAreaEmptyZone(clientX, clientY) {
       bottom = Math.max(bottom, r.bottom);
     }
     if (!isFinite(top)) continue; // нет видимых строк — нет пустой зоны
-    if (clientY > br.bottom && clientY < top) return gid; // выше первой строки
     let h = cards[cards.length - 1].nextElementSibling;
     while (h && !h.classList.contains('gbar') && !h.classList.contains('loose-label') && h.id !== 'add-group-btn')
       h = h.nextElementSibling;
     const hTop = h ? h.getBoundingClientRect().top : Infinity;
+    // Видимая заглушка ВНУТРИ секции (между её шапкой и следующей) занимает
+    // строку — расширяем занятую область секции её rect
+    if (g && g.top >= br.bottom && g.bottom <= hTop) {
+      top = Math.min(top, g.top);
+      bottom = Math.max(bottom, g.bottom);
+    }
+    if (clientY > br.bottom && clientY < top) return gid; // выше первой строки
     if (clientY > bottom && clientY < hTop) return gid; // ниже последней строки
   }
   return null;
@@ -1926,15 +1871,54 @@ document.addEventListener('drop', (e) => {
   removeGhostSlot();
 });
 
+// === Карточка → правая рейка: открыть сохранённый сайт новой фоновой вкладкой ===
+// Дроп сохранённой карточки по #rail-right — сайт открывается новой фоновой
+// вкладкой (chrome.tabs.create, active:false). Сама карточка НЕ меняется:
+// без place-tab/place-tabs, без записи в blattam-tabs — она остаётся в своём
+// слоте сетки (оба пути драга: HTML5-дроп рейки ниже + commitCardDropAt
+// pointer-пути). Выделенный батч: все выделенные сайты открываются фоном.
+function openSavedUrlsInBackground(urls) {
+  if (!chrome.tabs || typeof chrome.tabs.create !== 'function') return;
+  for (const url of urls || []) {
+    if (!url) continue;
+    try { chrome.tabs.create({ url: url, active: false }); } catch (_) {}
+  }
+}
+
+// HTML5-путь: рейка — цель дропа только для драга КАРТОЧКИ (dragSourceUrl).
+// Собственный драг рейки (dragSourceBrowserTab) идёт своими глобальными
+// обработчиками — здесь не трогаем; глобальный document-дроп по рейке не
+// коммитится (он принимает только #tabs-list) — двойного срабатывания нет.
+// dragover-предупреждение (preventDefault) рейка даёт сама — иначе браузер
+// не разрешит drop на ней.
+if (railRight) {
+  railRight.addEventListener('dragover', (e) => {
+    if (!dragSourceUrl || dragSourceGroupId || !e.dataTransfer) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+  });
+  railRight.addEventListener('drop', (e) => {
+    if (!dragSourceUrl || dragSourceGroupId || !e.dataTransfer) return;
+    const src = allTabs.find(tb => tb.url === dragSourceUrl);
+    if (!src) return;
+    e.preventDefault();
+    const urls = (dragBatchUrls && dragBatchUrls.length > 1) ? dragBatchUrls : [src.url];
+    openSavedUrlsInBackground(urls);
+    removeGhostSlot(); // dragend/endCardDrag довершит очистку
+  });
+}
+
 // Ядро драга карточки, общее для HTML5-обработчиков и pointer-пути.
 // Захват карточки: исходник + флаги ложного клика + батч выбора, затем
-// скрываем карточку и ставим тёплую заглушку (ghost-slot). sync=true —
-// синхронно (pointer-путь); HTML5-путь сохраняет отложенное создание
-// setTimeout(0) — display:none в самом dragstart «залипает» HTML5-drag в Chrome.
+// ставим тёплую заглушку (ghost-slot) ПОСЛЕ карточки и прячем саму
+// карточку (display:none) — исходник вырван из сетки, единственная видимая
+// копия — под курсором (pointer-путь: LIFT-клон .pd-clone; HTML5-путь:
+// нативный drag-образ браузера). sync=true — синхронно (pointer-путь);
+// HTML5-путь сохраняет отложенное создание setTimeout(0) (хид в момент
+// trusted dragstart может заклинить нативный драг — known Chrome quirk).
 function beginCardDrag(tab, cardEl, sync) {
   dragSourceUrl = tab.url;
   dragSourceCardEl = cardEl;
-  dragRowKeeper = null;
   dragOverTarget = null; // свежий драг — целевой dragover ещё не приходил
   dragOverTargetXY = null;
   // Вооружаем подавление ложного клика по шапке уже на dragstart: реальный
@@ -1944,11 +1928,13 @@ function beginCardDrag(tab, cardEl, sync) {
   pendingCardClickAfterDrag = true; // дроп на другую карточку — ложный клик её не открывает
   // Выделенный батч: перетаскивая ЛЮБУЮ выделенную карточку, переезжают ВСЕ
   // выделенные вкладки (батч — в исходном порядке). В рендере — как одна:
-  // скрывается только эта карточка, заглушка одна.
+  // скрыта только захваченная карточка (display:none), заглушка одна,
+  // остальные выделенные карточки остаются видимыми.
   dragBatchUrls = (selectedUrls.size > 1 && selectedUrls.has(tab.url))
     ? allTabs.filter(t => selectedUrls.has(t.url)).map(t => t.url)
     : [tab.url];
   cardEl.classList.add('dragging');
+  dragCardSize = { w: cardEl.offsetWidth, h: cardEl.offsetHeight }; // до хайда в applyGhost
   // Состояние «идёт перетаскивание карточки» — для тонировки шапок групп при hover
   document.body.classList.add('dragging-card');
   const applyGhost = () => {
@@ -1956,13 +1942,14 @@ function beginCardDrag(tab, cardEl, sync) {
     // уже решил драг — заглушку для отсоединённой карточки не вставляем
     if (dragSourceUrl !== tab.url || !cardEl.isConnected) return;
     if (!dragGhostSlot) {
-      // Меряем ДО display:none (у скрытой карточки offsetWidth/Height = 0)
       dragGhostSlot = makeGhostSlot(cardEl);
       cardEl.insertAdjacentElement('afterend', dragGhostSlot);
-      // row keeper — created while card still visible (for its size); it attaches
-      // in syncRowKeeper when the ghost slot leaves the SOURCE SECTION
-      dragRowKeeper = makeRowKeeper(cardEl);
     }
+    // Исходник вырван из сетки (тот же паттерн, что рейка/чип-пути: хайд
+    // ПОСЛЕ синхронной вставки той же заглушки — без рефлоу): видимая копия
+    // только одна — под курсором (pointer-путь: LIFT-клон, его cssText
+    // перезаписан pdCreateClone целиком, клон виден; HTML5: нативный
+    // drag-образ). Возврат — в endCardDrag (cardEl.style.display = '').
     cardEl.style.display = 'none';
     // Гонка: первый dragover мог попасть на шапку/слот/пустую зону карт.области
     // группы ПЕРЕД этим таймером (заглушки ещё не существовало). Повторяем
@@ -1974,21 +1961,21 @@ function beginCardDrag(tab, cardEl, sync) {
         groupCardAreaEmptyZone(dragOverTargetXY[0], dragOverTargetXY[1]) !== null;
     if (overGbarOrSlot || overGroupEmptyZone) {
       setGhostDisplay('none');
-      ensureSourceRowKeeper();
     }
   };
   if (sync) applyGhost();
   else setTimeout(applyGhost, 0);
 }
 
-// Конец драга карточки (dragend / конец pointer-драга): заглушка + row keeper
-// снимаются первыми, затем карточка возвращается в свой слот, сброс исходника
-// и флагов ложных кликов.
+// Конец драга карточки (dragend / конец pointer-драга): заглушка снимается
+// первой, затем карточка возвращается в свой слот, сброс исходника и флагов
+// ложных кликов.
 function endCardDrag(cardEl) {
   lastDragEndAt = Date.now();
   pendingGbarClickAfterDrag = true;
   dragSourceUrl = null;
   dragSourceCardEl = null;
+  dragCardSize = null;
   dragBatchUrls = null;
   dragOverTarget = null; // не держим ссылку на DOM-узел после драга
   dragOverTargetXY = null;
@@ -1997,9 +1984,9 @@ function endCardDrag(cardEl) {
   if (cardEl) {
     cardEl.classList.remove('dragging');
     cardEl.style.cursor = '';
-    removeGhostSlot(); // заглушка + row keeper снимаются первыми, затем карточка
+    removeGhostSlot(); // заглушка снимается первой, затем карточка
                        // возвращается в свой слот
-    if (cardEl.isConnected) cardEl.style.display = ''; // drag без drop — вернуть карточку в слот
+    if (cardEl.isConnected) cardEl.style.display = ''; // возврат карточки (во время драга скрыта display:none)
   }
   document.querySelectorAll('.space-chip.drag-over').forEach(c => c.classList.remove('drag-over'));
 }
@@ -2017,23 +2004,20 @@ function trackCardDragAt(clientX, clientY, targetEl) {
   dragOverTargetXY = [clientX, clientY];
   // Over ANY group header (.gbar) and over an empty-group slot
   // (.group-empty-slot) the card drops INTO that group (own drop handler on
-  // the element) — hide the ghost WHOLLY; row-keeper holds the source
-  // section's row count. NOT removeGhostSlot: deferred ghost creation is only
-  // in dragstart, a removed ghost never reappears.
+  // the element) — hide the ghost WHOLLY. NOT removeGhostSlot: deferred ghost
+  // creation is only in dragstart, a removed ghost never reappears.
   if (t && t.closest && (t.closest('.gbar') || t.closest('.group-empty-slot'))) {
     setGhostDisplay('none');
-    ensureSourceRowKeeper();
     return true;
   }
   // Space chip: ghost stands still in place (behavior unchanged).
   if (t && t.closest && t.closest('.space-chip')) return false;
   // Empty zone of a group's own card area (empty row ABOVE the first / BELOW
-  // the last row of the group's cards): hide the ghost wholly; row-keeper
-  // holds the source section's row count. Empty cells of its OWN row — not a
-  // zone: ghost stays visible in the potential slot (list path below).
+  // the last row of the group's cards): hide the ghost wholly. Empty cells of
+  // its OWN row — not a zone: ghost stays visible in the potential slot
+  // (list path below).
   if (groupCardAreaEmptyZone(clientX, clientY) !== null) {
     setGhostDisplay('none');
-    ensureSourceRowKeeper();
     return true;
   }
   if (!t || !tabsList.contains(t)) return false;
@@ -2054,7 +2038,7 @@ function trackCardDragAt(clientX, clientY, targetEl) {
   return true;
 }
 
-// FLIP: record rects of visible elements (the hidden drag source is excluded).
+// FLIP: record rects of visible elements (the drag source is excluded).
 // Без аргументов — карточки #tabs-list (card path); selector + excludeEl —
 // chip path ('#space-chips .space-chip', скрытый исходный чип).
 function snapshotCardRects(selector, excludeEl) {
@@ -2067,38 +2051,50 @@ function snapshotCardRects(selector, excludeEl) {
   return m;
 }
 
-// FLIP (after the move): for every card whose slot shifted by more than
-// 0.5 px — first the "old" position (transition:none,
-// transform:translate(dx,dy)), then next frame(s) a transition to its own
-// slot over slideMs (cubic-bezier(0.22, 1, 0.36, 1)); the inline transition
-// is removed on transitionend. slideMs=0 — skipped entirely.
+// FLIP, dnd-kit style (Toby original: transform 200ms ease, same-frame retargeting):
+// after the reflow (ghost slot moved) — layout position = post-rect MINUS the in-flight
+// transform (getComputedStyle matrix, may be mid-interpolation); the inverse transform
+// (pre-reflow visual - layout) is applied with transition:none + a sync flush
+// (offsetHeight), then transition 'transform <slideMs>ms ease' + transform:'' — the slide
+// starts in the SAME frame as the reflow; on the next anchor change the transition
+// retargets from the current interpolated position (no rAF wait, no setTimeout fallback:
+// no 33ms freeze, no teleports on fast drags). One transitionend listener per element
+// (replaced per pass); it clears the inline transition only while still the latest pass.
 function applyFlipFrom(firstRects) {
   const ms = window.blatamFx && window.blatamFx.slideMs;
   if (!ms) return;
+  const pending = [];
   for (const entry of firstRects) {
-    const el = entry[0], r = entry[1];
+    const el = entry[0], fr = entry[1];
     if (!el.isConnected || el.style.display === 'none') continue;
-    const n = el.getBoundingClientRect();
-    const dx = r.left - n.left;
-    const dy = r.top - n.top;
+    const post = el.getBoundingClientRect();
+    const cs = getComputedStyle(el).transform;
+    const m = (cs && cs !== 'none') ? cs.match(/matrix\(([^)]+)\)/) : null;
+    const tx = m ? (parseFloat(m[1].split(',')[4]) || 0) : 0;
+    const ty = m ? (parseFloat(m[1].split(',')[5]) || 0) : 0;
+    const dx = fr.left - (post.left - tx);
+    const dy = fr.top - (post.top - ty);
     if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) continue;
-    el.style.transition = 'none';
-    el.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
-    let done = false;
-    const go = () => {
-      if (done || !el.isConnected) return;
-      done = true;
-      el.style.transition = 'transform ' + ms + 'ms cubic-bezier(0.22, 1, 0.36, 1)';
-      el.style.transform = '';
-      const clear = (ev) => {
-        if (ev.propertyName !== 'transform') return;
-        el.style.transition = '';
-        el.removeEventListener('transitionend', clear);
-      };
-      el.addEventListener('transitionend', clear);
+    pending.push([el, dx, dy]);
+  }
+  if (!pending.length) return;
+  for (const p of pending) {
+    p[0].style.transition = 'none';
+    p[0].style.transform = 'translate(' + p[1] + 'px,' + p[2] + 'px)';
+  }
+  for (const p of pending) { void p[0].offsetHeight; } // flush — commit the start values
+  for (const p of pending) {
+    const el = p[0];
+    if (el.__flipClear) el.removeEventListener('transitionend', el.__flipClear);
+    el.style.transition = 'transform ' + ms + 'ms ease';
+    el.style.transform = '';
+    const clear = (ev) => {
+      if (ev.propertyName !== 'transform') return;
+      el.removeEventListener('transitionend', clear);
+      if (el.__flipClear === clear) el.style.transition = '';
     };
-    requestAnimationFrame(() => requestAnimationFrame(go));
-    setTimeout(go, 50); // fallback if rAF is delayed
+    el.__flipClear = clear;
+    el.addEventListener('transitionend', clear);
   }
 }
 
@@ -2163,6 +2159,19 @@ function commitCardDropAt(clientX, clientY) {
     } else moveTabTo(src, chip.dataset.spaceId, undefined);
     return { rect };
   }
+  const rail = t.closest('#rail-right');
+  if (rail) {
+    // Карточка → рейка: сайт открывается новой фоновой вкладкой, сама
+    // карточка не тронута (без записи в storage). Слота в сетке нет — клон
+    // «приземляется» у курсора (rect размером с карточку под курсором).
+    // Исходник скрыт во время драга (display:none) — rect снят при захвате
+    const w = (dragCardSize && dragCardSize.w) ? dragCardSize.w : 160;
+    const h = (dragCardSize && dragCardSize.h) ? dragCardSize.h : 84;
+    const urls = (dragBatchUrls && dragBatchUrls.length > 1) ? dragBatchUrls : [src.url];
+    openSavedUrlsInBackground(urls);
+    removeGhostSlot();
+    return { rect: { left: clientX - w / 2, top: clientY - h / 2, width: w, height: h } };
+  }
   if (!tabsList.contains(t)) return null;
   // The ghost slot (when visible) is the destination: measure BEFORE the
   // commit — the commit re-renders and removes the ghost
@@ -2208,6 +2217,39 @@ function pdInteractiveTarget(el) {
 
 function pdScale() { return (window.blatamFx && window.blatamFx.liftScale) || 1.02; }
 function pdSettleMs() { const v = window.blatamFx && window.blatamFx.settleMs; return v == null ? 180 : v; }
+
+// Toby-style autoScroll (original: DndContext autoScroll): during an armed pointer-drag,
+// a cursor within 40px of the top/bottom edge of the scrollable container holding the
+// cursor (fallback: the source element) scrolls THAT container — linear ramp, up to 20px
+// per pointermove. Returns true when it scrolled (caller re-tracks at the same point —
+// the geometry moved).
+const PD_SCROLL_EDGE = 40, PD_SCROLL_SPEED = 20;
+function pdFindScroller(el) {
+  let c = el;
+  while (c && c !== document.body && c !== document.documentElement) {
+    const st = getComputedStyle(c);
+    if ((st.overflowY === 'auto' || st.overflowY === 'scroll') && c.scrollHeight > c.clientHeight) return c;
+    c = c.parentElement;
+  }
+  return null;
+}
+function pdAutoScrollAt(clientX, clientY, sourceEl) {
+  const t = document.elementFromPoint(clientX, clientY) || sourceEl;
+  const c = t ? pdFindScroller(t) : null;
+  if (!c) return false;
+  const r = c.getBoundingClientRect();
+  let dy = 0;
+  if (clientY > r.bottom - PD_SCROLL_EDGE) {
+    dy = Math.min(1, (clientY - (r.bottom - PD_SCROLL_EDGE)) / PD_SCROLL_EDGE) * PD_SCROLL_SPEED;
+  } else if (clientY < r.top + PD_SCROLL_EDGE) {
+    dy = -Math.min(1, ((r.top + PD_SCROLL_EDGE) - clientY) / PD_SCROLL_EDGE) * PD_SCROLL_SPEED;
+  }
+  if (!dy) return false;
+  const ns = Math.max(0, Math.min(c.scrollHeight - c.clientHeight, c.scrollTop + dy));
+  if (ns === c.scrollTop) return false;
+  c.scrollTop = ns;
+  return true;
+}
 
 function pdCloneXf(x, y) {
   return 'translate3d(' + x + 'px,' + y + 'px,0) scale(' + pdScale() + ')';
@@ -2311,6 +2353,7 @@ function pdOnMove(e) {
   }
   e.preventDefault();
   pdCloneMove(e.clientX - pd.ox, e.clientY - pd.oy);
+  pdAutoScrollAt(e.clientX, e.clientY, pd.card);
   trackCardDragAt(e.clientX, e.clientY);
 }
 
@@ -2481,6 +2524,7 @@ function pcdOnMove(e) {
   }
   e.preventDefault();
   pdCloneMove(e.clientX - pcd.ox, e.clientY - pcd.oy);
+  pdAutoScrollAt(e.clientX, e.clientY, pcd.chip);
   pcdTrackAt(e.clientX, e.clientY);
 }
 
@@ -3228,14 +3272,12 @@ function ensureCentralBtGhost() {
   if (dragGhostSlot && dragGhostSlot.isConnected) return;
   const ref = document.querySelector('#tabs-list .tab-card');
   if (!ref) return;
-  dragRowKeeper = null;
   dragGhostSlot = makeGhostSlot(ref);
 }
 
-// Ставит центральную заглушку в слот вставки при драге рейки → центр.
-// moveGhostSlot неприменим: он завязан на dragSourceUrl (драг карточки) и
-// syncRowKeeper() — а источник тут в рейке, а не в секции карточек
-// (dragRowKeeper уже обнулён в ensureCentralBtGhost).
+// Ставит центральную заглушку в слот вставки при драге рейка → центр.
+// moveGhostSlot неприменим: он завязан на dragSourceUrl (драг карточки) —
+// а источник тут в рейке, а не в секции карточек.
 function moveCentralBtGhost(anchor) {
   if (!dragGhostSlot) return;
   if (!anchor || !anchor.el) return;
@@ -3501,6 +3543,7 @@ function btlOnMove(e) {
   }
   e.preventDefault();
   pdCloneMove(e.clientX - btl.ox, e.clientY - btl.oy);
+  pdAutoScrollAt(e.clientX, e.clientY, btl.item);
   btlTrackAt(e.clientX, e.clientY);
 }
 
