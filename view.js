@@ -1817,49 +1817,77 @@ function setGhostDisplay(v) {
   if (dragGhostSlot) dragGhostSlot.style.display = v;
 }
 
-// Пустая зона собственной карт.области группы: пустая строка сетки ВЫШЕ первой
-// строки видимых карточек группы (между её .gbar и первой строкой) или НИЖЕ
-// последней строки (между последней строкой и строкой заголовка следующей
-// секции). Дроп туда ставит вкладку в начало/конец группы — как над шапкой —
-// поэтому заглушка прячется целиком. Пустые ячейки СЕБЕ строки (справа от
-// последней карточки незаполненной строки) — НЕ зона: заглушка остаётся
-// видимой в потенциальном слоте. Строка ВИДИМОЙ ghost-slot — тоже не зона
-// (это потенциальный слот, а не пустота): без этого курсор над собственной
-// строкой заглушки прячет её и схлопывает сетку, и дроп уходит туда, куда
-// курсор уже не показывает. Возвращает groupId зоны под курсором или null.
-function groupCardAreaEmptyZone(clientX, clientY) {
+// Пустая полоса центр.сетки #tabs-list — пространство МЕЖДУ видимыми
+// строками карточек, во ВСЕХ секциях (группы + негрупповая): (A) между
+// низом шапки секции (.gbar / .loose-label / верх списка) и верхом её
+// первой видимой строки; (B) между низом последней видимой строки и верхом
+// шапки следующей секции (.gbar — свёрнутой/развёрнутой / .loose-label /
+// #add-group-btn / низ списка); (C) вертикальный зазор сетки (row-gap)
+// между двумя строками карточек внутри секции. Над полосой — как над
+// шапкой: заглушка прячется ЦЕЛИКОМ, дроп — отмена (вкладка возвращается
+// в исходный слот, storage не тронут). Пустые ячейки СВОЙ строки (справа
+// от последней карточки незаполненной строки, та же полоса Y) — НЕ полоса:
+// заглушка остаётся видимой в потенциальном слоте. Видимая заглушка, слот
+// пустой группы и row-keeper ЗАНИМАЮТ строку — их строки заняты (иначе
+// курсор над собственной строкой заглушки прятал бы её и схлопывал сетку).
+// Возвращает id секции под курсором (groupId; «loose» — негрупповая) или null.
+function cardAreaEmptyBand(clientX, clientY) {
   if (clientX == null || clientY == null) return null;
   const lr = tabsList.getBoundingClientRect();
   if (clientX < lr.left || clientX > lr.right) return null;
   const g = (dragGhostSlot && dragGhostSlot.isConnected && dragGhostSlot.style.display !== 'none')
     ? dragGhostSlot.getBoundingClientRect() : null;
-  const bars = document.querySelectorAll('#tabs-list .gbar');
-  for (const bar of bars) {
-    const br = bar.getBoundingClientRect();
-    if (br.height <= 0) continue;
-    const gid = bar.dataset.groupId;
-    const cards = [...document.querySelectorAll('#tabs-list .tab-card')]
-      .filter(c => c.style.display !== 'none' && c.__tab && c.__tab.groupId === gid);
-    let top = Infinity, bottom = -Infinity;
-    for (const c of cards) {
-      const r = c.getBoundingClientRect();
-      if (r.height <= 0) continue;
-      top = Math.min(top, r.top);
-      bottom = Math.max(bottom, r.bottom);
+  const gidOf = el => el.classList.contains('gbar')
+    ? (el.dataset.groupId || null) : 'loose';
+  const isHeader = el => el.classList.contains('gbar') || el.classList.contains('loose-label');
+  // Секции по шапкам в DOM-порядке; содержимое до первой шапки —
+  // негрупповая секция без шапки (#add-group-btn — терминатор, не содержимое)
+  const sections = [];
+  let cur = null;
+  for (const el of tabsList.children) {
+    if (el.id === 'add-group-btn') { if (cur) cur.nextEl = el; continue; }
+    if (isHeader(el)) {
+      cur = { id: gidOf(el), topEl: el, nextEl: null, items: [] };
+      sections.push(cur);
+    } else {
+      if (!cur) { cur = { id: 'loose', topEl: null, nextEl: null, items: [] }; sections.push(cur); }
+      cur.items.push(el);
     }
-    if (!isFinite(top)) continue; // нет видимых строк — нет пустой зоны
-    let h = cards[cards.length - 1].nextElementSibling;
-    while (h && !h.classList.contains('gbar') && !h.classList.contains('loose-label') && h.id !== 'add-group-btn')
-      h = h.nextElementSibling;
-    const hTop = h ? h.getBoundingClientRect().top : Infinity;
-    // Видимая заглушка ВНУТРИ секции (между её шапкой и следующей) занимает
-    // строку — расширяем занятую область секции её rect
-    if (g && g.top >= br.bottom && g.bottom <= hTop) {
-      top = Math.min(top, g.top);
-      bottom = Math.max(bottom, g.bottom);
+  }
+  for (let i = 0; i < sections.length; i++) {
+    const s2 = sections[i];
+    const next = s2.nextEl || (i < sections.length - 1 ? sections[i + 1].topEl : null);
+    s2.topBound = s2.topEl ? s2.topEl.getBoundingClientRect().bottom : lr.top;
+    s2.nextTop = next ? next.getBoundingClientRect().top : lr.bottom;
+  }
+  for (const s2 of sections) {
+    // Занятые строки секции: видимые карточки + видимая заглушка в ней +
+    // слот пустой группы. Row-keeper НЕ занимает строку для полос:
+    // он невидим — его строка остаётся пустой полосой (заглушка там
+    // спрятана, дроп — отмена)
+    const rows = [];
+    const addRow = (r) => {
+      if (!r || r.height <= 0) return;
+      const last = rows[rows.length - 1];
+      if (last && Math.abs(last.top - r.top) < 1) { if (r.bottom > last.bottom) last.bottom = r.bottom; }
+      else rows.push({ top: r.top, bottom: r.bottom });
+    };
+    for (const el of s2.items) {
+      if (el.classList.contains('tab-card') && el.style.display !== 'none') addRow(el.getBoundingClientRect());
+      else if (el.classList.contains('group-empty-slot')) addRow(el.getBoundingClientRect());
     }
-    if (clientY > br.bottom && clientY < top) return gid; // выше первой строки
-    if (clientY > bottom && clientY < hTop) return gid; // ниже последней строки
+    if (g && ghostSlotSectionId() === (s2.id === 'loose' ? null : s2.id)) addRow(g);
+    rows.sort((a, b) => a.top - b.top);
+    const inBand = (y1, y2) => clientY > y1 && clientY < y2;
+    const res = s2.id === 'loose' ? 'loose' : s2.id;
+    if (!rows.length) {
+      if (inBand(s2.topBound, s2.nextTop)) return res;
+      continue;
+    }
+    if (inBand(s2.topBound, rows[0].top)) return res;
+    for (let i = 0; i + 1 < rows.length; i++)
+      if (inBand(rows[i].bottom, rows[i + 1].top)) return res;
+    if (inBand(rows[rows.length - 1].bottom, s2.nextTop)) return res;
   }
   return null;
 }
@@ -1868,7 +1896,7 @@ document.addEventListener('dragover', (e) => {
   if (!dragSourceUrl || dragSourceGroupId || !e.dataTransfer) return;
   // Логика слежения за заглушкой — в trackCardDragAt (общая с pointer-путём).
   // preventDefault/dropEffect — только там, где и раньше: над шапкой/слотом
-  // пустой группы, пустой зоной карт.области и в пределах списка.
+  // пустой группы, пустой полосой карт.области и в пределах списка.
   if (trackCardDragAt(e.clientX, e.clientY, e.target)) {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
@@ -1881,6 +1909,14 @@ document.addEventListener('drop', (e) => {
   if (!t || !tabsList.contains(t)) return;
   if (t.closest && t.closest('.gbar')) return; // дроп на шапку группы — карточка не переезжает через неё
   if (t.closest && t.closest('.group-empty-slot')) return; // слот пустой группы — свой обработчик шлёт, глобальный не должен
+  // Пустая полоса сетки (между строками карточек) — ОТМЕНА: no place-tab /
+  // place-tabs — вкладка возвращается в исходный слот на dragend (storage не
+  // тронут); заглушка снимается, карточка и холдеры — в endCardDrag
+  if (cardAreaEmptyBand(e.clientX, e.clientY)) {
+    e.preventDefault();
+    removeGhostSlot();
+    return;
+  }
   const src = allTabs.find(tb => tb.url === dragSourceUrl);
   if (!src) return;
   e.preventDefault();
@@ -1974,7 +2010,7 @@ function beginCardDrag(tab, cardEl, sync) {
     // перезаписан pdCreateClone целиком, клон виден; HTML5: нативный
     // drag-образ). Возврат — в endCardDrag (cardEl.style.display = '').
     cardEl.style.display = 'none';
-    // Гонка: первый dragover мог попасть на шапку/слот/пустую зону карт.области
+    // Гонка: первый dragover мог попасть на шапку/слот/пустую полосу карт.области
     // группы ПЕРЕД этим таймером (заглушки ещё не существовало). Повторяем
     // состояние по dragOverTarget (зона — по её координатам), иначе свежая
     // заглушка неверно «замигает» дома.
@@ -1982,9 +2018,9 @@ function beginCardDrag(tab, cardEl, sync) {
         (dragOverTarget.closest('.gbar') || dragOverTarget.closest('.group-empty-slot'));
     const overRail = dragOverTarget && dragOverTarget.closest &&
         dragOverTarget.closest('#rail-right');
-    const overGroupEmptyZone = dragOverTargetXY !== null &&
-        groupCardAreaEmptyZone(dragOverTargetXY[0], dragOverTargetXY[1]) !== null;
-    if (overGbarOrSlot || overRail || overGroupEmptyZone) {
+    const overEmptyBand = dragOverTargetXY !== null &&
+        cardAreaEmptyBand(dragOverTargetXY[0], dragOverTargetXY[1]) !== null;
+    if (overGbarOrSlot || overRail || overEmptyBand) {
       setGhostDisplay('none');
     }
     syncSourceRowKeeper(); // заглушка дома ИЛИ спрятана на старте — пересчёт холдеров
@@ -2053,7 +2089,7 @@ function restoreWrapHiddenCard() {
 
 // === Холдер последней строки исходной секции (row-keeper) ===
 // Заглушка УЕХАЛА из исходной секции (в другую секцию или спрятана над
-// .gbar / .group-empty-slot / пустой зоной карт.области) — вырванная
+// .gbar / .group-empty-slot / пустой полосой карт.области) — вырванная
 // карточка высвободила свою клетку, и последняя строка секции может
 // СХОЛОНТЬСЯ, сдвинув всё, что ниже. Пока число строк секции уменьшается,
 // хвост держит невидимая карточка-заглушка (.tab-row-keeper, opacity:0,
@@ -2214,11 +2250,11 @@ function trackCardDragAt(clientX, clientY, targetEl) {
   }
   // Space chip: ghost stands still in place (behavior unchanged).
   if (t && t.closest && t.closest('.space-chip')) return false;
-  // Empty zone of a group's own card area (empty row ABOVE the first / BELOW
-  // the last row of the group's cards): hide the ghost wholly. Empty cells of
-  // its OWN row — not a zone: ghost stays visible in the potential slot
-  // (list path below).
-  if (groupCardAreaEmptyZone(clientX, clientY) !== null) {
+  // Пустая полоса сетки (полоса А/В/С над любой секцией: выше первой
+  // строки / ниже последней / row-gap между строками): hide the ghost wholly.
+  // Empty cells of its OWN row — not a band: ghost stays visible in the
+  // potential slot (list path below).
+  if (cardAreaEmptyBand(clientX, clientY) !== null) {
     setGhostDisplay('none');
     restoreWrapHiddenCard(); // заглушка скрыта — новая строка не видна
     syncSourceRowKeeper(); // заглушка спрятана — исходная секция держит строку холдером
@@ -2384,6 +2420,9 @@ function commitCardDropAt(clientX, clientY) {
     removeGhostSlot();
     return { rect: { left: clientX - w / 2, top: clientY - h / 2, width: w, height: h } };
   }
+  // Пустая полоса сетки (между строками карточек) — not a valid card drop
+  // target: cancel (clone settles home, no storage write)
+  if (cardAreaEmptyBand(clientX, clientY)) return null;
   if (!tabsList.contains(t)) return null;
   // The ghost slot (when visible) is the destination: measure BEFORE the
   // commit — the commit re-renders and removes the ghost
