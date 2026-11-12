@@ -20,8 +20,6 @@
 3. Включить **Developer mode** (переключатель справа вверху).
 4. **Load unpacked** → выберите папку расширения.
 
-**Из release-архива:** скачайте `BlatTabs-v2.0.0.zip` с [страницы релиза](https://github.com/BlattamRoach/BlatTabs/releases/tag/v2.0.0), распакуйте и загрузите папку как unpacked (см. выше).
-
 > BlatTabs переопределяет страницу новой вкладки (`chrome_url_overrides.newtab`).
 
 ## Горячие клавиши
