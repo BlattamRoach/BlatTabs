@@ -4232,11 +4232,10 @@ class TestDragRowReflow:
 
     def test_in_section_no_keeper_row_fixed(self):
         # Группа на 2 строки (5 колонок при 1280px: 5+1); тащим вкладку из
-        # первой строки, заглушка — в КОНЦЕ секции (всё ещё в ней):
-        # схваченная карточка выдернута (display:none, rect 0x0), T2 сдвинулась
-        # в её клетку, T6 — в первую строку, keeper в DOM нет,
-        # якорь под списком не сдвинулся (число строк постоянно — заглушка
-        # занимает высвобождённую клетку в конце секции)
+        # первой строки, заглушка — в КОНЦЕ секции (всё ещё в ней): схваченная
+        # карточка выдернута (display:none, rect 0x0), T2 сдвинулась в её
+        # клетку, keeper в DOM нет. Драг ВНУТРИ группы: число карточек группы не меняется (6 карточек = 2 строки) — новая строка вне возникает, T6
+        # НЕ скрывается: число строк группы постоянное (2), якорь не сдвинулся
         tabs = [{"name": f"T{i}", "url": f"https://t{i}.com", "spaceId": "sp1", "groupId": "g1"}
                 for i in range(1, 7)]
         self._load([{"id": "g1", "name": "G", "spaceId": "sp1", "collapsed": False}], tabs)
@@ -4264,6 +4263,8 @@ class TestDragRowReflow:
             t1Left: b1.left, t1Top: b1.top,
             t2Left: b2.left, t2Top: b2.top,
             t9Top: b9.top,
+            t9Display: find('T6').style.display,
+            slotTop: slot.getBoundingClientRect().top,
             top: document.getElementById('add-group-btn').getBoundingClientRect().top
           });
         })()"""))
@@ -4272,8 +4273,9 @@ class TestDragRowReflow:
         assert d["t1Display"] == "none" and d["t1Opacity"] == "1", d  # T1 выдернута, непрозрачна
         assert d["t1Left"] == 0 and d["t1Top"] == 0, d  # T1 выдернута — rect 0x0
         assert abs(d["t2Left"] - t1["left"]) < 2 and abs(d["t2Top"] - t1["top"]) < 2, (t1, d)  # T2 в клетке T1
-        assert abs(d["t9Top"] - t1["top"]) < 2, (t1, d)  # T6 поднялась в первую строку
-        assert abs(d["top"] - pre) < 2, (pre, d["top"])  # число строк постоянно
+        assert d["t9Display"] == "" and d["t9Top"] > 0, d  # T6 видна (вторая строка), не скрыта
+        assert d["slotTop"] > d["t9Top"], d  # заглушка замыкает на вторую строку (T6 — последняя первой)
+        assert d["top"] == pytest.approx(pre, abs=1), (pre, d["top"])  # 2 строки — якорь не сдвинулся
         self._end_drag()
 
     def test_cross_section_no_keeper_rows_fixed(self):
@@ -4356,6 +4358,256 @@ class TestDragRowReflow:
         # единственная видимая строка g1 схлопнулась: якорь сдвинулся вверх
         # примерно на высоту строки карточек (высота карточки + межстрочный gap)
         assert t1h < pre - d["top"] < t1h + 30, (pre, d["top"], t1h)
+        self._end_drag()
+
+
+class TestDragGroupFullRowWrapHide:
+    """«row-full» группа: тёплая заглушка внутри группы, строки которой ПОЛНЫЕ,
+    не доращивает новую строку — крайняя карточка группы временно скрыта
+    (заглушка занимает её клетку), число строк постоянно. Карточка возвращается:
+    заглушка ушла из группы / заглушка скрыта (шапка) / драг закончился. Новая
+    строка появляется только на реальном дропе (в группу уходит настоящая
+    карточка). Только группы. Сетка: 1280px → 5 колонок, группа из 5 карточек
+    = одна полная строка."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self._errors = []
+        page.on("pageerror", self._on_err)
+        yield
+        assert not self._errors, self._errors
+        page.remove_listener("pageerror", self._on_err)
+
+    def _on_err(self, err):
+        self._errors.append(str(err))
+
+    SP = [{"id": "sp1", "name": "Main"}]
+    GROUPS = [
+        {"id": "g1", "name": "G1", "spaceId": "sp1", "collapsed": False},
+        {"id": "g2", "name": "G2", "spaceId": "sp1", "collapsed": False},
+    ]
+
+    def _load(self, groups, tabs):
+        load_view(self.page, spaces=self.SP, groups=groups, tabs=tabs, last_space="sp1")
+        css = load_file("theme.css")
+        html = load_file("view.html")
+        style_block = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate("""(css) => {
+          const s = document.createElement('style');
+          s.textContent = css;
+          document.head.appendChild(s);
+        }""", css + style_block)
+        self.page.set_viewport_size({"width": 1280, "height": 900})
+        self.page.mouse.move(0, 0)
+        self.page.wait_for_timeout(200)
+
+    def _full_tabs(self):
+        # g1 — 5 карточек (одна полная строка при 5 колонках), g2 — U1 (источник) + U2
+        tabs = [{"name": f"T{i}", "url": f"https://t{i}.com", "spaceId": "sp1", "groupId": "g1"}
+                for i in range(1, 6)]
+        tabs += [
+            {"name": "U1", "url": "https://u1.com", "spaceId": "sp1", "groupId": "g2"},
+            {"name": "U2", "url": "https://u2.com", "spaceId": "sp1", "groupId": "g2"},
+        ]
+        return tabs
+
+    def _card_rect(self, name):
+        return self.page.evaluate("""(name) => {
+          const card = [...document.querySelectorAll('#tabs-list .tab-card')]
+            .find(c => c.querySelector('.tab-name').textContent.trim() === name);
+          const b = card.getBoundingClientRect();
+          return {left: b.left, top: b.top, width: b.width, height: b.height};
+        }""", name)
+
+    def _start_drag(self, name):
+        self.page.evaluate("""(name) => {
+          const card = [...document.querySelectorAll('#tabs-list .tab-card')]
+            .find(c => c.querySelector('.tab-name').textContent.trim() === name);
+          window.__srcCard = card;
+          const dt = new DataTransfer();
+          window.__dt = dt;
+          card.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true}));
+        }""", name)
+        self.page.wait_for_timeout(50)
+
+    def _hover(self, x, y, selector="#tabs-list"):
+        self.page.evaluate("""([x, y, sel]) => {
+          document.querySelector(sel).dispatchEvent(
+            new DragEvent('dragover', {dataTransfer: window.__dt, bubbles: true, cancelable: true, clientX: x, clientY: y}));
+        }""", [x, y, selector])
+
+    def _drop(self, x, y):
+        self.page.evaluate("""([x, y]) => {
+          document.getElementById('tabs-list').dispatchEvent(
+            new DragEvent('drop', {dataTransfer: window.__dt, bubbles: true, cancelable: true, clientX: x, clientY: y}));
+        }""", [x, y])
+
+    def _end_drag(self):
+        self.page.evaluate("""(() => {
+          const card = window.__srcCard;
+          if (card) card.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        })()""")
+
+    def _card_display(self, name):
+        return self.page.evaluate("""(name) => {
+          const card = [...document.querySelectorAll('#tabs-list .tab-card')]
+            .find(c => c.querySelector('.tab-name').textContent.trim() === name);
+          return card ? card.style.display : 'missing';
+        }""", name)
+
+    def _g1_row_tops(self):
+        # Отдельные строки g1: видимые карточки g1 + заглушка (если видна и в g1)
+        return json.loads(self.page.evaluate("""(() => {
+          const inG1 = (top) => {
+            const cards = [...document.querySelectorAll('#tabs-list .tab-card')]
+              .filter(c => c.style.display !== 'none' && c.__tab && c.__tab.groupId === 'g1');
+            if (!cards.length) return false;
+            const min = Math.min(...cards.map(c => c.getBoundingClientRect().top));
+            const max = Math.max(...cards.map(c => c.getBoundingClientRect().bottom));
+            return top >= min && top <= max;
+          };
+          const els = [...document.querySelectorAll('#tabs-list .tab-card')]
+            .filter(c => c.style.display !== 'none' && c.__tab && c.__tab.groupId === 'g1')
+            .concat([...document.querySelectorAll('#tabs-list .tab-ghost-slot')]
+            .filter(s => s.style.display !== 'none' && inG1(s.getBoundingClientRect().top)));
+          const tops = els.map(e => Math.round(e.getBoundingClientRect().top));
+          return JSON.stringify([...new Set(tops)].sort((a, b) => a - b));
+        })()"""))
+
+    def _hidden_count(self):
+        return self.page.evaluate(
+            "[...document.querySelectorAll('#tabs-list .tab-card')]"
+            ".filter(c => c.style.display === 'none' && c !== window.__srcCard).length")
+
+    def _ghost(self):
+        return json.loads(self.page.evaluate("""(() => {
+          const s = document.querySelector('.tab-ghost-slot');
+          return JSON.stringify({present: !!s, display: s ? s.style.display : null});
+        })()"""))
+
+    def _hover_card_right(self, name):
+        r = self._card_rect(name)
+        self._hover(r["left"] + r["width"] * 0.75, r["top"] + r["height"] * 0.5)
+
+    def test_full_group_ghost_hides_last_card_no_new_row(self):
+        self._load(self.GROUPS, self._full_tabs())
+        self._start_drag("U1")
+        self._hover_card_right("T5")
+        assert self._g1_row_tops() and len(self._g1_row_tops()) == 1, self._g1_row_tops()  # одна строка
+        assert self._card_display("T5") == "none", "крайняя карточка скрыта"
+        g = self._ghost()
+        assert g["present"] and g["display"] == "", g  # заглушка видна в группе
+        assert self._card_display("U1") == "none", "источник выдернут"
+        self._end_drag()
+
+    def test_move_out_of_group_restores_last_card(self):
+        self._load(self.GROUPS, self._full_tabs())
+        self._start_drag("U1")
+        self._hover_card_right("T5")
+        assert self._card_display("T5") == "none"
+        # заглушка уезжает в g2 (на карточку U2) — крайняя g1 возвращается
+        self._hover_card_right("U2")
+        assert self._card_display("T5") == "", "крайняя карточка возвращена"
+        assert self._hidden_count() == 0
+        self._end_drag()
+
+    def test_drop_into_full_group_new_row_with_real_card(self):
+        self._load(self.GROUPS, self._full_tabs())
+        self._start_drag("U1")
+        t5 = self._card_rect("T5")
+        x, y = t5["left"] + t5["width"] * 0.75, t5["top"] + t5["height"] * 0.5
+        self._hover(x, y)
+        assert self._card_display("T5") == "none"
+        self._drop(x, y)
+        d = json.loads(self.page.evaluate("""(() => {
+          const cards = [...document.querySelectorAll('#tabs-list .tab-card')]
+            .filter(c => c.__tab && c.__tab.groupId === 'g1');
+          const tops = cards.map(c => Math.round(c.getBoundingClientRect().top));
+          return JSON.stringify({
+            names: cards.map(c => c.querySelector('.tab-name').textContent.trim()),
+            rows: [...new Set(tops)].length,
+            hidden: cards.filter(c => c.style.display === 'none').length,
+            ghost: !!document.querySelector('.tab-ghost-slot')
+          });
+        })()"""))
+        assert sorted(d["names"]) == ["T1", "T2", "T3", "T4", "T5", "U1"], d
+        assert d["rows"] == 2, d  # новая строка появилась на дропе
+        assert d["hidden"] == 0, d
+        assert d["ghost"] is False, d
+        g2 = json.loads(self.page.evaluate("""(() => {
+          const cards = [...document.querySelectorAll('#tabs-list .tab-card')]
+            .filter(c => c.__tab && c.__tab.groupId === 'g2');
+          return JSON.stringify(cards.map(c => c.querySelector('.tab-name').textContent.trim()));
+        })()"""))
+        assert g2 == ["U2"], g2  # g2 лишилась U1
+        self._end_drag()
+
+    def test_cancel_drag_restores_last_card(self):
+        self._load(self.GROUPS, self._full_tabs())
+        self._start_drag("U1")
+        self._hover_card_right("T5")
+        assert self._card_display("T5") == "none"
+        self._end_drag()  # без дропа — отмена
+        assert self._card_display("T5") == "", "крайняя карточка возвращена при отмене"
+        assert self._hidden_count() == 0
+        assert self._ghost()["present"] is False, "заглушка снята"
+        assert self._card_display("U1") == "", "источник вернулся в слот"
+
+    def test_nonfull_group_no_card_hidden(self):
+        # g1 — 3 карточки (3 % 5 != 0): заглушка встаёт в свою строку, ничего не скрывается
+        tabs = [{"name": f"T{i}", "url": f"https://t{i}.com", "spaceId": "sp1", "groupId": "g1"}
+                for i in range(1, 4)] + [
+            {"name": "U1", "url": "https://u1.com", "spaceId": "sp1", "groupId": "g2"},
+        ]
+        self._load(self.GROUPS, tabs)
+        self._start_drag("U1")
+        self._hover_card_right("T3")
+        assert self._card_display("T3") == "", "в неполной группе ничего не скрывается"
+        assert self._hidden_count() == 0
+        assert len(self._g1_row_tops()) == 1, self._g1_row_tops()  # 3 карточки + заглушка = 1 строка
+        g = self._ghost()
+        assert g["present"] and g["display"] == "", g
+        self._end_drag()
+
+    def test_ghost_over_gbar_no_card_hidden(self):
+        self._load(self.GROUPS, self._full_tabs())
+        self._start_drag("U1")
+        self._hover_card_right("T5")
+        assert self._card_display("T5") == "none"
+        # заглушка над шапкой g1 — скрыта целиком, карточка возвращена
+        bar = self.page.evaluate("""(() => {
+          const b = document.querySelector('.gbar[data-group-id="g1"]').getBoundingClientRect();
+          return {left: b.left, top: b.top, width: b.width, height: b.height};
+        })()""")
+        self._hover(bar["left"] + bar["width"] * 0.5, bar["top"] + bar["height"] * 0.5,
+                    selector='.gbar[data-group-id="g1"]')
+        assert self._card_display("T5") == "", "над шапкой группы карточка не скрывается"
+        g = self._ghost()
+        assert g["present"] and g["display"] == "none", g  # заглушка скрыта
+        self._end_drag()
+
+
+    def test_same_group_drag_nothing_hidden(self):
+        # g1 — 6 карточек (F ≡ 1 mod 5, две строки), источник в самой g1:
+        # перенос внутри группы не меняет число карточек — новая строка
+        # вне возникает, ничто не скрывается, число строк постоянное (2)
+        tabs = [{"name": f"T{i}", "url": f"https://t{i}.com", "spaceId": "sp1", "groupId": "g1"}
+                for i in range(1, 7)]
+        self._load(self.GROUPS, tabs)
+        self._start_drag("T1")
+        self._hover_card_right("T6")
+        g = self._ghost()
+        assert g["present"] and g["display"] == "", g  # заглушка видна в g1
+        assert self._hidden_count() == 0, "в драге внутри группы ничто не скрыто" 
+        tops = json.loads(self.page.evaluate("""(() => {
+          const els = [...document.querySelectorAll('#tabs-list .tab-card')]
+            .filter(c => c.style.display !== 'none' && c.__tab && c.__tab.groupId === 'g1');
+          const ghost = document.querySelector('.tab-ghost-slot');
+          if (ghost && ghost.style.display !== 'none') els.push(ghost);
+          return JSON.stringify([...new Set(els.map(e => Math.round(e.getBoundingClientRect().top)))].sort((a, b) => a - b));
+        })()"""))
+        assert tops and len(tops) == 2, tops  # две строки, как было (T2-T6 стр.1 + заглушка стр.2)
         self._end_drag()
 
 
@@ -5925,7 +6177,7 @@ class TestEmptyGroupDrop:
                 fullRow: Math.abs(r.width - tl.width) < 2
               });
             })()"""))
-            assert d["h"] == "74px" and d["cardH"] == "74px", (theme, d)
+            assert abs(float(d["h"][:-2]) - 80) < 0.6 and abs(float(d["cardH"][:-2]) - 80) < 0.6, (theme, d)
             assert d["borderStyle"] == "dashed", (theme, d)
             assert d["borderColor"] == self._token_color(parts[theme], "--dashed"), (theme, d)
             assert d["radius"] == "8px", (theme, d)
@@ -6827,10 +7079,11 @@ class TestTabCardHeight:
             "(styles) => { var st = document.createElement('style'); st.textContent = styles; document.head.appendChild(st); }",
             [theme + "\n" + style])
 
-    def test_tab_card_height_74px(self):
+    def test_tab_card_height_80px(self):
         load_view(self.page, tabs=self.TABS)
         self._inject_real_styles()
-        assert self.page.evaluate("getComputedStyle(document.querySelector('.tab-card')).height") == "74px"
+        h = float(self.page.evaluate("getComputedStyle(document.querySelector('.tab-card')).height").rstrip("px"))
+        assert abs(h - 80) < 0.6, h
 
     def test_tab_name_at_top_of_card(self):
         # Имя вкладки — СВЕРХУ карточки (нижняя зона зарезервирована)
@@ -6844,7 +7097,7 @@ class TestTabCardHeight:
             nameTop: name.getBoundingClientRect().top - card.getBoundingClientRect().top
           });
         })()"""))
-        assert d["cardH"] == 74, d
+        assert abs(d["cardH"] - 80) < 0.6, d
         assert d["nameTop"] <= 14, d
 
 
@@ -6856,7 +7109,7 @@ class TestTabCardHeight:
 
 class TestTabNameWrap:
     """Длинное имя вкладки переносится на 2-ю строку; если не влезает — обрезается
-    многоточием в конце 2-й строки. Короткое имя — одна строка. Карточка — 74px,
+    многоточием в конце 2-й строки. Короткое имя — одна строка. Карточка — 80px,
     фавикон стоит на первой строке, комментарий — одна строка внизу."""
 
     @pytest.fixture(autouse=True)
@@ -6935,12 +7188,12 @@ class TestTabNameWrap:
         assert abs(d["nameH"] - d["lh"]) < 1, d
         assert d["natural"] <= d["clientW"] + 1, d
 
-    def test_card_74px_no_overflow_favicon_on_first_line(self):
+    def test_card_80px_no_overflow_favicon_on_first_line(self):
         tabs = [{"name": self.LONG, "url": "https://github.com",
                  "comment": "смотреть раздел API"}]
         d = self._measure(tabs)
-        # карточка — ровно 74px, ничего не выходит за неё
-        assert d["cardH"] == 74, d
+        # карточка — ровно 80px, ничего не выходит за неё
+        assert abs(d["cardH"] - 80) < 0.6, d
         assert d["cardClientH"] >= d["cardScrollH"], d
         # фавикон — на первой строке имени, не по центру двух строк
         assert d["favTop"] >= d["nameTop"], d
@@ -6963,9 +7216,9 @@ class TestTabNameWrap:
             self.page.screenshot(path=png)
             assert os.path.exists(png), png
             assert os.path.getsize(png) > 5 * 1024, png
-        # длинное имя — две строки, карточка — 74px (обе темы)
+        # длинное имя — две строки, карточка — 80px (обе темы)
         d = self._measure([{"name": self.LONG, "url": "https://github.com"}])
-        assert d["nameH"] > d["lh"] + 1 and d["cardH"] == 74, d
+        assert d["nameH"] > d["lh"] + 1 and abs(d["cardH"] - 80) < 0.6, d
 
 # ==========================================
 #  VIEW.JS: ИНЛАЙН-РЕНЕЙМ ГРУППЫ (✎ В ШАПКЕ)
@@ -9655,7 +9908,7 @@ class TestCardCompact:
         assert d["cardW"] < 190, d
         self.page.set_viewport_size({"width": 1280, "height": 800})
 
-    def test_long_name_two_lines_still_fits_74px_card(self):
+    def test_long_name_two_lines_still_fits_80px_card(self):
         tabs = [{"name": self.LONG, "url": "https://github.com",
                  "comment": "смотреть раздел API"}]
         load_view(self.page, tabs=tabs)
@@ -9671,7 +9924,7 @@ class TestCardCompact:
             cmtTop: mr ? (mr.top - cr.top) : null, cmtBottom: mr ? (mr.bottom - cr.bottom) : null,
           });
         })()"""))
-        assert d["cardH"] == 74, d
+        assert abs(d["cardH"] - 80) < 0.6, d
         assert d["clientH"] >= d["scrollH"], d
         assert d["cmtTop"] is not None and d["cmtTop"] >= 0, d
         assert d["cmtBottom"] <= 0, d               # комментарий внутри карточки
@@ -12537,3 +12790,83 @@ class TestTobyReflowFeel:
         pg.mouse.move(cx, c["bottom"] - 10)  # < 8px — драг не вооружён
         pg.mouse.up()
         assert self._center()["scrollTop"] == 0
+# ==========================================
+#  VIEW.HTML: КАРТОЧКА 80px (БЫЛО 74px, СЛОТ ПУСТОЙ ГРУППЫ СИНХРОНЕН)
+# ==========================================
+
+class TestTabCardHeightTaller:
+    """Карточка сохранённой вкладки — 80px (было 74px): min-height 74px → 80px
+    (<style> view.html); .group-empty-slot синхронизирован (высота = карточка);
+    тёплая ghost-slot при драге снимает высоту с карточки на рантайме."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    SP = [{"id": "sp1", "name": "Main"}]
+
+    def _inject_real_styles(self):
+        theme = load_file("theme.css")
+        html = load_file("view.html")
+        style = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate(
+            "(styles) => { var st = document.createElement('style'); st.textContent = styles; document.head.appendChild(st); }",
+            [theme + "\n" + style])
+
+    def test_card_and_empty_slot_height_80px_both_themes(self):
+        for theme in ("light", "dark"):
+            load_view(self.page, theme=theme, spaces=self.SP,
+                      groups=[{"id": "g1", "name": "Empty", "spaceId": "sp1", "collapsed": False}],
+                      tabs=[{"name": "A", "url": "https://a.com", "spaceId": "sp1"}])
+            self._inject_real_styles()
+            self.page.wait_for_timeout(150)
+            d = json.loads(self.page.evaluate("""(() => {
+              const card = document.querySelector('.tab-card');
+              const slot = document.querySelector('.group-empty-slot');
+              return JSON.stringify({
+                cardH: card ? card.getBoundingClientRect().height : null,
+                slotH: slot ? slot.getBoundingClientRect().height : null
+              });
+            })()"""))
+            assert d["cardH"] is not None and d["slotH"] is not None, (theme, d)
+            assert abs(d["cardH"] - 80) < 0.6, (theme, d)
+            assert abs(d["slotH"] - 80) < 0.6, (theme, d)
+
+    def test_drag_ghost_slot_height_matches_taller_card(self):
+        load_view(self.page, spaces=self.SP,
+                  groups=[{"id": "g1", "name": "G", "spaceId": "sp1", "collapsed": False}],
+                  tabs=[{"name": "T1", "url": "https://t1.com", "spaceId": "sp1", "groupId": "g1"},
+                        {"name": "T2", "url": "https://t2.com", "spaceId": "sp1", "groupId": "g1"}],
+                  last_space="sp1")
+        self._inject_real_styles()
+        self.page.mouse.move(0, 0)
+        self.page.wait_for_timeout(150)
+        # HTML5-синтетика: dragstart карточки + один dragover в список.
+        # Высота карточки снята ДО хайда (во время драга исходник display:none).
+        cardH0 = self.page.evaluate(
+            "document.querySelector('#tabs-list .tab-card').getBoundingClientRect().height")
+        self.page.evaluate("""(() => {
+          const card = document.querySelector('#tabs-list .tab-card');
+          window.__srcCard = card;
+          const dt = new DataTransfer();
+          window.__dt = dt;
+          card.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true}));
+        })()""")
+        self.page.wait_for_timeout(50)  # отложенное создание заглушки (setTimeout(0))
+        self.page.evaluate("""() => {
+          const r = document.getElementById('tabs-list').getBoundingClientRect();
+          document.getElementById('tabs-list').dispatchEvent(
+            new DragEvent('dragover', {dataTransfer: window.__dt, bubbles: true,
+                                       cancelable: true, clientX: r.left + 10, clientY: r.top + 10}));
+        }""")
+        self.page.wait_for_timeout(50)
+        d = json.loads(self.page.evaluate("""(() => {
+          const slot = document.querySelector('.tab-ghost-slot');
+          return JSON.stringify({ghostH: slot ? slot.getBoundingClientRect().height : null});
+        })()"""))
+        assert d["ghostH"] is not None, d
+        assert abs(d["ghostH"] - cardH0) < 0.6, (d, cardH0)
+        assert abs(cardH0 - 80) < 0.6, (d, cardH0)
+        self.page.evaluate("""() => {
+          if (window.__srcCard) window.__srcCard.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        }""")

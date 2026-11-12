@@ -245,7 +245,7 @@
     // с карточкой (.tab-card min-height), пунктир --dashed, радиус карточки;
     // армед-вид (.drop-over) — тёплый тон. Drop-цель карточки (view.js) */
     .group-empty-slot {
-      grid-column: 1 / -1; height: 74px; box-sizing: border-box;
+      grid-column: 1 / -1; height: 80px; box-sizing: border-box;
       display: flex; align-items: center; justify-content: center;
       font: 400 11px/1 var(--font-mono); letter-spacing: .08em;
       border-width: 1px; border-style: dashed; border-color: var(--dashed);
@@ -260,7 +260,7 @@
       box-shadow: 0 0 0 1px var(--line);
       transition: box-shadow .12s, transform .12s;
       cursor: pointer; display: flex; flex-direction: column; overflow: hidden;
-      min-height: 74px;
+      min-height: 80px;
     }
     .tab-card:hover { box-shadow: 0 0 0 1px var(--line), var(--shadow-hover); transform: translateY(-1px); }
     /* .tab-card.dragging — только класс-маркер (без CSS-видимости): схваченная

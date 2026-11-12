@@ -138,6 +138,13 @@ let dragSourceGroupId = null; // id перетаскиваемой группы 
 let dragSourceSpaceId = null; // id перетаскиваемого чипа (reorder пространств в ряду чипов)
 let dragGhostChipSlot = null; // ghost-slot чипа: тёплая заглушка размера чипа (26px) в ряду
                               // #space-chips — единственный индикатор вставки при drag чипа
+let dragWrapHiddenCard = null; // «row-full» группа: крайняя карточка группы, временно
+                               // скрытая — тёплая заглушка внутри полной группы дорастила
+                               // бы новую строку; скрытие последней карточки держит число
+                               // строк постоянным (возврат: заглушка ушла из группы / драг
+                               // закончился / перерисовка)
+let dragWrapHiddenGroup = null; // groupId той группы: та же карточка держится скрытой,
+                                // пока заглушка внутри неё
 let dragOverChipTarget = null; // последний target dragover чипа — чтобы отложенное создание
                                // заглушки (dragstart setTimeout) повторило состояние, если
                                // первый dragover уже попал на целевой чип ПЕРЕД таймером
@@ -1320,6 +1327,7 @@ function renderTabs(filter = '') {
   // Перерисовка во время перетаскивания уносит заглушку (и заменяет карточку) —
   // сбрасываем ссылку, чтобы ghost-slot не «воскрес» после dragend
   if (dragGhostSlot && !dragGhostSlot.isConnected) dragGhostSlot = null;
+  if (dragWrapHiddenCard && !dragWrapHiddenCard.isConnected) { dragWrapHiddenCard = null; dragWrapHiddenGroup = null; }
 
   const sTabs = spaceTabs();
   const sGroups = spaceGroups();
@@ -1979,6 +1987,7 @@ function endCardDrag(cardEl) {
   dragBatchUrls = null;
   dragOverTarget = null; // не держим ссылку на DOM-узел после драга
   dragOverTargetXY = null;
+  restoreWrapHiddenCard(); // «row-full» группа: вернуть временно скрытую крайнюю карточку
   // Снимаем состояние «идёт перетаскивание карточки» (тонировка шапок групп)
   document.body.classList.remove('dragging-card');
   if (cardEl) {
@@ -1989,6 +1998,67 @@ function endCardDrag(cardEl) {
     if (cardEl.isConnected) cardEl.style.display = ''; // возврат карточки (во время драга скрыта display:none)
   }
   document.querySelectorAll('.space-chip.drag-over').forEach(c => c.classList.remove('drag-over'));
+}
+
+// === «row-full» группа: заглушка не доращивает новую строку ===
+// Драг карточки: тёплая заглушка внутри группы, строки которой ПОЛНЫЕ (число
+// реальных карточек группы кратное числу колонок сетки), дорастила бы НОВУЮ
+// строку. Чтобы число строк группы осталось постоянным, временно скрываем
+// крайнюю карточку группы — заглушка занимает её клетку. Карточка возвращается:
+// заглушка ушла из группы / заглушка скрыта (шапка / слот / пустая зона) / драг
+// закончился / перерисовка. Новая строка появляется только на реальном дропе
+// (в группу уходит настоящая карточка). Только группы: loose-секция — как была.
+function gridColumnCount() {
+  const cs = getComputedStyle(tabsList);
+  if (cs.display !== 'grid') return 0; // не сетка — понятие «полных строк» не применимо
+  const gtc = cs.gridTemplateColumns;
+  return (gtc && gtc !== 'none') ? gtc.trim().split(/\s+/).length : 0;
+}
+
+// Крайняя видимая карточка группы (кроме перетаскиваемой).
+function lastVisibleGroupCard(gid) {
+  const cards = [...document.querySelectorAll('#tabs-list .tab-card')]
+    .filter(c => c.__tab && c.__tab.groupId === gid && c !== dragSourceCardEl &&
+                 c.style.display !== 'none');
+  return cards.length ? cards[cards.length - 1] : null;
+}
+
+function restoreWrapHiddenCard() {
+  if (dragWrapHiddenCard) {
+    if (dragWrapHiddenCard.isConnected) dragWrapHiddenCard.style.display = '';
+    dragWrapHiddenCard = null;
+    dragWrapHiddenGroup = null;
+  }
+}
+
+// Заглушка в группе (anchor — {el, side}): после вставки заглушки группа дорастёт
+// НОВУЮ строку — держим скрытой крайнюю карточку (одна и та же, пока заглушка внутри
+// группы); иначе — вернуть ранее скрытую. Loose (null) — тоже вернуть.
+// Критерий: ПОЛНОЕ число карточек группы nFull (allTabs активного
+// пространства, включая перетаскиваемую) — драг внутри группы не меняет числа карточек в ней и новая строка вне возникает; растёт
+// только внешняя карточка: видимые + 1 (заглушка) > rOrig*cols.
+function updateWrapHiddenCard(anchor) {
+  const gid = slotSection(anchor);
+  if (gid == null) { restoreWrapHiddenCard(); return; }
+  if (dragWrapHiddenCard && dragWrapHiddenGroup === gid &&
+      dragWrapHiddenCard.isConnected && dragWrapHiddenCard.style.display === 'none') return;
+  restoreWrapHiddenCard();
+  const cols = gridColumnCount();
+  if (!cols) return; // не сетка — без временного скрытия
+  const nFull = allTabs.filter(t => t.spaceId === activeSpaceId && tabGroupOf(t) === gid).length;
+  const rOrig = Math.ceil(nFull / cols); // строк группы в до-переносной раскладке
+  const visible = [...document.querySelectorAll('#tabs-list .tab-card')]
+    .filter(c => c.__tab && c.__tab.groupId === gid && c !== dragSourceCardEl &&
+                 c.style.display !== 'none');
+  const hideCount = (visible.length + 1) - rOrig * cols; // +1 — клетка заглушки
+  if (hideCount > 0) {
+    const last = lastVisibleGroupCard(gid);
+    if (last) {
+      last.style.display = 'none';
+      dragWrapHiddenCard = last;
+      dragWrapHiddenGroup = gid;
+    }
+  }
 }
 
 // Tracks the card drag at coordinates (clientX, clientY): ghost hidden (over
@@ -2008,6 +2078,7 @@ function trackCardDragAt(clientX, clientY, targetEl) {
   // creation is only in dragstart, a removed ghost never reappears.
   if (t && t.closest && (t.closest('.gbar') || t.closest('.group-empty-slot'))) {
     setGhostDisplay('none');
+    restoreWrapHiddenCard(); // заглушка скрыта — новая строка не видна
     return true;
   }
   // Space chip: ghost stands still in place (behavior unchanged).
@@ -2018,12 +2089,17 @@ function trackCardDragAt(clientX, clientY, targetEl) {
   // (list path below).
   if (groupCardAreaEmptyZone(clientX, clientY) !== null) {
     setGhostDisplay('none');
+    restoreWrapHiddenCard(); // заглушка скрыта — новая строка не видна
     return true;
   }
   if (!t || !tabsList.contains(t)) return false;
   const anchor = slotAnchor(cardGapIndex(clientX, clientY), clientY);
   setGhostDisplay('');
   if (anchor) {
+    // «row-full» группа: до переноса заглушки (и снимка FLIP) держим/снимаем
+    // временное скрытие крайней карточки — её рефлоу войдёт в стартовую
+    // позицию FLIP-слайда
+    updateWrapHiddenCard(anchor);
     // FLIP (pointer path ONLY): when the slot anchor actually CHANGES — record
     // rects of the visible cards before the move, then apply the slide
     // transform after it. One FLIP pass per anchor change. The synthetic
@@ -2034,6 +2110,8 @@ function trackCardDragAt(clientX, clientY, targetEl) {
     moveGhostSlot(anchor);
     pdLastAnchor = anchor;
     if (firstRects) applyFlipFrom(firstRects);
+  } else {
+    restoreWrapHiddenCard(); // заглушка не вставлена — скрытую карточку вернуть
   }
   return true;
 }
