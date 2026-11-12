@@ -4161,9 +4161,11 @@ class TestDragRowReflow:
     """Reflow строк при драге (реальная сетка: theme.css + стили view.html,
     1280x800 → 5 колонок: центр = 1280 − 410px рейки − 88px паддинги = 782px):
     схваченная карточка выдергивается из сетки (display:none), на её месте —
-    тёплая ghost-slot того же размера (без «дырки»), а число строк исходной
-    секции фиксировано (row-keeper не существует ни дома, ни когда
-    ghost-заглушка уезжает в другую секцию)."""
+    тёплая ghost-slot того же размера (без «дырки»). Число строк: заглушка
+    сама занимает клетку, пока ВНУТРИ секции; когда она уезжает в другую
+    секцию или прячется, строки либо держатся естественно (нет схлопывания),
+    либо — если последняя строка реально уменьшается — их держит невидимый
+    .tab-row-keeper (условная механика — TestDragSourceRowHold)."""
 
     @pytest.fixture(autouse=True)
     def _setup(self, page):
@@ -4323,11 +4325,13 @@ class TestDragRowReflow:
         assert abs(d["t2Left"] - t1["left"]) < 2 and abs(d["t2Top"] - t1["top"]) < 2, (t1, d)  # T2 в клетке T1
         self._end_drag()
 
-    def test_single_tab_group_no_keeper_rows_fixed(self):
+    def test_single_tab_group_keeper_holds_row(self):
         # Группа ровно с ОДНОЙ вкладкой: тащим её на карточку другой группы —
-        # row-keeper в DOM нет (единственная карточка выдернута из сетки —
-        # display:none); заглушка уехала в g2, поэтому единственная видимая
-        # строка g1 схлопывается: якорь сдвинулся вверх на высоту строки
+        # единственная карточка выдернута из сетки (display:none), заглушка
+        # уехала в g2, и единственная видимая строка g1 без холдера
+        # схлопнулась бы — невидимый .tab-row-keeper подключается ПОСЛЕ
+        # шапки g1 (видимых карточек нет) и держит строку: якорь под
+        # списком на месте
         tabs = [
             {"name": "T1", "url": "https://t1.com", "spaceId": "sp1", "groupId": "g1"},
             {"name": "U1", "url": "https://u1.com", "spaceId": "sp1", "groupId": "g2"},
@@ -4336,29 +4340,35 @@ class TestDragRowReflow:
         self._load([{"id": "g1", "name": "G1", "spaceId": "sp1", "collapsed": False},
                     {"id": "g2", "name": "G2", "spaceId": "sp1", "collapsed": False}], tabs)
         pre = self._anchor_top()
-        t1h = self._card_rect("T1")["height"]
         u1 = self._card_rect("U1")
         self._start_drag("T1")
         self._hover(u1["left"] + u1["width"] * 0.5, u1["top"] + u1["height"] * 0.5)
         d = json.loads(self.page.evaluate("""(() => {
           const slot = document.querySelector('.tab-ghost-slot');
           const t1 = window.__srcCard;
+          const k = document.querySelector('.tab-row-keeper');
           const prev = slot ? slot.previousElementSibling : null;
           return JSON.stringify({
             keepers: document.querySelectorAll('.tab-row-keeper').length,
+            kOpacity: k ? getComputedStyle(k).opacity : null,
+            kPrevGbar: k && k.previousElementSibling && k.previousElementSibling.classList
+              && k.previousElementSibling.classList.contains('gbar')
+              ? k.previousElementSibling.dataset.groupId : null,
             t1Display: t1.style.display,
             t1Opacity: getComputedStyle(t1).opacity,
             slotAfterBar2: !!prev && prev.classList.contains('gbar') && prev.dataset.groupId === 'g2',
             top: document.getElementById('add-group-btn').getBoundingClientRect().top
           });
         })()"""))
-        assert d["keepers"] == 0, d
+        assert d["keepers"] == 1, d
+        assert d["kOpacity"] == "0", d  # холдер невидим
+        assert d["kPrevGbar"] == "g1", d  # холдер — после шапки g1 (карточек нет)
         assert d["t1Display"] == "none" and d["t1Opacity"] == "1", d  # T1 выдернута, непрозрачна
         assert d["slotAfterBar2"], d  # заглушка — в начале g2 (после её шапки)
-        # единственная видимая строка g1 схлопнулась: якорь сдвинулся вверх
-        # примерно на высоту строки карточек (высота карточки + межстрочный gap)
-        assert t1h < pre - d["top"] < t1h + 30, (pre, d["top"], t1h)
+        assert abs(d["top"] - pre) < 2, (pre, d["top"])  # строка г1 держится холдером
         self._end_drag()
+        assert self.page.evaluate(
+            "document.querySelectorAll('.tab-row-keeper').length") == 0
 
 
 class TestDragGroupFullRowWrapHide:
@@ -5347,6 +5357,304 @@ class TestCardDropToRail:
             "JSON.stringify([...document.querySelectorAll('#browser-tabs-list .bt-tab')].map(e => e.dataset.id))"))
         assert order == ["bt2", "bt1", "bt3"], order
 
+
+
+class TestRailWarmOnCardDrag:
+    """Тёплый тон правой рейки, пока над ней висит перетаскиваемая карточка
+    (drop-here: дроп откроет сайт фоновой вкладкой). Класс .rail-drag-over на
+    #rail-right ставится ОБОИМИ путями драга (HTML5-sинтетика + pointer —
+    реальная мышь) и снимается на dragleave / drop / dragend — без остатков.
+    Тон — тёплая гамма ghost-слота: фон --rail-warm + inset-контур
+    --ghost-ring, заметнее базового --rail-bg в обеих темах. Собственный драг
+    рейки (dragSourceBrowserTab) и драг шапки группы (dragSourceGroupId)
+    рейку НЕ греют. Дроп-поведение (openSavedUrlsInBackground, карточка не
+    тронута) — без изменений."""
+
+    SP = [{"id": "sp1", "name": "Main"}]
+    GROUPS = [{"id": "g1", "name": "G", "spaceId": "sp1", "collapsed": False}]
+    TABS = [
+        {"name": "T1", "url": "https://t1.com", "spaceId": "sp1", "groupId": "g1"},
+        {"name": "T2", "url": "https://t2.com", "spaceId": "sp1", "groupId": "g1"},
+    ]
+    BT = [
+        {"id": "bt1", "title": "Wiki", "url": "https://wiki.example", "windowId": 1, "index": 0},
+        {"id": "bt2", "title": "Mail", "url": "https://mail.example", "windowId": 1, "index": 1},
+        {"id": "bt3", "title": "News", "url": "https://news.example", "windowId": 1, "index": 2},
+    ]
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self._errors = []
+        page.on("pageerror", self._on_err)
+        yield
+        assert not self._errors, self._errors
+        page.remove_listener("pageerror", self._on_err)
+
+    def _on_err(self, err):
+        self._errors.append(str(err))
+
+    def _load(self):
+        load_view(self.page, spaces=self.SP, groups=self.GROUPS, tabs=self.TABS,
+                  last_space="sp1", browser_tabs=self.BT)
+        # CSS view.html + theme.css — как в TestCardDropToRail: без него
+        # computed-фоны и лейаут рейки не настоящие
+        css = load_file("theme.css")
+        html = load_file("view.html")
+        style_block = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate("""(css) => {
+          const s = document.createElement('style');
+          s.textContent = css;
+          document.head.appendChild(s);
+        }""", css + style_block)
+        self.page.set_viewport_size({"width": 1280, "height": 800})
+        self.page.wait_for_timeout(50)
+        self.page.mouse.move(0, 0)
+        self.page.wait_for_timeout(200)
+
+    def _warm_state(self):
+        return json.loads(self.page.evaluate("""() => {
+          const r = document.getElementById('rail-right');
+          return JSON.stringify({
+            cls: r.classList.contains('rail-drag-over'),
+            bg: getComputedStyle(r).backgroundColor,
+            ring: getComputedStyle(r).boxShadow
+          });
+        }"""))
+
+    def _rail_point(self):
+        return self.page.evaluate("""() => {
+          const r = document.getElementById('rail-right').getBoundingClientRect();
+          return {x: r.left + r.width / 2, y: r.top + Math.min(40, r.height / 2)};
+        }""")
+
+    def _card_box(self, name):
+        return self.page.evaluate("""(name) => {
+          const c = [...document.querySelectorAll('#tabs-list .tab-card')]
+            .find(c => c.querySelector('.tab-name').textContent.trim() === name);
+          const r = c.getBoundingClientRect();
+          return {x: r.left + r.width / 2, y: r.top + r.height / 2};
+        }""", name)
+
+    def _start_card_drag(self, name):
+        self.page.evaluate("""(name) => {
+          const card = [...document.querySelectorAll('#tabs-list .tab-card')]
+            .find(c => c.querySelector('.tab-name').textContent.trim() === name);
+          window.__srcCard = card;
+          window.__dt = new DataTransfer();
+          card.dispatchEvent(new DragEvent('dragstart', {dataTransfer: window.__dt, bubbles: true}));
+        }""", name)
+        self.page.wait_for_timeout(50)  # отложенное создание заглушки (setTimeout(0))
+
+    def _end_drag(self):
+        self.page.evaluate("""(() => {
+          const card = window.__srcCard;
+          if (card) card.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        })()""")
+
+    def _dragover_rail(self):
+        p = self._rail_point()
+        self.page.evaluate("""(p) => {
+          const r = document.getElementById('rail-right');
+          r.dispatchEvent(new DragEvent('dragover', {dataTransfer: window.__dt, bubbles: true, cancelable: true, clientX: p.x, clientY: p.y}));
+        }""", p)
+
+    def _drop_on_rail(self):
+        p = self._rail_point()
+        self.page.evaluate("""(p) => {
+          const r = document.getElementById('rail-right');
+          r.dispatchEvent(new DragEvent('drop', {dataTransfer: window.__dt, bubbles: true, cancelable: true, clientX: p.x, clientY: p.y}));
+        }""", p)
+
+    def _probe_token_bg(self, token):
+        return self.page.evaluate("""(t) => {
+          const d = document.createElement('div');
+          d.style.background = 'var(' + t + ')';
+          document.body.appendChild(d);
+          const bg = getComputedStyle(d).backgroundColor;
+          d.remove();
+          return bg;
+        }""", token)
+
+    def test_html5_dragover_warms_rail(self):
+        # HTML5: dragover над рейкой — тёплый класс, фон теплее базового;
+        # dragend — снято
+        self._load()
+        base = self._warm_state()
+        assert base["cls"] is False
+        self._start_card_drag("T1")
+        self._dragover_rail()
+        w = self._warm_state()
+        assert w["cls"] is True, w
+        assert w["bg"] != base["bg"], (base, w)
+        self._end_drag()
+        assert self._warm_state()["cls"] is False
+
+    def test_html5_dragleave_clears_warm(self):
+        # HTML5: курсор ушёл с рейки (dragleave) — тёплый тон снят
+        self._load()
+        self._start_card_drag("T1")
+        self._dragover_rail()
+        assert self._warm_state()["cls"] is True
+        self.page.evaluate("""(() => {
+          document.getElementById('rail-right')
+            .dispatchEvent(new DragEvent('dragleave', {bubbles: true}));
+        })()""")
+        assert self._warm_state()["cls"] is False
+        self._end_drag()
+
+    def test_html5_drop_clears_warm_and_keeps_behavior(self):
+        # HTML5: дроп по рейке — тёплый тон снят, поведение без изменений:
+        # сайт открыт фоновой вкладкой, blattam-tabs не тронут
+        self._load()
+        before = read_local(self.page, "blattam-tabs")
+        self._start_card_drag("T1")
+        self._dragover_rail()
+        assert self._warm_state()["cls"] is True
+        self._drop_on_rail()
+        assert self._warm_state()["cls"] is False
+        bg = json.loads(self.page.evaluate(
+            "JSON.stringify((chrome.tabs.createdTabs || []).filter(t => t.active === false))"))
+        assert [t["url"] for t in bg] == ["https://t1.com"], bg
+        assert read_local(self.page, "blattam-tabs") == before
+        self._end_drag()
+        assert self._warm_state()["cls"] is False
+
+    def test_html5_dragend_clears_warm_without_drop(self):
+        # HTML5: dragend без дропа — тёплый тон снят, следов драга нет
+        self._load()
+        self._start_card_drag("T1")
+        self._dragover_rail()
+        assert self._warm_state()["cls"] is True
+        self._end_drag()
+        assert self._warm_state()["cls"] is False
+        d = json.loads(self.page.evaluate("""(() => {
+          const card = window.__srcCard;
+          return JSON.stringify({
+            ghosts: document.querySelectorAll('.tab-ghost-slot').length,
+            clones: document.querySelectorAll('.pd-clone').length,
+            cardVisible: card ? card.style.display !== 'none' : false
+          });
+        })()"""))
+        assert d["ghosts"] == 0 and d["clones"] == 0 and d["cardVisible"], d
+
+    def test_rail_self_drag_does_not_warm(self):
+        # Регрессия: собственный драг рейки (dragSourceBrowserTab) рейку НЕ
+        # греет (dragover по элементам рейки во время reorder)
+        self._load()
+        self.page.evaluate("""(() => {
+          const item = document.querySelector('#browser-tabs-list .bt-tab[data-id="bt1"]');
+          window.__btItem = item;
+          window.__dt2 = new DataTransfer();
+          item.dispatchEvent(new DragEvent('dragstart', {dataTransfer: window.__dt2, bubbles: true}));
+        })()""")
+        self.page.wait_for_timeout(50)  # отложенное создание заглушки рейки
+        box = self.page.evaluate("""() => {
+          const r = document.querySelector('#browser-tabs-list .bt-tab[data-id="bt3"]').getBoundingClientRect();
+          return {x: r.left + r.width / 2, y: r.top + 4};
+        }""")
+        self.page.evaluate("""(p) => {
+          const el = document.querySelector('#browser-tabs-list .bt-tab[data-id="bt3"]');
+          el.dispatchEvent(new DragEvent('dragover', {dataTransfer: window.__dt2, bubbles: true, cancelable: true, clientX: p.x, clientY: p.y}));
+        }""", box)
+        assert self._warm_state()["cls"] is False
+        self.page.evaluate("""(() => {
+          const item = window.__btItem;
+          if (item) item.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        })()""")
+        assert self._warm_state()["cls"] is False
+
+    def test_group_bar_drag_does_not_warm(self):
+        # Драг шапки группы (dragSourceGroupId) — рейка не цель карточки,
+        # тёплый тон не ставится
+        self._load()
+        self.page.evaluate("""(() => {
+          const bar = document.querySelector('#tabs-list .gbar');
+          window.__bar = bar;
+          window.__dt3 = new DataTransfer();
+          bar.dispatchEvent(new DragEvent('dragstart', {dataTransfer: window.__dt3, bubbles: true}));
+        })()""")
+        p = self._rail_point()
+        self.page.evaluate("""(p) => {
+          const r = document.getElementById('rail-right');
+          r.dispatchEvent(new DragEvent('dragover', {dataTransfer: window.__dt3, bubbles: true, cancelable: true, clientX: p.x, clientY: p.y}));
+        }""", p)
+        assert self._warm_state()["cls"] is False
+        self.page.evaluate("""(() => {
+          const bar = window.__bar;
+          if (bar) bar.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        })()""")
+        assert self._warm_state()["cls"] is False
+
+    def test_pointer_drag_warms_and_clears(self):
+        # Pointer (реальная мышь): press на карточке, движение >8px —
+        # вооружение, движение над рейкой — тёплый тон, возврат на карточку —
+        # снятие, release — снято и без следов
+        self._load()
+        base = self._warm_state()["bg"]
+        card = self._card_box("T1")
+        card2 = self._card_box("T2")
+        rail = self._rail_point()
+        pg = self.page
+        pg.mouse.move(card["x"], card["y"])
+        pg.mouse.down()
+        pg.mouse.move(card["x"] + 12, card["y"], steps=3)  # >8px — вооружено
+        assert self._warm_state()["cls"] is False  # курсор ещё на карточке
+        for i in range(1, 11):
+            pg.mouse.move(card["x"] + (rail["x"] - card["x"]) * i / 10,
+                          card["y"] + (rail["y"] - card["y"]) * i / 10, steps=2)
+        w = self._warm_state()
+        assert w["cls"] is True, w
+        assert w["bg"] != base, (base, w)
+        for i in range(1, 11):
+            pg.mouse.move(rail["x"] + (card2["x"] - rail["x"]) * i / 10,
+                          rail["y"] + (card2["y"] - rail["y"]) * i / 10, steps=2)
+        assert self._warm_state()["cls"] is False  # курсор снова на карточке
+        pg.mouse.up()
+        self.page.wait_for_timeout(300)  # клон-сета (settleMs ~180) завершён
+        assert self._warm_state()["cls"] is False
+
+    def test_warm_tone_differs_in_both_themes(self):
+        # В обеих темах тёплый фон отличается от базового фона рейки и равен
+        # токену --rail-warm (inset-контур --ghost-ring)
+        pg = self.page
+        self._load()
+        base_l = self._warm_state()["bg"]
+        self._start_card_drag("T1")
+        self._dragover_rail()
+        warm_l = self._warm_state()
+        self._end_drag()
+        assert warm_l["cls"] is True and warm_l["bg"] != base_l, (base_l, warm_l)
+        assert warm_l["bg"] == self._probe_token_bg("--rail-warm"), warm_l
+        assert warm_l["ring"] != "none", warm_l
+        pg.evaluate("document.getElementById('theme-btn').click()")  # тёмная тема
+        self.page.wait_for_timeout(50)
+        base_d = self._warm_state()["bg"]
+        self._start_card_drag("T1")
+        self._dragover_rail()
+        warm_d = self._warm_state()
+        self._end_drag()
+        assert warm_d["cls"] is True and warm_d["bg"] != base_d, (base_d, warm_d)
+        assert warm_d["bg"] == self._probe_token_bg("--rail-warm"), warm_d
+        assert warm_d["ring"] != "none", warm_d
+
+    def test_rail_warm_rule_tokens_only_no_hex(self):
+        # Правило тёплого тона в <style> — только токены var(--…): без hex
+        # и rgb()
+        self._load()
+        rule = self.page.evaluate("""() => {
+          const css = [...document.querySelectorAll('style')].map(s => s.textContent).join('\\n');
+          const i = css.indexOf('rail-drag-over');
+          if (i === -1) return null;
+          const start = css.lastIndexOf('\\n', i) + 1;
+          const end = css.indexOf('}', i);
+          return css.slice(start, end + 1);
+        }""")
+        assert rule, "правило .rail-right.rail-drag-over не найдено в <style>"
+        assert "var(--rail-warm)" in rule, rule
+        assert "var(--ghost-ring)" in rule, rule
+        assert not re.search(r"#[0-9a-fA-F]{6}", rule), rule
+        assert "rgb(" not in rule, rule
 
 
 class TestOnlyTabHomeDrop:
@@ -7891,9 +8199,11 @@ class TestLooseSelectAll:
 
 class TestDragRowKeeper:
     """Строки секции при драге: схваченная карточка выдергивается из сетки
-    (display:none), а тёплая ghost-slot занимает её клетку — число строк
-    постоянно БЕЗ row-keeper (его не существует ни дома, ни когда
-    ghost-заглушка уезжает в другую секцию). На dragend — без следов."""
+    (display:none), а тёплая ghost-slot занимает её клетку. Условный
+    row-keeper подключается только когда заглушка уезжает ИЗ исходной
+    секции И число строк секции при этом уменьшается (TestDragSourceRowHold);
+    в лейаутах ниже строки не схлопываются — .tab-row-keeper в DOM нет.
+    На dragend — без следов."""
 
     @pytest.fixture(autouse=True)
     def _setup(self, page):
@@ -8071,6 +8381,372 @@ class TestDragRowKeeper:
         self._end_drag()
 
 
+class TestDragSourceRowHold:
+    """Условный row-keeper исходной секции (реальная сетка 1280x800 → 5
+    колонок): пока ghost-заглушка УЕХАЛА из исходной секции (в другую
+    секцию или спрятана над шапкой/слотом/пустой зоной карт.области),
+    последнюю строку секции держит НЕВИДИМАЯ карточка-холдер .tab-row-keeper
+    (opacity:0, pointer-events:none, НЕ .tab-card — groupVisibleCardCount и
+    вооружение шапок групп её не видят) — и только когда без него число
+    строк секции уменьшается (nFull — все вкладки секции, включая
+    схваченную; rOrig = ceil(nFull/cols)). Холдер — в хвоте секции (после
+    последней видимой карточки / после .gbar, если карточек нет / перед
+    «+ Группа» в негрупповой секции). Снимается при возврате заглушки в
+    секцию, dragend/Escape и на перерисовке. Лейауты без схлопывания —
+    холдера нет."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self._errors = []
+        page.on("pageerror", self._on_err)
+        yield
+        assert not self._errors, self._errors
+        page.remove_listener("pageerror", self._on_err)
+
+    def _on_err(self, err):
+        self._errors.append(str(err))
+
+    SP = [{"id": "sp1", "name": "Main"}]
+    G2 = [{"id": "g1", "name": "G1", "spaceId": "sp1", "collapsed": False},
+          {"id": "g2", "name": "G2", "spaceId": "sp1", "collapsed": False}]
+
+    def _g1_tabs(self, n):
+        return [{"name": f"T{i}", "url": f"https://t{i}.com",
+                 "spaceId": "sp1", "groupId": "g1"} for i in range(1, n + 1)]
+
+    def _g2_tabs(self, n):
+        return [{"name": f"U{i}", "url": f"https://u{i}.com",
+                 "spaceId": "sp1", "groupId": "g2"} for i in range(1, n + 1)]
+
+    def _load(self, groups, tabs):
+        load_view(self.page, spaces=self.SP, groups=groups, tabs=tabs, last_space="sp1")
+        css = load_file("theme.css")
+        html = load_file("view.html")
+        style_block = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate("""(css) => {
+          const s = document.createElement('style');
+          s.textContent = css;
+          document.head.appendChild(s);
+        }""", css + style_block)
+        self.page.set_viewport_size({"width": 1280, "height": 800})
+        # указатель в нейтральный угол: :hover карточки (translateY(-1px)) не
+        # должен смещать строки под измерением
+        self.page.mouse.move(0, 0)
+        self.page.wait_for_timeout(200)
+
+    def _start_drag(self, name):
+        self.page.evaluate("""(name) => {
+          const card = [...document.querySelectorAll('#tabs-list .tab-card')]
+            .find(c => c.querySelector('.tab-name').textContent.trim() === name);
+          window.__srcCard = card;
+          const dt = new DataTransfer();
+          window.__dt = dt;
+          card.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true}));
+        }""", name)
+        self.page.wait_for_timeout(50)
+
+    def _hover(self, x, y):
+        self.page.evaluate("""([x, y]) => {
+          document.getElementById('tabs-list').dispatchEvent(
+            new DragEvent('dragover', {dataTransfer: window.__dt, bubbles: true, cancelable: true, clientX: x, clientY: y}));
+        }""", [x, y])
+
+    def _over_gbar(self, gid):
+        self.page.evaluate("""(gid) => {
+          const bar = document.querySelector('#tabs-list .gbar[data-group-id="' + gid + '"]');
+          const r = bar.getBoundingClientRect();
+          bar.dispatchEvent(new DragEvent('dragover', {
+            dataTransfer: window.__dt, bubbles: true, cancelable: true,
+            clientX: r.left + r.width / 2, clientY: r.top + r.height / 2}));
+        }""", gid)
+
+    def _end_drag(self):
+        self.page.evaluate("""(() => {
+          const card = window.__srcCard;
+          if (card) card.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        })()""")
+
+    def _rect(self, name):
+        return self.page.evaluate("""(name) => {
+          const card = [...document.querySelectorAll('#tabs-list .tab-card')]
+            .find(c => c.querySelector('.tab-name').textContent.trim() === name);
+          const b = card.getBoundingClientRect();
+          return {left: b.left, top: b.top, width: b.width, height: b.height};
+        }""", name)
+
+    def _state(self):
+        return json.loads(self.page.evaluate("""(() => {
+          const k = document.querySelector('.tab-row-keeper');
+          const nm = el => el && el.querySelector && el.querySelector('.tab-name')
+            ? el.querySelector('.tab-name').textContent.trim() : null;
+          const bar2 = document.querySelector('.gbar[data-group-id="g2"]');
+          return JSON.stringify({
+            keepers: document.querySelectorAll('.tab-row-keeper').length,
+            kOpacity: k ? getComputedStyle(k).opacity : null,
+            kTop: k ? k.getBoundingClientRect().top : null,
+            kBeforeBtn: k && k.nextElementSibling ?
+              k.nextElementSibling.id === 'add-group-btn' : false,
+            kPrevName: k ? nm(k.previousElementSibling) : null,
+            kPrevGbar: k && k.previousElementSibling && k.previousElementSibling.classList
+              && k.previousElementSibling.classList.contains('gbar')
+              ? k.previousElementSibling.dataset.groupId : null,
+            ghostHidden: (() => { const s = document.querySelector('.tab-ghost-slot');
+              return !s || getComputedStyle(s).display === 'none'; })(),
+            gbar2Top: bar2 ? bar2.getBoundingClientRect().top : null,
+            btnTop: document.getElementById('add-group-btn').getBoundingClientRect().top
+          });
+        })()"""))
+
+    def test_lone_last_row_tab_ghost_moved_out_row_held(self):
+        # Главное: группа 5+1 — единственную вкладку последней строки тащим
+        # в другую группу: последняя строка ДЕРЖИТСЯ (холдер на её месте),
+        # шапка следующей группы и «+ Группа» не сдвинулись
+        self._load(self.G2, self._g1_tabs(6) + self._g2_tabs(2))
+        pre = self._state()
+        t6 = self._rect("T6")
+        assert t6["top"] > self._rect("T1")["top"], t6  # T6 одинокая во 2-й строке
+        u1 = self._rect("U1")
+        self._start_drag("T6")
+        self._hover(u1["left"] + u1["width"] * 0.5, u1["top"] + u1["height"] * 0.5)
+        d = self._state()
+        assert d["keepers"] == 1, d
+        assert d["kOpacity"] == "0", d  # холдер невидим
+        assert d["kPrevName"] == "T5", d  # холдер — в хвоте g1, после последней видимой
+        assert abs(d["kTop"] - t6["top"]) < 2, (t6["top"], d["kTop"])  # строка на месте
+        assert abs(d["gbar2Top"] - pre["gbar2Top"]) < 2, (pre["gbar2Top"], d["gbar2Top"])
+        assert abs(d["btnTop"] - pre["btnTop"]) < 2, (pre["btnTop"], d["btnTop"])
+        self._end_drag()
+        assert self._state()["keepers"] == 0
+
+    def test_row1_tab_ghost_moved_out_row_held(self):
+        # Тащим вкладку ПЕРВОЙ строки: одинокая T6 поднимается в первую
+        # строку, освобождённая вторая строка держится холдером (после T6)
+        self._load(self.G2, self._g1_tabs(6) + self._g2_tabs(2))
+        pre = self._state()
+        t1 = self._rect("T1")
+        t6 = self._rect("T6")
+        u1 = self._rect("U1")
+        self._start_drag("T1")
+        self._hover(u1["left"] + u1["width"] * 0.5, u1["top"] + u1["height"] * 0.5)
+        d = self._state()
+        assert d["keepers"] == 1, d
+        assert d["kPrevName"] == "T6", d  # T6 теперь последняя видимая
+        assert abs(d["kTop"] - t6["top"]) < 2, (t6["top"], d["kTop"])  # строка на месте
+        t6n = self._rect("T6")
+        assert abs(t6n["top"] - t1["top"]) < 2, (t1["top"], t6n["top"])  # T6 поднялась в 1-ю строку
+        assert abs(d["gbar2Top"] - pre["gbar2Top"]) < 2, (pre["gbar2Top"], d["gbar2Top"])
+        self._end_drag()
+        assert self._state()["keepers"] == 0
+
+    def test_no_collapse_seven_tabs_no_keeper(self):
+        # 7 вкладок (5+2): одна схвачена — 6 видимых = всё ещё 2 строки:
+        # строка не схлопывается, холдер НЕ подключается (условие не выполнено)
+        self._load(self.G2, self._g1_tabs(7) + self._g2_tabs(2))
+        pre = self._state()
+        u1 = self._rect("U1")
+        self._start_drag("T1")
+        self._hover(u1["left"] + u1["width"] * 0.5, u1["top"] + u1["height"] * 0.5)
+        d = self._state()
+        assert d["keepers"] == 0, d
+        assert abs(d["gbar2Top"] - pre["gbar2Top"]) < 2, (pre["gbar2Top"], d["gbar2Top"])
+        self._end_drag()
+
+    def test_ghost_back_in_section_no_keeper(self):
+        # Заглушка вернулась В исходную секцию (в первую строку, до T1) —
+        # холдера нет: заглушка сама занимает клетку, 5 карточек + заглушка
+        # = 2 строки держатся естественно (T6 вырвана)
+        self._load(self.G2, self._g1_tabs(6) + self._g2_tabs(2))
+        t6 = self._rect("T6")
+        t1 = self._rect("T1")
+        self._start_drag("T6")
+        self._hover(t1["left"] + t1["width"] * 0.25, t1["top"] + t1["height"] * 0.5)
+        d = self._state()
+        assert d["keepers"] == 0, d
+        assert d["ghostHidden"] is False, d
+        t5 = self._rect("T5")
+        assert abs(t5["top"] - t6["top"]) < 2, (t6["top"], t5["top"])  # T5 во 2-й строке
+        self._end_drag()
+        assert self._state()["keepers"] == 0
+
+
+    def test_ghost_hidden_over_other_gbar_row_held(self):
+        # Заглушка спрятана над шапкой ДРУГОЙ группы: строка исходной
+        # секции всё так же держится холдером; возврат курсора в список
+        # (заглушка снова в другой секции) — холдер остаётся
+        self._load(self.G2, self._g1_tabs(6) + self._g2_tabs(2))
+        pre = self._state()
+        u1 = self._rect("U1")
+        self._start_drag("T1")
+        self._hover(u1["left"] + u1["width"] * 0.5, u1["top"] + u1["height"] * 0.5)
+        assert self._state()["keepers"] == 1
+        self._over_gbar("g2")  # курсор над шапкой g2 — заглушка прячется
+        d = self._state()
+        assert d["ghostHidden"] is True, d
+        assert d["keepers"] == 1, d
+        assert abs(d["gbar2Top"] - pre["gbar2Top"]) < 2, (pre["gbar2Top"], d["gbar2Top"])
+        self._hover(u1["left"] + u1["width"] * 0.5, u1["top"] + u1["height"] * 0.5)
+        d = self._state()
+        assert d["ghostHidden"] is False and d["keepers"] == 1, d
+        self._end_drag()
+        assert self._state()["keepers"] == 0
+
+    def test_single_tab_group_gbar_still_arms(self):
+        # Группа с ЕДИНСТВЕННОЙ вкладкой: вкладка схвачена (вырвана из
+        # сетки), заглушка спрятана над шапкой СОБСТВЕННОЙ группы — холдер
+        # держит пустую строку (после шапки, карточек нет), а
+        # groupVisibleCardCount(g1) === 0 — шапка вооружена целью дропа
+        # (.drop-over), как и раньше: холдер карточкой не считается
+        self._load(self.G2, self._g1_tabs(1) + self._g2_tabs(2))
+        u1 = self._rect("U1")
+        self._start_drag("T1")
+        self._hover(u1["left"] + u1["width"] * 0.5, u1["top"] + u1["height"] * 0.5)
+        d = self._state()
+        assert d["keepers"] == 1 and d["kPrevGbar"] == "g1", d
+        self._over_gbar("g1")  # курсор над шапкой g1 — заглушка прячется
+        d = json.loads(self.page.evaluate("""(() => {
+          const k = document.querySelector('.tab-row-keeper');
+          const bar = document.querySelector('.gbar[data-group-id="g1"]');
+          const s = document.querySelector('.tab-ghost-slot');
+          return JSON.stringify({
+            keepers: document.querySelectorAll('.tab-row-keeper').length,
+            kOpacity: k ? getComputedStyle(k).opacity : null,
+            visibleG1: groupVisibleCardCount('g1'),
+            dropOver: bar.classList.contains('drop-over'),
+            ghostHidden: !s || getComputedStyle(s).display === 'none'
+          });
+        })()"""))
+        assert d["ghostHidden"] is True, d
+        assert d["keepers"] == 1 and d["kOpacity"] == "0", d
+        assert d["visibleG1"] == 0, d  # холдер не меняет счётчик видимых карточек
+        assert d["dropOver"] is True, d  # шапка пустой группы вооружена
+        self._end_drag()
+        assert self._state()["keepers"] == 0
+
+    def test_ghost_hidden_over_empty_zone_row_held(self):
+        # Заглушка спрятана в пустой зоне НИЖЕ последней строки исходной
+        # группы: холдер держит освободившуюся строку
+        self._load(self.G2, self._g1_tabs(6) + self._g2_tabs(2))
+        pre = self._state()
+        u1 = self._rect("U1")
+        self._start_drag("T1")
+        self._hover(u1["left"] + u1["width"] * 0.5, u1["top"] + u1["height"] * 0.5)
+        pt = self.page.evaluate("""(() => {
+          const bar = document.querySelector('.gbar[data-group-id="g2"]');
+          const list = document.getElementById('tabs-list').getBoundingClientRect();
+          const cards = [...document.querySelectorAll('#tabs-list .tab-card')]
+            .filter(c => c.style.display !== 'none' && c.__tab && c.__tab.groupId === 'g1');
+          let bottom = -Infinity;
+          cards.forEach(c => { const r = c.getBoundingClientRect();
+            if (r.height > 0) bottom = Math.max(bottom, r.bottom); });
+          return [list.left + list.width / 2,
+                  (bottom + bar.getBoundingClientRect().top) / 2];
+        })()""")
+        self._hover(*pt)
+        d = self._state()
+        assert d["ghostHidden"] is True, d
+        assert d["keepers"] == 1, d
+        assert abs(d["gbar2Top"] - pre["gbar2Top"]) < 2, (pre["gbar2Top"], d["gbar2Top"])
+        self._end_drag()
+        assert self._state()["keepers"] == 0
+
+    def test_dragend_no_leftovers(self):
+        # Dragend (без дропа) из состояния с холдером — без следов: ни
+        # холдера, ни заглушки, карточка возвращена в слот
+        self._load(self.G2, self._g1_tabs(6) + self._g2_tabs(2))
+        u1 = self._rect("U1")
+        self._start_drag("T1")
+        self._hover(u1["left"] + u1["width"] * 0.5, u1["top"] + u1["height"] * 0.5)
+        assert self._state()["keepers"] == 1
+        self._end_drag()
+        d = self._state()
+        assert d["keepers"] == 0, d
+        assert d["ghostHidden"] is True, d  # заглушки в DOM нет
+        assert self.page.evaluate("""(() => {
+          const card = [...document.querySelectorAll('#tabs-list .tab-card')]
+            .find(c => c.querySelector('.tab-name').textContent.trim() === 'T1');
+          return card.style.display;
+        })()""") == ""
+
+    def test_escape_cancel_no_leftovers(self):
+        # Escape (pointer-путь) из состояния с холдером — без следов:
+        # документный keydown ре-рендерит список, pointer-cancel снимает драг
+        self._load(self.G2, self._g1_tabs(6) + self._g2_tabs(2))
+        box = self._rect("T1")
+        u1 = self._rect("U1")
+        pg = self.page
+        pg.mouse.move(box["left"] + box["width"] / 2, box["top"] + box["height"] / 2)
+        pg.mouse.down()
+        pg.mouse.move(u1["left"] + u1["width"] / 2, u1["top"] + u1["height"] / 2, steps=10)
+        assert self._state()["keepers"] == 1
+        pg.keyboard.press("Escape")
+        pg.mouse.up()
+        d = self._state()
+        assert d["keepers"] == 0, d
+        assert d["ghostHidden"] is True, d
+
+    def test_re_render_resets_tracker(self):
+        # Перерисовка посреди драга уносит холдер и сбрасывает трекер;
+        # следующий драг прицепляет холдер заново (старое состояние не
+        # «залипает»)
+        self._load(self.G2, self._g1_tabs(6) + self._g2_tabs(2))
+        u1 = self._rect("U1")
+        self._start_drag("T1")
+        self._hover(u1["left"] + u1["width"] * 0.5, u1["top"] + u1["height"] * 0.5)
+        assert self._state()["keepers"] == 1
+        self.page.evaluate("renderTabs()")  # перерисовка (как при storage-событии)
+        assert self._state()["keepers"] == 0
+        self._end_drag()
+        self._start_drag("T1")  # свежий драг — холдер прицепляется снова
+        u1 = self._rect("U1")
+        self._hover(u1["left"] + u1["width"] * 0.5, u1["top"] + u1["height"] * 0.5)
+        d = self._state()
+        assert d["keepers"] == 1, d
+        self._end_drag()
+        assert self._state()["keepers"] == 0
+
+    def test_loose_section_row_held(self):
+        # Негрупповая секция 5+1: вкладка уезжает в группу — холдер перед
+        # «+ Группа» держит последнюю строку
+        tabs = self._g2_tabs(2) + [
+            {"name": f"T{i}", "url": f"https://t{i}.com", "spaceId": "sp1"}
+            for i in range(1, 7)]
+        self._load([{"id": "g2", "name": "G2", "spaceId": "sp1", "collapsed": False}], tabs)
+        pre = self._state()
+        u1 = self._rect("U1")
+        self._start_drag("T1")
+        self._hover(u1["left"] + u1["width"] * 0.5, u1["top"] + u1["height"] * 0.5)
+        d = self._state()
+        assert d["keepers"] == 1, d
+        assert d["kBeforeBtn"] is True, d  # холдер — перед «+ Группа»
+        assert abs(d["btnTop"] - pre["btnTop"]) < 2, (pre["btnTop"], d["btnTop"])
+        assert abs(d["gbar2Top"] - pre["gbar2Top"]) < 2, (pre["gbar2Top"], d["gbar2Top"])
+        self._end_drag()
+        assert self._state()["keepers"] == 0
+
+    def test_keeper_invisible_both_themes(self):
+        # Холдер невидим (opacity 0) и держит строку в обеих темах
+        # (смена темы не перерисовывает список)
+        self._load(self.G2, self._g1_tabs(6) + self._g2_tabs(2))
+        pre = self._state()
+        u1 = self._rect("U1")
+        self._start_drag("T1")
+        self._hover(u1["left"] + u1["width"] * 0.5, u1["top"] + u1["height"] * 0.5)
+        d = self._state()
+        assert d["keepers"] == 1 and d["kOpacity"] == "0", d
+        assert abs(d["gbar2Top"] - pre["gbar2Top"]) < 2, (pre["gbar2Top"], d["gbar2Top"])
+        assert self.page.evaluate(
+            "document.documentElement.dataset.theme") == "light"
+        self.page.evaluate("document.getElementById('theme-btn').click()")
+        assert self.page.evaluate(
+            "document.documentElement.dataset.theme") == "dark"
+        d = self._state()
+        assert d["keepers"] == 1 and d["kOpacity"] == "0", d
+        assert abs(d["gbar2Top"] - pre["gbar2Top"]) < 2, (pre["gbar2Top"], d["gbar2Top"])
+        self._end_drag()
+        assert self._state()["keepers"] == 0
+
+
 class TestEmptyGroupAutoCollapse:
     """Автосворачивание: группа, потерявшая ПОСЛЕДНЮЮ вкладку (перенос в
     «Без группы» или удаление ✕), сворачивается сама — вместо шапки с
@@ -8154,7 +8830,8 @@ class TestGhostOverExpandedGbar:
     дроп карточки на любую шапку уводит вкладку В группу, поэтому над шапкой
     заглушка ПРЯЧЕТСЯ ЦЕЛИКОМ (display:none — её ячейка сетки освобождается:
     ни «тёплая» заглушка на старом месте, ни дырки); число строк исходной
-    секции держит видимая схваченная карточка (row-keeper больше нет). Когда
+    секции держится естественно (в этих лейаутах строка не схлопывается —
+    row-keeper не подключается). Когда
     курсор снова попадает в список, заглушка
     возвращается к видимости (display:'') в честном слоте. Dragend из состояния
     «спрятанная» — без следов."""
@@ -8454,8 +9131,9 @@ class TestGhostOverGroupEmptyArea:
     последней строки (зазор между шапкой/последней строкой и следующей
     секцией). В этих зонах дроп ставит вкладку в начало/конец группы — как
     над шапкой, поэтому заглушка ПРЯЧЕТСЯ ЦЕЛИКОМ (display:none, как над
-    шапкой группы и слотом пустой группы); число строк исходной секции держит
-    видимая схваченная карточка (row-keeper больше нет); возврат курсора в
+    шапкой группы и слотом пустой группы); число строк исходной секции
+    держится естественно (в этих лейаутах строка не схлопывается —
+    row-keeper не подключается); возврат курсора в
     строку карточек — заглушка снова
     видимая в честном слоте. Пустые ячейки СЕБЕ строки (справа от последней
     карточки незаполненной строки) НЕ зона: заглушка остаётся видимой в
@@ -12870,3 +13548,226 @@ class TestTabCardHeightTaller:
         self.page.evaluate("""() => {
           if (window.__srcCard) window.__srcCard.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
         }""")
+
+
+class TestGhostHiddenOverRail:
+    """Призрак-заглушка (.tab-ghost-slot) спрятан ЦЕЛИКОМ, пока карточка
+    висит над правой рейкой (#rail-right) — как над .gbar / .group-empty-slot
+    (display:none, а не visibility: ячейка освобождается, строка исходной
+    секции держится условным row-keeper'ом). Рейка при этом остаётся тёплой
+    (.rail-drag-over). Возврат курсора в #tabs-list — призрак снова виден на
+    месте вставки; дроп/отмена над рейкой — без остатков. Оба пути драга:
+    HTML5-синтетика и pointer (реальная мышь). Дроп-поведение рейки (сайт
+    открывается фоновой вкладкой, карточка не тронута) — без изменений."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self._errors = []
+        page.on("pageerror", self._on_err)
+        yield
+        assert not self._errors, self._errors
+        page.remove_listener("pageerror", self._on_err)
+
+    def _on_err(self, err):
+        self._errors.append(str(err))
+
+    SP = [{"id": "sp1", "name": "Main"}]
+    GROUPS = [{"id": "g1", "name": "G", "spaceId": "sp1", "collapsed": False}]
+    TABS = [
+        {"name": "T1", "url": "https://t1.com", "spaceId": "sp1", "groupId": "g1"},
+        {"name": "T2", "url": "https://t2.com", "spaceId": "sp1", "groupId": "g1"},
+    ]
+    BT = [
+        {"id": "bt1", "title": "Wiki", "url": "https://wiki.example", "windowId": 1, "index": 0},
+        {"id": "bt2", "title": "Mail", "url": "https://mail.example", "windowId": 1, "index": 1},
+    ]
+
+    def _load(self, tabs=None, groups=None):
+        load_view(self.page, spaces=self.SP, groups=groups or self.GROUPS,
+                  tabs=tabs or self.TABS, last_space="sp1", browser_tabs=self.BT)
+        # CSS view.html + theme.css — как в TestRailWarmOnCardDrag: без него
+        # рейка лежит ПОД центральным списком, а не в правой колонке
+        css = load_file("theme.css")
+        html = load_file("view.html")
+        style_block = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate("""(css) => {
+          const s = document.createElement('style');
+          s.textContent = css;
+          document.head.appendChild(s);
+        }""", css + style_block)
+        self.page.set_viewport_size({"width": 1280, "height": 800})
+        self.page.mouse.move(0, 0)
+        self.page.wait_for_timeout(200)
+
+    def _state(self):
+        return json.loads(self.page.evaluate("""() => {
+          const s = document.querySelector('#tabs-list .tab-ghost-slot');
+          const c = document.querySelector('.pd-clone');
+          return JSON.stringify({
+            ghostExists: !!s,
+            ghostDisplay: s ? getComputedStyle(s).display : null,
+            inList: !!s && s.isConnected,
+            railCls: document.getElementById('rail-right').classList.contains('rail-drag-over'),
+            keepers: document.querySelectorAll('.tab-row-keeper').length,
+            clones: c ? 1 : 0
+          });
+        }"""))
+
+    def _card_box(self, name):
+        return self.page.evaluate("""(name) => {
+          const c = [...document.querySelectorAll('#tabs-list .tab-card')]
+            .find(c => c.querySelector('.tab-name').textContent.trim() === name);
+          const r = c.getBoundingClientRect();
+          return {x: r.left + r.width / 2, y: r.top + r.height / 2};
+        }""", name)
+
+    def _rail_point(self):
+        return self.page.evaluate("""() => {
+          const r = document.getElementById('rail-right').getBoundingClientRect();
+          return {x: r.left + r.width / 2, y: r.top + Math.min(40, r.height / 2)};
+        }""")
+
+    def _start_drag(self, name):
+        self.page.evaluate("""(name) => {
+          const card = [...document.querySelectorAll('#tabs-list .tab-card')]
+            .find(c => c.querySelector('.tab-name').textContent.trim() === name);
+          window.__srcCard = card;
+          window.__dt = new DataTransfer();
+          card.dispatchEvent(new DragEvent('dragstart', {dataTransfer: window.__dt, bubbles: true}));
+        }""", name)
+        self.page.wait_for_timeout(50)  # отложенное создание заглушки (setTimeout(0))
+
+    def _dragover_at(self, sel, x, y):
+        self.page.evaluate("""([sel, x, y]) => {
+          const el = document.querySelector(sel);
+          el.dispatchEvent(new DragEvent('dragover', {dataTransfer: window.__dt,
+            bubbles: true, cancelable: true, clientX: x, clientY: y}));
+        }""", [sel, x, y])
+
+    def _drop_at(self, sel, x, y):
+        self.page.evaluate("""([sel, x, y]) => {
+          const el = document.querySelector(sel);
+          el.dispatchEvent(new DragEvent('drop', {dataTransfer: window.__dt,
+            bubbles: true, cancelable: true, clientX: x, clientY: y}));
+        }""", [sel, x, y])
+
+    def _end_drag(self):
+        self.page.evaluate("""(() => {
+          const card = window.__srcCard;
+          if (card) card.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        })()""")
+
+    def test_html5_ghost_hidden_over_rail_and_back_to_list(self):
+        # HTML5: dragover в список — призрак виден; dragover над рейкой —
+        # спрятан ЦЕЛИКОМ и рейка тёплая; возврат в список — снова виден
+        self._load()
+        self._start_drag("T1")
+        c2 = self._card_box("T2")
+        self._dragover_at("#tabs-list", c2["x"], c2["y"])
+        d = self._state()
+        assert d["ghostExists"] and d["ghostDisplay"] != "none", d
+        assert not d["railCls"], d
+        rail = self._rail_point()
+        self._dragover_at("#rail-right", rail["x"], rail["y"])
+        d = self._state()
+        assert d["ghostDisplay"] == "none", d
+        assert d["railCls"] is True, d
+        self._dragover_at("#tabs-list", c2["x"], c2["y"])
+        d = self._state()
+        assert d["ghostDisplay"] != "none" and d["inList"], d
+        assert d["railCls"] is False, d
+        self._end_drag()
+
+    def test_html5_first_dragover_race_on_rail(self):
+        # Гонка: ПЕРВЫЙ dragover падает на рейку ДО отложенного создания
+        # заглушки — после её появления призрак НЕ замигает дома
+        self._load()
+        self.page.evaluate("""(() => {
+          const card = [...document.querySelectorAll('#tabs-list .tab-card')][0];
+          window.__srcCard = card;
+          window.__dt = new DataTransfer();
+          card.dispatchEvent(new DragEvent('dragstart', {dataTransfer: window.__dt, bubbles: true}));
+        })()""")
+        rail = self._rail_point()
+        self._dragover_at("#rail-right", rail["x"], rail["y"])
+        self.page.wait_for_timeout(120)  # отложенный applyGhost fired
+        d = self._state()
+        assert d["ghostExists"] is True, d
+        assert d["ghostDisplay"] == "none", d
+        assert d["railCls"] is True, d
+        self._end_drag()
+
+    def test_html5_drop_on_rail_background_tab_no_leftovers(self):
+        # Дроп над рейкой — сайт открывается фоновой вкладкой (mock
+        # chrome.tabs.create, active:false), карточка не тронута; dragend —
+        # без заглушки/холдеров/тёплого класса
+        self._load()
+        self._start_drag("T1")
+        rail = self._rail_point()
+        self._dragover_at("#rail-right", rail["x"], rail["y"])
+        self._drop_at("#rail-right", rail["x"], rail["y"])
+        bg = json.loads(self.page.evaluate(
+            "JSON.stringify((chrome.tabs.createdTabs || []).filter(t => t.active === false))"))
+        assert [t["url"] for t in bg] == ["https://t1.com"], bg
+        self._end_drag()
+        d = self._state()
+        assert d["ghostExists"] is False, d
+        assert d["railCls"] is False, d
+        assert d["keepers"] == 0, d
+        assert json.loads(self.page.evaluate(
+            "JSON.stringify([...document.querySelectorAll('#tabs-list .tab-card .tab-name')].map(n => n.textContent.trim()))")
+        ) == ["T1", "T2"]
+
+    def test_pointer_ghost_hidden_over_rail_visible_back_drop_commits(self):
+        # Pointer (реальная мышь): press + движение >8px — вооружено; над
+        # рейкой — призрак спрятан, рейка тёплая; возврат в список — снова
+        # виден; релиз над рейкой — фоновая вкладка, без остатков
+        self._load()
+        card = self._card_box("T1")
+        rail = self._rail_point()
+        c2 = self._card_box("T2")
+        pg = self.page
+        pg.mouse.move(card["x"], card["y"])
+        pg.mouse.down()
+        pg.mouse.move(card["x"] + 12, card["y"], steps=3)  # >8px — вооружено
+        for i in range(1, 11):
+            pg.mouse.move(card["x"] + (rail["x"] - card["x"]) * i / 10,
+                          card["y"] + (rail["y"] - card["y"]) * i / 10, steps=2)
+        d = self._state()
+        assert d["ghostDisplay"] == "none", d
+        assert d["railCls"] is True, d
+        for i in range(1, 11):
+            pg.mouse.move(rail["x"] + (c2["x"] - rail["x"]) * i / 10,
+                          rail["y"] + (c2["y"] - rail["y"]) * i / 10, steps=2)
+        d = self._state()
+        assert d["ghostDisplay"] != "none" and d["inList"], d
+        for i in range(1, 11):
+            pg.mouse.move(c2["x"] + (rail["x"] - c2["x"]) * i / 10,
+                          c2["y"] + (rail["y"] - c2["y"]) * i / 10, steps=2)
+        pg.mouse.up()
+        self.page.wait_for_timeout(120)
+        bg = json.loads(self.page.evaluate(
+            "JSON.stringify((chrome.tabs.createdTabs || []).filter(t => t.active === false))"))
+        assert [t["url"] for t in bg] == ["https://t1.com"], bg
+        self.page.wait_for_timeout(400)  # клон-сета (settleMs ~180) завершён
+        d = self._state()
+        assert d["ghostExists"] is False, d
+        assert d["clones"] == 0
+        assert d["railCls"] is False, d
+
+    def test_row_keeper_holds_row_when_ghost_over_rail(self):
+        # Сетка 1280x800 (5 колонок), группа 5+1: единственную вкладку
+        # последней строки тащим над рейку — призрак спрятан И последнюю
+        # строку держит условный row-keeper
+        tabs = [{"name": f"T{i}", "url": f"https://t{i}.com",
+                 "spaceId": "sp1", "groupId": "g1"} for i in range(1, 7)]
+        self._load(tabs=tabs)
+        self._start_drag("T6")
+        rail = self._rail_point()
+        self._dragover_at("#rail-right", rail["x"], rail["y"])
+        d = self._state()
+        assert d["ghostDisplay"] == "none", d
+        assert d["keepers"] == 1, d
+        self._end_drag()
+        assert self._state()["keepers"] == 0

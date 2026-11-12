@@ -145,6 +145,10 @@ let dragWrapHiddenCard = null; // «row-full» группа: крайняя ка
                                // закончился / перерисовка)
 let dragWrapHiddenGroup = null; // groupId той группы: та же карточка держится скрытой,
                                 // пока заглушка внутри неё
+let dragRowKeepers = [];       // .tab-row-keeper: невидимые карточки-холдеры,
+                               // держащие последнюю строку исходной секции, пока
+                               // ghost-заглушка уехала из неё (или спрятана)
+let dragRowKeeperSection = null; // секция текущих холдеров: groupId (null — без группы)
 let dragOverChipTarget = null; // последний target dragover чипа — чтобы отложенное создание
                                // заглушки (dragstart setTimeout) повторило состояние, если
                                // первый dragover уже попал на целевой чип ПЕРЕД таймером
@@ -1328,6 +1332,11 @@ function renderTabs(filter = '') {
   // сбрасываем ссылку, чтобы ghost-slot не «воскрес» после dragend
   if (dragGhostSlot && !dragGhostSlot.isConnected) dragGhostSlot = null;
   if (dragWrapHiddenCard && !dragWrapHiddenCard.isConnected) { dragWrapHiddenCard = null; dragWrapHiddenGroup = null; }
+  // Холдеры последней строки (row-keeper) унесены с DOM — сбрасываем трекер,
+  // чтобы следующий dragover драга прицепил их заново
+  dragRowKeepers.forEach(k => { if (k.isConnected) k.remove(); });
+  dragRowKeepers = [];
+  dragRowKeeperSection = null;
 
   const sTabs = spaceTabs();
   const sGroups = spaceGroups();
@@ -1904,12 +1913,18 @@ if (railRight) {
     if (!dragSourceUrl || dragSourceGroupId || !e.dataTransfer) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
+    railRight.classList.add('rail-drag-over'); // тёплый тон: рейка принимает карточку
+  });
+  // Курсор ушёл с рейки — тёплый тон снят (endCardDrag — страховка на dragend)
+  railRight.addEventListener('dragleave', () => {
+    railRight.classList.remove('rail-drag-over');
   });
   railRight.addEventListener('drop', (e) => {
     if (!dragSourceUrl || dragSourceGroupId || !e.dataTransfer) return;
     const src = allTabs.find(tb => tb.url === dragSourceUrl);
     if (!src) return;
     e.preventDefault();
+    railRight.classList.remove('rail-drag-over'); // коммит — тёплый тон снят
     const urls = (dragBatchUrls && dragBatchUrls.length > 1) ? dragBatchUrls : [src.url];
     openSavedUrlsInBackground(urls);
     removeGhostSlot(); // dragend/endCardDrag довершит очистку
@@ -1965,11 +1980,14 @@ function beginCardDrag(tab, cardEl, sync) {
     // заглушка неверно «замигает» дома.
     const overGbarOrSlot = dragOverTarget && dragOverTarget.closest &&
         (dragOverTarget.closest('.gbar') || dragOverTarget.closest('.group-empty-slot'));
+    const overRail = dragOverTarget && dragOverTarget.closest &&
+        dragOverTarget.closest('#rail-right');
     const overGroupEmptyZone = dragOverTargetXY !== null &&
         groupCardAreaEmptyZone(dragOverTargetXY[0], dragOverTargetXY[1]) !== null;
-    if (overGbarOrSlot || overGroupEmptyZone) {
+    if (overGbarOrSlot || overRail || overGroupEmptyZone) {
       setGhostDisplay('none');
     }
+    syncSourceRowKeeper(); // заглушка дома ИЛИ спрятана на старте — пересчёт холдеров
   };
   if (sync) applyGhost();
   else setTimeout(applyGhost, 0);
@@ -1988,6 +2006,7 @@ function endCardDrag(cardEl) {
   dragOverTarget = null; // не держим ссылку на DOM-узел после драга
   dragOverTargetXY = null;
   restoreWrapHiddenCard(); // «row-full» группа: вернуть временно скрытую крайнюю карточку
+  removeSourceRowKeeper(); // холдеры последней строки — снять (dragend / Escape / cancel)
   // Снимаем состояние «идёт перетаскивание карточки» (тонировка шапок групп)
   document.body.classList.remove('dragging-card');
   if (cardEl) {
@@ -1998,6 +2017,7 @@ function endCardDrag(cardEl) {
     if (cardEl.isConnected) cardEl.style.display = ''; // возврат карточки (во время драга скрыта display:none)
   }
   document.querySelectorAll('.space-chip.drag-over').forEach(c => c.classList.remove('drag-over'));
+  if (railRight) railRight.classList.remove('rail-drag-over'); // рейка: тёплый тон не «залипает» после dragend
 }
 
 // === «row-full» группа: заглушка не доращивает новую строку ===
@@ -2029,6 +2049,99 @@ function restoreWrapHiddenCard() {
     dragWrapHiddenCard = null;
     dragWrapHiddenGroup = null;
   }
+}
+
+// === Холдер последней строки исходной секции (row-keeper) ===
+// Заглушка УЕХАЛА из исходной секции (в другую секцию или спрятана над
+// .gbar / .group-empty-slot / пустой зоной карт.области) — вырванная
+// карточка высвободила свою клетку, и последняя строка секции может
+// СХОЛОНТЬСЯ, сдвинув всё, что ниже. Пока число строк секции уменьшается,
+// хвост держит невидимая карточка-заглушка (.tab-row-keeper, opacity:0,
+// pointer-events:none; НЕ .tab-card — groupVisibleCardCount и вооружение
+// шапок групп её не видят). Заглушка ВНУТРИ секции — холдер не нужен:
+// она сама занимает клетку. Холдер ставится в ХВОСТ исходной секции
+// (после последней видимой карточки, после её .gbar, если видимых
+// карточек нет, перед #add-group-btn в негрупповой секции) и снимается,
+// когда заглушка возвращается в секцию / драг закончился / перерисовка.
+// Размер — размер схваченной карточки (dragCardSize, снят до хайда).
+// Визуально это «пустая» строка держится всё время драга — удобно для
+// быстрого перетаскивания: пространство ниже не елозится.
+function ghostSlotSectionId() {
+  const g = dragGhostSlot;
+  if (!g || !g.isConnected || g.style.display === 'none') return null;
+  for (let el = g.previousElementSibling; el; el = el.previousElementSibling) {
+    if (el.classList.contains('tab-row-keeper') ||
+        el.classList.contains('tab-ghost-slot')) continue;
+    if (el.classList.contains('gbar') || el.classList.contains('group-empty-slot'))
+      return el.dataset.groupId || null;
+    if (el.classList.contains('tab-card')) return el.__tab ? tabGroupOf(el.__tab) : null;
+    return null; // .loose-label, «+ Группа» и прочее — негрупповая секция
+  }
+  return null; // заглушка до первого ребёнка списка — негрупповая секция
+}
+
+function makeRowKeeper() {
+  const k = document.createElement('div');
+  k.className = 'tab-row-keeper';
+  k.style.cssText = 'opacity:0;pointer-events:none;';
+  const s = dragCardSize;
+  if (s && s.w) k.style.width = s.w + 'px';
+  if (s && s.h) k.style.height = s.h + 'px';
+  return k;
+}
+
+function removeSourceRowKeeper() {
+  dragRowKeepers.forEach(k => { if (k.isConnected) k.remove(); });
+  dragRowKeepers = [];
+  dragRowKeeperSection = null;
+}
+
+// Пересчёт холдеров после перемещения/скрытия заглушки: подключаются ТОЛЬКО
+// когда заглушка НЕ занимает клетку в исходной секции И число отрисованных
+// строк этой секции без холдеров МЕНЬШЕ rOrig = ceil(nFull / cols)
+// (nFull — ПОЛНОЕ число карточек источника, включая вырванную). Число
+// холдеров = rOrig − текущие строки (обычно 1). Не сетка (cols 0) — нет.
+function syncSourceRowKeeper() {
+  if (!dragSourceUrl || !dragSourceCardEl || !dragSourceCardEl.isConnected) {
+    removeSourceRowKeeper();
+    return;
+  }
+  const src = allTabs.find(t => t.url === dragSourceUrl);
+  const srcGid = src ? tabGroupOf(src) : null;
+  const g = dragGhostSlot;
+  const ghostVisible = !!(g && g.isConnected && g.style.display !== 'none');
+  if (ghostVisible && ghostSlotSectionId() === srcGid) {
+    removeSourceRowKeeper(); // заглушка в секции — сама держит клетку
+    return;
+  }
+  const cols = gridColumnCount();
+  if (!cols) { removeSourceRowKeeper(); return; }
+  const nFull = allTabs.filter(t => t.spaceId === activeSpaceId && tabGroupOf(t) === srcGid).length;
+  const rOrig = Math.ceil(nFull / cols);
+  const visible = [...document.querySelectorAll('#tabs-list .tab-card')]
+    .filter(c => c !== dragSourceCardEl && c.style.display !== 'none' &&
+                 (c.__tab ? tabGroupOf(c.__tab) : null) === srcGid);
+  const keepersNeeded = Math.max(0, rOrig - Math.ceil(visible.length / cols));
+  if (keepersNeeded === 0) { removeSourceRowKeeper(); return; }
+  if (dragRowKeeperSection !== srcGid) removeSourceRowKeeper();
+  let anchorEl = null;
+  if (srcGid != null) {
+    anchorEl = lastVisibleGroupCard(srcGid) ||
+      document.querySelector('#tabs-list .gbar[data-group-id="' + srcGid + '"]');
+  } else {
+    anchorEl = document.getElementById('add-group-btn');
+  }
+  if (!anchorEl) { removeSourceRowKeeper(); return; }
+  while (dragRowKeepers.length < keepersNeeded) {
+    const k = makeRowKeeper();
+    if (srcGid != null) anchorEl.after(k); else anchorEl.before(k);
+    dragRowKeepers.push(k);
+  }
+  while (dragRowKeepers.length > keepersNeeded) {
+    const k = dragRowKeepers.pop();
+    if (k.isConnected) k.remove();
+  }
+  dragRowKeeperSection = srcGid;
 }
 
 // Заглушка в группе (anchor — {el, side}): после вставки заглушки группа дорастёт
@@ -2070,8 +2183,25 @@ function updateWrapHiddenCard(anchor) {
 function trackCardDragAt(clientX, clientY, targetEl) {
   if (!dragSourceUrl || dragSourceGroupId) return false;
   const t = targetEl || document.elementFromPoint(clientX, clientY);
+  // Тёплый тон правой рейки — цель дропа карточки (открыть сайт фоновой
+  // вкладкой). Рейка лежит вне #tabs-list, поэтому проверка стоит ДО всех
+  // веток (работает независимо от попадания в список) и сама снимает класс,
+  // когда курсор уходит с рейки (любой другой target).
   dragOverTarget = t;
   dragOverTargetXY = [clientX, clientY];
+  if (railRight) {
+    if (t && t.closest && t.closest('#rail-right')) {
+      railRight.classList.add('rail-drag-over');
+      // Призрак спрятан целиком — рейка за пределами #tabs-list, у слота нет
+      // валидного места вставки (тот же паттерн, что .gbar/.group-empty-slot);
+      // строка исходной секции держится условным холдером.
+      setGhostDisplay('none');
+      restoreWrapHiddenCard(); // заглушка скрыта — новая строка не видна
+      syncSourceRowKeeper(); // заглушка спрятана — исходная секция держит строку холдером
+      return true;
+    }
+    railRight.classList.remove('rail-drag-over');
+  }
   // Over ANY group header (.gbar) and over an empty-group slot
   // (.group-empty-slot) the card drops INTO that group (own drop handler on
   // the element) — hide the ghost WHOLLY. NOT removeGhostSlot: deferred ghost
@@ -2079,6 +2209,7 @@ function trackCardDragAt(clientX, clientY, targetEl) {
   if (t && t.closest && (t.closest('.gbar') || t.closest('.group-empty-slot'))) {
     setGhostDisplay('none');
     restoreWrapHiddenCard(); // заглушка скрыта — новая строка не видна
+    syncSourceRowKeeper(); // заглушка спрятана — исходная секция держит строку холдером
     return true;
   }
   // Space chip: ghost stands still in place (behavior unchanged).
@@ -2090,6 +2221,7 @@ function trackCardDragAt(clientX, clientY, targetEl) {
   if (groupCardAreaEmptyZone(clientX, clientY) !== null) {
     setGhostDisplay('none');
     restoreWrapHiddenCard(); // заглушка скрыта — новая строка не видна
+    syncSourceRowKeeper(); // заглушка спрятана — исходная секция держит строку холдером
     return true;
   }
   if (!t || !tabsList.contains(t)) return false;
@@ -2113,6 +2245,7 @@ function trackCardDragAt(clientX, clientY, targetEl) {
   } else {
     restoreWrapHiddenCard(); // заглушка не вставлена — скрытую карточку вернуть
   }
+  syncSourceRowKeeper(); // заглушка переехала (или осталась) — пересчёт холдеров
   return true;
 }
 
@@ -2239,6 +2372,7 @@ function commitCardDropAt(clientX, clientY) {
   }
   const rail = t.closest('#rail-right');
   if (rail) {
+    if (railRight) railRight.classList.remove('rail-drag-over'); // тёплый тон снят (endCardDrag — страховка)
     // Карточка → рейка: сайт открывается новой фоновой вкладкой, сама
     // карточка не тронута (без записи в storage). Слота в сетке нет — клон
     // «приземляется» у курсора (rect размером с карточку под курсором).
