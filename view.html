@@ -379,6 +379,18 @@
       transition: background .1s, box-shadow .1s;
     }
     .bt-tab:hover { background: var(--hover); box-shadow: 0 0 0 1px var(--line2); }
+    /* Клон рейка-драга в FULL-состоянии (курсор над центром/левой рейкой):
+       ПОЛНЫЙ вид сохранённой карточки — фон var(--tab-card-bg) (включая
+       кастомный цвет из настроек), радиус, имя сверху (шрифт/цвет .tab-name),
+       фавикон снизу (img/буква, как у карточки); в малом состоянии —
+       исходный вид элемента рейки */
+    .pd-clone.btl-clone-full {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 6px; padding: 8px 10px;
+      background: var(--tab-card-bg); border-radius: var(--card-radius);
+      box-shadow: 0 0 0 1px var(--line);
+    }
+    .pd-clone.btl-clone-full .btl-clone-card-name { flex: none; max-width: 100%; text-align: center; }
     .bt-icon {
       width: 16px; height: 16px; flex: none; object-fit: contain; border-radius: 3px;
       box-shadow: 0 0 0 1px var(--line2); background: var(--surface);
@@ -449,13 +461,13 @@
     .modal-btn.ghost:hover { background: var(--hover); }
     .modal-btn.primary { background: var(--ink); color: var(--on-ink); }
     .modal-btn.primary:hover { opacity: .88; }
-    /* Модалка редактирования вкладки — вертикальная (выше, чем шире), крупнее
-       общей .modal; тон текста полей — как у имени вкладки (--card-name).
-       Скоуп по #edit-tab-modal: модалка пространств (.modal / #space-name-input)
-       остаётся прежней */
-    #edit-tab-modal .modal { min-width: 300px; max-width: 320px; padding: 30px 24px; }
+    /* Модалка редактирования вкладки — размер как у окна настроек
+       (#settings-modal .modal): box rule зеркалит его точно; тон текста полей —
+       как у имени вкладки (--card-name). Скоуп по #edit-tab-modal: модалка
+       пространств (.modal / #space-name-input) остаётся прежней */
+    #edit-tab-modal .modal { min-width: 560px; max-width: 640px; width: min(640px, calc(100vw - 24px)); min-height: 440px; padding: 22px 20px; }
     #edit-tab-modal .modal h3 { font-size: 15px; margin-bottom: 24px; }
-    #edit-tab-modal input[type="text"] { padding: 16px 14px; font-size: 14px; margin-bottom: 28px; color: var(--card-name); }
+    #edit-tab-modal input[type="text"] { width: 100%; padding: 16px 14px; font-size: 14px; margin-bottom: 28px; color: var(--card-name); }
 
     /* Модалка настроек (FAQ) — шире общей .modal; крестик сверху справа;
        блок «Частые вопросы»: заголовок + строка вопроса + приглушённый ответ.
@@ -497,6 +509,14 @@
     #settings-modal .faq-item:last-child { margin-bottom: 0; }
     #settings-modal .faq-q { font-size: 13px; font-weight: 600; color: var(--text); margin: 0 0 4px; }
     #settings-modal .faq-a { font-size: 12.5px; line-height: 1.5; color: var(--text-muted); margin: 0; }
+    /* «О программе»: версия + автообновление + «Проверить обновления» + статус (только токены) */
+    #settings-modal .about-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+    #settings-modal .about-label { font: 500 13px/1 var(--font-ui); color: var(--text-soft); }
+    #settings-modal .about-value { font: 500 13px/1 var(--font-mono); color: var(--text); }
+    #settings-modal .about-text { font: 400 12.5px/1.55 var(--font-ui); color: var(--text-muted); margin: 0 0 14px; }
+    #settings-modal .about-status { font: 400 12px/1.4 var(--font-ui); color: var(--text-muted); }
+    #settings-modal .about-status.ok { color: var(--success); }
+    #settings-modal .about-status.available { background: var(--ghost-bg); box-shadow: inset 0 0 0 1px var(--ghost-ring); color: var(--text); border-radius: 5px; padding: 2px 7px; }
 
     @media (max-width: 760px) {
       .workspace { grid-template-columns: 60px minmax(0, 1fr); }
@@ -645,6 +665,7 @@
         <nav class="settings-nav" aria-label="Разделы настроек">
           <button class="settings-nav-item active" data-section="customization">Кастомизация</button>
           <button class="settings-nav-item" data-section="faq">FAQ</button>
+          <button class="settings-nav-item" data-section="about">О программе</button>
         </nav>
         <div class="settings-main">
           <div class="settings-pane" id="settings-pane-customization">
@@ -690,6 +711,20 @@
             <p class="faq-q">Где хранятся данные?</p>
             <p class="faq-a">На этом устройстве (chrome.storage.local); синхронизация между устройствами появится вместе с аккаунтом.</p>
           </div>
+        </div>
+      </section>
+          </div>
+          <div class="settings-pane" id="settings-pane-about" style="display:none;">
+      <section class="settings-section">
+        <h4 class="settings-section-title">О программе</h4>
+        <div class="about-row">
+          <span class="about-label">Версия</span>
+          <span class="about-value" id="about-version">—</span>
+        </div>
+        <p class="about-text">BlatTabs автоматически обновляется из репозитория: Chrome проверяет фид обновлений (≈раз в сутки и при запуске браузера) и подменяет установленную копию на месте. Данные привязаны к ID расширения и переживают обновление.</p>
+        <div class="about-row">
+          <button class="btn btn-ghost" id="check-update-btn">Проверить обновления</button>
+          <span class="about-status" id="update-status"></span>
         </div>
       </section>
           </div>

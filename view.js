@@ -603,7 +603,7 @@ function setSettingsSection(id) {
   if (!settingsNavItems.some((b) => b.dataset.section === id)) id = 'customization';
   settingsSection = id;
   settingsNavItems.forEach((b) => b.classList.toggle('active', b.dataset.section === id));
-  ['customization', 'faq'].forEach((s) => {
+  ['customization', 'faq', 'about'].forEach((s) => {
     const pane = document.getElementById('settings-pane-' + s);
     if (pane) pane.style.display = (s === id) ? '' : 'none';
   });
@@ -656,6 +656,51 @@ if (tabColorResetBtn) {
   tabColorResetBtn.addEventListener('click', () => {
     chrome.storage.local.remove('blattam-tab-color');
     applyTabCardColor('');
+  });
+}
+
+// «О программе»: версия (из манифеста) + «Проверить обновления»
+// (chrome.runtime.requestUpdateCheck → статус). Подмена копии на месте и
+// активация нового кода — задача Chrome (происходит при перезапуске браузера).
+const aboutVersion = document.getElementById('about-version');
+const checkUpdateBtn = document.getElementById('check-update-btn');
+const updateStatus = document.getElementById('update-status');
+
+if (aboutVersion) {
+  aboutVersion.textContent = chrome.runtime.getManifest().version;
+}
+
+if (checkUpdateBtn && updateStatus) {
+  const finishUpdateCheck = (res) => {
+    let text, cls = 'about-status';
+    if (res === 'update_available') {
+      text = 'Доступно обновление'; cls += ' available';
+    } else if (res === 'update_downloading') {
+      text = 'Скачивание обновления…';
+    } else if (res === 'update_ready') {
+      text = 'Обновление готово — перезапустите браузер';
+    } else if (res === 'no_update') {
+      text = 'Актуальная версия'; cls += ' ok';
+    } else {
+      text = 'Не удалось проверить обновления';
+    }
+    updateStatus.className = cls;
+    updateStatus.textContent = text;
+    checkUpdateBtn.disabled = false;
+  };
+  checkUpdateBtn.addEventListener('click', () => {
+    checkUpdateBtn.disabled = true;
+    updateStatus.className = 'about-status';
+    updateStatus.textContent = 'Проверка…';
+    try {
+      if (typeof chrome.runtime.requestUpdateCheck === 'function') {
+        chrome.runtime.requestUpdateCheck(finishUpdateCheck);
+      } else {
+        finishUpdateCheck(null);
+      }
+    } catch (e) {
+      finishUpdateCheck(null);
+    }
   });
 }
 
@@ -3740,6 +3785,69 @@ function btlOnUp(e) {
     btlCancelState(p); // вне целей — отмена
   }
 }
+// Размер-состояние клона рейка-драга: курсор над центральным списком или
+// левой рейкой — ПОЛНЫЙ размер карточки (при дропе там появляется именно
+// карточка); над правой рейкой или вне блоков — малый размер элемента рейки
+// (rect источника, снятый при arming). Клон pointer-events:none —
+// elementFromPoint его не видит. Пустой центр (нет .tab-card) — запасной
+// размер: центральная заглушка, иначе clientWidth списка / 5 (высота 80,
+// как у карточки) — детерминированно и стабильно.
+// FULL-состояние: клон выглядит как СОХРАНЁННАЯ карточка — фон
+// var(--tab-card-bg) (включая кастомный цвет из настроек), радиус, имя
+// сверху (шрифт/цвет .tab-name), фавикон снизу (img или буква — те же
+// узлы, что у карточки). CSS вида — класс .pd-clone.btl-clone-full.
+function btlCloneCardBody(t) {
+  const letter = faviconFallbackChar(t.url || '');
+  const name = document.createElement('div');
+  name.className = 'tab-name btl-clone-card-name';
+  name.textContent = String(t.title || '').trim() || letter;
+  const box = document.createDocumentFragment();
+  box.appendChild(name);
+  if (t.favIconUrl) {
+    const img = document.createElement('img');
+    img.className = 'tab-favicon';
+    img.src = t.favIconUrl;
+    img.alt = '';
+    img.draggable = false;
+    img.addEventListener('error', () => {
+      if (img.parentNode) img.replaceWith(makeFaviconFallback(t, letter));
+    });
+    box.appendChild(img);
+  } else {
+    box.appendChild(makeFaviconFallback(t, letter));
+  }
+  return box;
+}
+let btlCloneState = null; // 'full' | 'small' — последнее применённое состояние
+function btlCloneSizeAt(x, y) {
+  if (!btl || !btl.armed || !pdClone || !pdClone.isConnected) return;
+  const t = document.elementFromPoint(x, y);
+  const full = !!(t && t.closest && (t.closest('#center-pane') || t.closest('#rail-left')));
+  const state = full ? 'full' : 'small';
+  if (state === btlCloneState) return;
+  btlCloneState = state;
+  if (full) pdClone.replaceChildren(btlCloneCardBody(btl.t)); // вид сохранённой карточки
+  else if (btl.cloneNodes && btl.cloneNodes.length) pdClone.replaceChildren(...btl.cloneNodes); // исходный вид элемента рейки
+  let w, h;
+  if (full) {
+    let card = null;
+    for (const el of document.querySelectorAll('#tabs-list .tab-card'))
+      if (el.offsetWidth > 0) { card = el; break; }
+    if (card) { w = card.offsetWidth; h = card.offsetHeight; }
+    else if (dragGhostSlot && dragGhostSlot.isConnected && dragGhostSlot.offsetWidth > 0) {
+      w = dragGhostSlot.offsetWidth; h = dragGhostSlot.offsetHeight;
+    } else {
+      const tl = document.getElementById('tabs-list');
+      w = (tl && tl.clientWidth >= 10) ? Math.round(tl.clientWidth / 5) : 166; h = 80;
+    }
+  } else {
+    w = btl.homeRect.width; h = btl.homeRect.height;
+  }
+  pdClone.style.width = Math.round(w) + 'px';
+  pdClone.style.height = Math.round(h) + 'px';
+  pdClone.classList.toggle('btl-clone-full', full);
+}
+
 
 // Заглушка следует за курсором: рейка — midpoint-якорь (btSlotAnchor, то же
 // правило, что у HTML5-пути), при СМЕНЕ якоря — FLIP-проход соседей
@@ -3747,6 +3855,7 @@ function btlOnUp(e) {
 // центральный список — центральная заглушка за курсором; повсюду остальном —
 // заглушки стоят (cancel-кандидат при отпускании)
 function btlTrackAt(x, y) {
+  btlCloneSizeAt(x, y); // размер-состояние клона: полный над центром/левой рейкой
   const t = document.elementFromPoint(x, y);
   if (t && t.closest && t.closest('#browser-tabs-list')) {
     const anchor = btSlotAnchor(y);
@@ -3792,6 +3901,9 @@ function btlOnMove(e) {
     item.before(dragBrowserTabGhost);
     item.style.display = 'none';
     pdClone = pdCreateClone(item, btl.homeRect, e.clientX - btl.ox, e.clientY - btl.oy);
+    pdClone.style.transition = 'width 150ms ease, height 150ms ease'; // плавная смена размера full/small (transform — нет: 1:1 за курсором)
+    btlCloneState = null; // размер-состояние — заново (первое движение применит текущее)
+    btl.cloneNodes = Array.from(pdClone.childNodes); // SMALL: исходный контент элемента рейки
     btl.armed = true;
     btl.lastAnchor = null;
     // Вооружено: курсор grabbing на body и на элементе

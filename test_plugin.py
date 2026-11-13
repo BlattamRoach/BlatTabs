@@ -373,7 +373,13 @@ var chrome = {
       return Promise.resolve(response);
     },
     getURL: function(path) { return 'chrome-extension://mock-extension-id/' + path; },
-    getManifest: function() { return { version: '1.0.0' }; }
+    getManifest: function() { return { version: '1.0.0' }; },
+    requestUpdateCheck: function(cb) {
+      // результат управляется тестом: chrome.runtime.__mockUpdateCheck (string), по умолчанию 'no_update'
+      var result = (typeof chrome.runtime.__mockUpdateCheck === 'string') ? chrome.runtime.__mockUpdateCheck : 'no_update';
+      setTimeout(function() { if (cb) cb(result); }, 0);
+      return Promise.resolve(result);
+    }
   }
 };
 
@@ -11651,12 +11657,12 @@ class TestLeftRailSearchAndCleanup:
         assert d["width"] == 0, d
         assert d["srW"] == 0, d
 
-    def test_edit_tab_modal_vertical_bigger_tabname_tone(self):
-        # Модалка редактирования вкладки: прямоугольник выше ширины,
-        # ширина ≥ 300px, поля 14px, тон текста — как у .tab-name
-        # (--card-name), обе темы
+    def test_edit_tab_modal_settings_size_tabname_tone(self):
+        # Модалка редактирования вкладки: размер как у окна настроек
+        # (640×440 при 1280×900 — теперь шире, чем выше), поля 14px,
+        # тон текста — как у .tab-name (--card-name), обе темы
         for theme in ("light", "dark"):
-            self.page.set_viewport_size({"width": 520, "height": 900})
+            self.page.set_viewport_size({"width": 1280, "height": 900})
             load_view(self.page, tabs=self.TABS, theme=theme)
             self._inject_real_styles()
             self.page.evaluate("document.querySelector('.tab-card .tab-edit').click()")
@@ -11676,8 +11682,9 @@ class TestLeftRailSearchAndCleanup:
               });
             })()"""))
             assert d["open"], (theme, d)
-            assert d["w"] >= 300 and d["w"] <= 321, (theme, d)
-            assert d["h"] > d["w"], (theme, d)
+            assert abs(d["w"] - 640) <= 1, (theme, d)
+            assert d["h"] >= 440 - 1, (theme, d)
+            assert d["w"] > d["h"], (theme, d)
             assert d["font"] == "14px", (theme, d)
             assert d["inputColor"] == d["nameColor"], (theme, d)
             self.page.evaluate("document.getElementById('edit-cancel').click()")
@@ -11716,6 +11723,158 @@ class TestLeftRailSearchAndCleanup:
                 assert d["inputColor"] == "rgb(23, 23, 23)", (theme, d)      # --text light
             self.page.evaluate("document.getElementById('modal-cancel').click()")
             self.page.wait_for_timeout(50)
+
+
+#  VIEW.HTML: МОДАЛКА РЕДАКТИРОВАНИЯ ВКЛАДКИ — РАЗМЕР КАК У ОКНА НАСТРОЕК
+class TestEditModalSettingsSize:
+    """Модалка редактирования вкладки (#edit-tab-modal) — размер как у окна
+    настроек (#settings-modal): box rule зеркалит его (640×440 при 1280×900,
+    width min(640px, calc(100vw - 24px)) — резп.). Модалка пространств
+    (общая .modal) не тронута; тон полей --card-name сохранён."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self._errors = []
+        page.on("pageerror", self._on_err)
+        page.set_viewport_size({"width": 1280, "height": 900})
+        yield
+        assert not self._errors, self._errors
+        page.remove_listener("pageerror", self._on_err)
+        page.set_viewport_size({"width": 1280, "height": 720})
+
+    def _on_err(self, err):
+        self._errors.append(str(err))
+
+    TABS = [
+        {"id": "t1", "name": "GitHub", "url": "https://github.com"},
+        {"id": "t2", "name": "Docs", "url": "https://docs.example.com",
+         "comment": "смотреть раздел API"},
+    ]
+
+    def _inject_real_styles(self):
+        theme = load_file("theme.css")
+        html = load_file("view.html")
+        style = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate(
+            "(styles) => { var st = document.createElement('style'); st.textContent = styles; document.head.appendChild(st); }",
+            [theme + "\n" + style])
+
+    def _measure(self, sel):
+        return json.loads(self.page.evaluate("""(sel) => {
+          const rect = document.querySelector(sel).getBoundingClientRect();
+          return JSON.stringify({w: rect.width, h: rect.height});
+        }""", [sel]))
+
+    def _open_settings_measure_close(self):
+        self.page.evaluate("document.getElementById('settings-btn').click()")
+        self.page.wait_for_timeout(80)
+        r = self._measure("#settings-modal .modal")
+        self.page.evaluate("document.getElementById('settings-close').click()")
+        self.page.wait_for_timeout(60)
+        return r
+
+    def _open_edit_measure_close(self):
+        self.page.evaluate("document.querySelector('.tab-card .tab-edit').click()")
+        self.page.wait_for_timeout(80)
+        r = self._measure("#edit-tab-modal .modal")
+        self.page.evaluate("document.getElementById('edit-cancel').click()")
+        self.page.wait_for_timeout(50)
+        return r
+
+    def test_edit_modal_rect_matches_settings_at_1280(self):
+        # .modal модалки редактирования == .modal модалки настроек (w и h, ±1px)
+        for theme in ("light", "dark"):
+            self.page.set_viewport_size({"width": 1280, "height": 900})
+            load_view(self.page, tabs=self.TABS, theme=theme)
+            self._inject_real_styles()
+            self.page.wait_for_timeout(120)
+            settings = self._open_settings_measure_close()
+            edit = self._open_edit_measure_close()
+            assert abs(settings["w"] - edit["w"]) <= 1, (theme, settings, edit)
+            assert abs(settings["h"] - edit["h"]) <= 1, (theme, settings, edit)
+            # Явный размер — как у настроек: 640×440
+            assert abs(edit["w"] - 640) <= 1, (theme, edit)
+            assert edit["h"] >= 440 - 1, (theme, edit)
+
+    def test_both_modals_equal_width_at_600px(self):
+        # Узкий вьюпорт (600px): обе — min(640px, 100vw-24) = 576px, равны
+        for theme in ("light", "dark"):
+            self.page.set_viewport_size({"width": 600, "height": 900})
+            load_view(self.page, tabs=self.TABS, theme=theme)
+            self._inject_real_styles()
+            self.page.wait_for_timeout(120)
+            settings = self._open_settings_measure_close()
+            edit = self._open_edit_measure_close()
+            assert abs(settings["w"] - edit["w"]) <= 1, (theme, settings, edit)
+            assert abs(edit["w"] - 576) <= 1, (theme, edit)
+
+    def test_edit_modal_content_intact(self):
+        # Открытая модалка: поля имя/адрес/комментарий + «Сохранить»/«Отмена»
+        # на месте и видимы; поля во всю внутреннюю ширину (box − padding)
+        load_view(self.page, tabs=self.TABS)
+        self._inject_real_styles()
+        self.page.wait_for_timeout(120)
+        self.page.evaluate("document.querySelector('.tab-card .tab-edit').click()")
+        self.page.wait_for_timeout(80)
+        d = json.loads(self.page.evaluate("""(() => {
+          const box = document.querySelector('#edit-tab-modal .modal');
+          const br = box.getBoundingClientRect();
+          const pick = (id) => {
+            const el = document.getElementById(id);
+            const cs = getComputedStyle(el);
+            const r = el.getBoundingClientRect();
+            return { exists: !!el,
+              visible: cs.display !== 'none' && cs.visibility !== 'hidden' && r.width > 0,
+              w: r.width };
+          };
+          return JSON.stringify({
+            open: document.getElementById('edit-tab-modal').classList.contains('open'),
+            name: pick('edit-name-input'), url: pick('edit-url-input'),
+            comment: pick('edit-comment-input'),
+            save: !!document.getElementById('edit-confirm'),
+            cancel: !!document.getElementById('edit-cancel'),
+            boxW: br.width
+          });
+        })()"""))
+        assert d["open"], d
+        for f in ("name", "url", "comment"):
+            assert d[f]["exists"] and d[f]["visible"], (f, d)
+            assert abs(d[f]["w"] - (d["boxW"] - 40)) <= 2, (f, d)
+        assert d["save"] and d["cancel"], d
+
+    def test_save_flow_updates_storage(self):
+        # Сохранение из модалки обновляет blattam-tabs (регрессия флоу)
+        load_view(self.page, tabs=self.TABS)
+        self.page.wait_for_timeout(60)
+        self.page.evaluate("document.querySelector('.tab-card .tab-edit').click()")
+        self.page.wait_for_timeout(60)
+        self.page.fill("#edit-name-input", "GitHub — репозиторий")
+        self.page.fill("#edit-comment-input", "примечание к вкладке")
+        self.page.click("#edit-confirm")
+        self.page.wait_for_timeout(150)
+        tabs = read_storage_raw(self.page, "blattam-tabs")
+        t1 = next(t for t in tabs if t["id"] == "t1")
+        assert t1["name"] == "GitHub — репозиторий"
+        assert t1["comment"] == "примечание к вкладке"
+        assert t1["url"] == "https://github.com"  # пустое поле — старое значение
+        assert self.page.evaluate(
+            "!document.getElementById('edit-tab-modal').classList.contains('open')")
+
+    def test_modal_open_close_no_errors(self):
+        # Открытие/закрытие обеих модалок — без pageerror (сборщик в фикстуре)
+        load_view(self.page, tabs=self.TABS)
+        self._inject_real_styles()
+        self.page.wait_for_timeout(120)
+        self.page.evaluate("document.getElementById('settings-btn').click()")
+        self.page.wait_for_timeout(60)
+        self.page.evaluate("document.getElementById('settings-close').click()")
+        self.page.wait_for_timeout(40)
+        self.page.evaluate("document.querySelector('.tab-card .tab-edit').click()")
+        self.page.wait_for_timeout(60)
+        self.page.evaluate("document.getElementById('edit-cancel').click()")
+        self.page.wait_for_timeout(40)
+        assert self._errors == []
 
 
 #  VIEW.JS: RAIL MIRROR — правая рейка: живое зеркало открытых вкладок браузера
@@ -12433,6 +12592,103 @@ class TestSettingsModal:
         assert not self._open_state()
 
 
+# ==========================================
+#  VIEW.JS: О ПРОГРАММЕ (версия + автообновление)
+# ==========================================
+
+class TestAboutSection:
+    """«О программе» в настройках: версия (из манифеста) + «Проверить обновления»
+    (chrome.runtime.requestUpdateCheck → статус)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        yield
+
+    def _open(self):
+        self.page.locator("#settings-btn").click()
+
+    def _open_about(self):
+        self._open()
+        self.page.locator("#settings-modal .settings-nav-item[data-section='about']").click()
+
+    def _status(self):
+        return self.page.evaluate(
+            "(() => { const el = document.getElementById('update-status'); "
+            "return { text: el.textContent.trim(), cls: el.className }; })()")
+
+    def test_about_nav_item_present(self):
+        load_view(self.page)
+        self._open()
+        assert self.page.evaluate(
+            'document.querySelector(\'#settings-modal .settings-nav-item[data-section="about"]\').textContent.trim()') == "О программе"
+
+    def test_about_version_shown_from_manifest(self):
+        load_view(self.page)
+        self._open_about()
+        # mock-манифест: version '1.0.0'
+        assert self.page.evaluate("document.getElementById('about-version').textContent") == "1.0.0"
+        assert self.page.evaluate("document.getElementById('check-update-btn').textContent.trim()") == "Проверить обновления"
+
+    def test_about_pane_hidden_by_default(self):
+        for theme in (None, "dark"):
+            load_view(self.page, theme=theme)
+            self._open()
+            assert self.page.evaluate("document.getElementById('settings-pane-about').style.display") == "none"
+            assert self.page.evaluate("document.getElementById('settings-pane-customization').style.display") != "none"
+
+    def test_about_pane_shown_on_nav(self):
+        load_view(self.page)
+        self._open_about()
+        assert self.page.evaluate("document.getElementById('settings-pane-about').style.display") != "none"
+        assert self.page.evaluate("document.getElementById('settings-pane-faq').style.display") == "none"
+
+    def test_check_update_no_update(self):
+        load_view(self.page)
+        self._open_about()
+        self.page.evaluate("chrome.runtime.__mockUpdateCheck = 'no_update'")
+        self.page.locator("#check-update-btn").click()
+        self.page.wait_for_timeout(100)
+        s = self._status()
+        assert s["text"] == "Актуальная версия"
+        assert "ok" in s["cls"]
+
+    def test_check_update_available(self):
+        load_view(self.page)
+        self._open_about()
+        self.page.evaluate("chrome.runtime.__mockUpdateCheck = 'update_available'")
+        self.page.locator("#check-update-btn").click()
+        self.page.wait_for_timeout(100)
+        s = self._status()
+        assert s["text"] == "Доступно обновление"
+        assert "available" in s["cls"]
+
+    def test_check_update_downloading(self):
+        load_view(self.page)
+        self._open_about()
+        self.page.evaluate("chrome.runtime.__mockUpdateCheck = 'update_downloading'")
+        self.page.locator("#check-update-btn").click()
+        self.page.wait_for_timeout(100)
+        assert self._status()["text"] == "Скачивание обновления…"
+
+    def test_check_update_ready(self):
+        load_view(self.page)
+        self._open_about()
+        self.page.evaluate("chrome.runtime.__mockUpdateCheck = 'update_ready'")
+        self.page.locator("#check-update-btn").click()
+        self.page.wait_for_timeout(100)
+        assert "перезапустите" in self._status()["text"].lower()
+
+    def test_button_reenables_after_check(self):
+        load_view(self.page)
+        self._open_about()
+        assert self.page.evaluate("document.getElementById('check-update-btn').disabled") is False
+        self.page.evaluate("chrome.runtime.__mockUpdateCheck = 'no_update'")
+        self.page.locator("#check-update-btn").click()
+        self.page.wait_for_timeout(100)
+        assert self.page.evaluate("document.getElementById('check-update-btn').disabled") is False
+
+
 def _tiny_png_bytes():
     """1x1 RGB PNG (красный пиксель) — реальный файл для FileReader-тестов."""
     def chunk(typ, data):
@@ -12480,7 +12736,7 @@ class TestSettingsBackground:
             titles = json.loads(self.page.evaluate(
                 "JSON.stringify([...document.querySelectorAll('#settings-modal .settings-section-title')]"
                 ".map(el => el.textContent.trim()))"))
-            assert titles == ["Фон", "Цвет вкладок", "Частые вопросы"]
+            assert titles == ["Фон", "Цвет вкладок", "Частые вопросы", "О программе"]
             assert self.page.evaluate("document.getElementById('bg-file-btn').textContent.trim()") == "Выбрать картинку"
             assert self.page.evaluate("document.getElementById('bg-clear-btn').textContent.trim()") == "Убрать"
             # скрытый input-файла рядом с #import-input
@@ -12647,7 +12903,7 @@ class TestSettingsTabColor:
             titles = json.loads(self.page.evaluate(
                 "JSON.stringify([...document.querySelectorAll('#settings-modal .settings-section-title')]"
                 ".map(el => el.textContent.trim()))"))
-            assert titles == ["Фон", "Цвет вкладок", "Частые вопросы"]
+            assert titles == ["Фон", "Цвет вкладок", "Частые вопросы", "О программе"]
             assert self.page.evaluate("document.getElementById('tab-color-input').type") == "color"
             assert self.page.evaluate(
                 "document.getElementById('tab-color-reset').textContent.trim()") == "Сбросить"
@@ -14723,3 +14979,544 @@ class TestDragBandHeaderRowBottom:
         lo = self._leftovers()
         assert lo["slots"] == 0 and lo["keepers"] == 0 and lo["clones"] == 0 \
             and lo["srcDisplay"] == "", lo
+
+
+class TestRailDragCloneSize:
+    """Rail→center pointer drag: the lift-clone (.pd-clone) that follows the
+    cursor SWITCHES SIZE at the block boundaries — FULL saved-tab-card size
+    while the cursor is over the center block or the left rail, SMALL
+    rail-item size over the right rail (or outside the blocks). Real
+    Playwright mouse (pointer path). The synthetic HTML5 path keeps working
+    (no clone there). Fallback when the center has no saved cards: list
+    clientWidth/5 × 80."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        page.set_viewport_size({"width": 1280, "height": 900})
+        load_view(page, tabs=self.TABS, spaces=self.SPACES,
+                  groups=self.GROUPS, browser_tabs=self.BT)
+        page.wait_for_timeout(80)
+        self.errors = []
+        page.on("pageerror", lambda e: self.errors.append(str(e)))
+
+    BT = [
+        {"id": "bt1", "title": "Wiki", "url": "https://wiki.example",
+         "favIconUrl": "https://fav.example/1.ico", "windowId": 1, "index": 0},
+        {"id": "bt2", "title": "Mail", "url": "https://mail.example",
+         "favIconUrl": "https://fav.example/2.ico", "windowId": 1, "index": 1},
+    ]
+    SPACES = [{"id": "sp1", "name": "Alpha"}]
+    TABS = [{"name": "Saved", "url": "https://saved.example", "spaceId": "sp1"}]
+    GROUPS = []
+
+    # === helpers ===
+
+    def _box(self, sel):
+        return self.page.evaluate("""(sel) => {
+            const el = document.querySelector(sel);
+            if (!el) return null;
+            const r = el.getBoundingClientRect();
+            return {left: r.left, top: r.top, width: r.width, height: r.height,
+                    x: r.left + r.width / 2, y: r.top + r.height / 2};
+        }""", sel)
+
+    def _arm_drag(self, item_id, to_x, to_y, steps=10):
+        """press the rail item, move (armed) to (to_x, to_y); button stays down"""
+        pg = self.page
+        box = self._box('#browser-tabs-list .bt-tab[data-id="%s"]' % item_id)
+        pg.mouse.move(box["x"], box["y"])
+        pg.mouse.down()
+        for i in range(1, steps + 1):
+            pg.mouse.move(box["x"] + (to_x - box["x"]) * i / steps,
+                          box["y"] + (to_y - box["y"]) * i / steps)
+
+    def _clone(self):
+        return self.page.evaluate("""() => {
+            const c = document.querySelector('.pd-clone');
+            if (!c) return null;
+            return {w: c.offsetWidth, h: c.offsetHeight,
+                    full: c.classList.contains('btl-clone-full'),
+                    transition: c.style.transition,
+                    rect: (() => { const r = c.getBoundingClientRect();
+                                   return {left: r.left, top: r.top}; })()};
+        }""")
+
+    def _card_size(self):
+        return self.page.evaluate("""() => {
+            const c = document.querySelector('#tabs-list .tab-card');
+            return {w: c.offsetWidth, h: c.offsetHeight};
+        }""")
+
+    def _release(self, x, y):
+        self.page.mouse.move(x, y)
+        self.page.mouse.up()
+
+    # === tests ===
+
+    def test_clone_small_over_rail(self):
+        # over the right rail — clone = source .bt-tab size (small), no class
+        item = self._box('#browser-tabs-list .bt-tab[data-id="bt1"]')
+        self._arm_drag("bt1", item["x"], item["y"] + 20)
+        self.page.wait_for_timeout(250)  # > 150ms size transition
+        c = self._clone()
+        assert c is not None
+        assert abs(c["w"] - item["width"]) <= 2, (c, item)
+        assert abs(c["h"] - item["height"]) <= 2, (c, item)
+        assert c["full"] is False
+        self._release(item["x"], item["y"])
+
+    def test_clone_full_over_center(self):
+        # cursor over the center block — clone = .tab-card size (full) + class
+        cbox = self._box('#tabs-list .tab-card')
+        self._arm_drag("bt1", cbox["x"], cbox["y"], steps=12)
+        self.page.wait_for_timeout(250)
+        card = self._card_size()
+        c = self._clone()
+        assert c["full"] is True, c
+        assert abs(c["w"] - card["w"]) <= 2, (c, card)
+        assert abs(c["h"] - card["h"]) <= 2, (c, card)
+        self._release(cbox["x"], cbox["y"])
+
+    def test_clone_full_over_left_rail(self):
+        # cursor over the left rail — full card size + class
+        lr = self._box('#rail-left')
+        cbox = self._box('#tabs-list .tab-card')
+        card = self._card_size()
+        self._arm_drag("bt1", lr["left"] + 5, lr["top"] + 5, steps=14)
+        self.page.wait_for_timeout(250)
+        c = self._clone()
+        assert c["full"] is True, c
+        assert abs(c["w"] - card["w"]) <= 2, (c, card)
+        assert abs(c["h"] - card["h"]) <= 2, (c, card)
+        self._release(cbox["x"], cbox["y"])
+
+    def test_clone_small_again_over_rail(self):
+        # rail → center (full) → back over the rail (small, class removed)
+        item = self._box('#browser-tabs-list .bt-tab[data-id="bt1"]')
+        cbox = self._box('#tabs-list .tab-card')
+        self._arm_drag("bt1", cbox["x"], cbox["y"], steps=12)
+        self.page.wait_for_timeout(250)
+        assert self._clone()["full"] is True
+        rail2 = self._box('#browser-tabs-list .bt-tab[data-id="bt2"]')
+        self.page.mouse.move(rail2["x"], rail2["y"])
+        self.page.wait_for_timeout(250)
+        c = self._clone()
+        assert c["full"] is False, c
+        assert abs(c["w"] - item["width"]) <= 2, (c, item)
+        assert abs(c["h"] - item["height"]) <= 2, (c, item)
+        self.page.mouse.up()
+
+    def test_full_to_left_stays_full_no_small_blip(self):
+        # center → left rail: state stays full the whole way (no small blip)
+        self.page.evaluate("""() => {
+            window.__sizeSeq = [];
+            document.addEventListener('pointermove', () => {
+                const c = document.querySelector('.pd-clone');
+                if (c) window.__sizeSeq.push(c.classList.contains('btl-clone-full') ? 1 : 0);
+            }, true);
+        }""")
+        cbox = self._box('#tabs-list .tab-card')
+        self._arm_drag("bt1", cbox["x"], cbox["y"], steps=12)
+        lr = self._box('#rail-left')
+        for i in range(1, 13):
+            self.page.mouse.move(cbox["x"] + (lr["left"] + 5 - cbox["x"]) * i / 12,
+                                  cbox["y"] + (lr["top"] + 5 - cbox["y"]) * i / 12)
+        self.page.wait_for_timeout(250)
+        seq = self.page.evaluate("window.__sizeSeq")
+        assert 1 in seq, seq  # reached full over the center
+        assert all(v == 1 for v in seq[seq.index(1):]), seq  # never back to small
+        assert self._clone()["full"] is True
+        self.page.mouse.up()
+
+    def test_empty_center_fallback_full(self):
+        # no saved tabs in the center — full via the fallback:
+        # list clientWidth/5 × 80 (deterministic)
+        load_view(self.page, tabs=[], spaces=self.SPACES, browser_tabs=self.BT)
+        self.page.wait_for_timeout(80)
+        cp = self._box('#center-pane')
+        self._arm_drag("bt1", cp["x"], cp["y"], steps=12)
+        self.page.wait_for_timeout(250)
+        exp = self.page.evaluate("""() => {
+            const tl = document.getElementById('tabs-list');
+            const w = (tl && tl.clientWidth >= 10) ? Math.round(tl.clientWidth / 5) : 166;
+            return {w: w, h: 80};
+        }""")
+        c = self._clone()
+        assert c["full"] is True, c
+        assert c["w"] == exp["w"] and c["h"] == exp["h"], (c, exp)
+        assert c["w"] > 0 and c["h"] > 0
+        self.page.mouse.up()
+
+    def test_central_ghost_attached_while_full(self):
+        # regression: warm central ghost still attached while full over center
+        cbox = self._box('#tabs-list .tab-card')
+        self._arm_drag("bt1", cbox["x"], cbox["y"], steps=12)
+        self.page.wait_for_timeout(250)
+        assert self._clone()["full"] is True
+        assert self.page.evaluate(
+            "document.querySelectorAll('#tabs-list .tab-ghost-slot').length") == 1
+        self._release(cbox["x"], cbox["y"])
+
+    def test_drop_at_center_commits_after_resize_states(self):
+        # rail → center (small → full) → release: saved tab created
+        cbox = self._box('#tabs-list .tab-card')
+        self._arm_drag("bt1", cbox["x"], cbox["y"], steps=12)
+        self.page.wait_for_timeout(250)
+        assert self._clone()["full"] is True
+        cbox2 = self._box('#tabs-list .tab-card')  # re-fetch after ghost insert
+        self._release(cbox2["x"], cbox2["y"])
+        self.page.wait_for_timeout(100)
+        tabs = read_local(self.page, 'blattam-tabs')
+        assert len(tabs) == 2, tabs
+        assert [t for t in tabs if t["url"] == "https://wiki.example"], tabs
+
+    def test_release_cancel_no_leftovers(self):
+        # rail → center (full) → release over the left rail = cancel:
+        # no clone, no ghosts, storage untouched
+        lr = self._box('#rail-left')
+        cbox = self._box('#tabs-list .tab-card')
+        self._arm_drag("bt1", cbox["x"], cbox["y"], steps=12)
+        self.page.wait_for_timeout(250)
+        assert self._clone()["full"] is True
+        self._release(lr["left"] + 5, lr["top"] + 5)
+        self.page.wait_for_timeout(400)  # settle finished
+        assert self.page.evaluate("!!document.querySelector('.pd-clone')") is False
+        assert self.page.evaluate(
+            "document.querySelectorAll('#tabs-list .tab-ghost-slot').length") == 0
+        assert self.page.evaluate(
+            "!!document.querySelector('#browser-tabs-list .bt-ghost-slot')") is False
+        assert read_local(self.page, 'blattam-tabs') == self.TABS
+        assert self.errors == [], self.errors
+
+    def test_both_themes_no_pageerror(self):
+        for theme in ("light", "dark"):
+            load_view(self.page, tabs=self.TABS, spaces=self.SPACES,
+                      groups=self.GROUPS, browser_tabs=self.BT, theme=theme)
+            self.page.wait_for_timeout(80)
+            cbox = self._box('#tabs-list .tab-card')
+            self._arm_drag("bt1", cbox["x"], cbox["y"], steps=12)
+            self.page.wait_for_timeout(200)
+            assert self._clone()["full"] is True
+            rail2 = self._box('#browser-tabs-list .bt-tab[data-id="bt2"]')
+            self.page.mouse.move(rail2["x"], rail2["y"])
+            self.page.wait_for_timeout(200)
+            assert self._clone()["full"] is False
+            self.page.mouse.up()
+            self.page.wait_for_timeout(300)
+        assert self.errors == [], self.errors
+
+    def test_html5_path_drop_still_works_without_clone(self):
+        # synthetic HTML5 chain (harness path) — drop into the center commits;
+        # no .pd-clone exists on this path
+        self.page.evaluate("""() => {
+            const item = document.querySelector('#browser-tabs-list .bt-tab[data-id="bt1"]');
+            const card = document.querySelector('#tabs-list .tab-card');
+            const dt = new DataTransfer();
+            item.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true, cancelable: true}));
+            card.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true}));
+            card.dispatchEvent(new DragEvent('drop', {dataTransfer: dt, bubbles: true, cancelable: true}));
+            item.dispatchEvent(new DragEvent('dragend', {dataTransfer: dt, bubbles: true, cancelable: true}));
+        }""")
+        self.page.wait_for_timeout(100)
+        tabs = read_local(self.page, 'blattam-tabs')
+        assert len(tabs) == 2, tabs
+        assert self.page.evaluate("!!document.querySelector('.pd-clone')") is False
+        assert self.errors == [], self.errors
+
+    def test_clone_tracks_cursor_1to1_and_size_transition(self):
+        # width/height transition set (smooth switch), no transform transition
+        # (1:1 cursor tracking); clone top-left stays under the grab point
+        item = self._box('#browser-tabs-list .bt-tab[data-id="bt1"]')
+        grab = {"x": item["x"] - item["left"], "y": item["y"] - item["top"]}
+        cbox = self._box('#tabs-list .tab-card')
+        self._arm_drag("bt1", cbox["x"], cbox["y"], steps=12)
+        self.page.wait_for_timeout(200)
+        c = self._clone()
+        assert "width" in c["transition"] and "height" in c["transition"], c
+        assert "transform" not in c["transition"], c
+        # 1:1: the translate in the transform follows the cursor exactly
+        # (lift-scale grows the box around its center — accounted for in the
+        # rendered-rect check below)
+        m = self.page.evaluate("""() => {
+            const cl = document.querySelector('.pd-clone');
+            const mm = cl.style.transform.match(/translate3d\\(([-\\d.e]+)px,\\s*([-\\d.e]+)px/);
+            return mm ? {x: parseFloat(mm[1]), y: parseFloat(mm[2])} : null;
+        }""")
+        assert m is not None
+        assert abs(m["x"] - (cbox["x"] - grab["x"])) <= 2, (m, grab, cbox, item)
+        assert abs(m["y"] - (cbox["y"] - grab["y"])) <= 2, (m, grab, cbox, item)
+        scale = self.page.evaluate("(window.blatamFx && window.blatamFx.liftScale) || 1.02")
+        assert abs(c["rect"]["left"] - (m["x"] - (scale - 1) * c["w"] / 2)) <= 2, (c, m, scale)
+        assert abs(c["rect"]["top"] - (m["y"] - (scale - 1) * c["h"] / 2)) <= 2, (c, m, scale)
+        self.page.mouse.up()
+
+class TestRailDragCloneCardLook:
+    """Rail→center pointer drag: in the FULL state (cursor over the center
+    block or the left rail) the lift-clone (.pd-clone) adopts the COMPLETE
+    look of a saved tab card — card background var(--tab-card-bg) (including
+    the custom tab color from the settings), border radius, the name on top
+    with the .tab-name tone, the favicon below (img or letter — the same
+    nodes the card uses). Back over the right rail — the original rail-item
+    look. Content rebuilds only on the state change. Real Playwright mouse
+    (pointer path); the real CSS (theme.css + view.html <style>) is injected
+    so computed styles are real."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        page.set_viewport_size({"width": 1280, "height": 900})
+        load_view(page, tabs=self.TABS, spaces=self.SPACES,
+                  groups=self.GROUPS, browser_tabs=self.BT)
+        page.wait_for_timeout(80)
+        self._inject_real_styles()
+        page.wait_for_timeout(100)
+        self.errors = []
+        page.on("pageerror", lambda e: self.errors.append(str(e)))
+
+    BT = [
+        {"id": "bt1", "title": "Wiki", "url": "https://wiki.example",
+         "favIconUrl": "https://fav.example/1.ico", "windowId": 1, "index": 0},
+        {"id": "bt2", "title": "Mail", "url": "https://mail.example",
+         "favIconUrl": "", "windowId": 1, "index": 1},
+        {"id": "bt3", "title": "Docs", "url": "https://docs.example",
+         "favIconUrl": "https://fav.example/3.ico", "windowId": 1, "index": 2},
+    ]
+    SPACES = [{"id": "sp1", "name": "Alpha"}]
+    TABS = [{"name": "Saved", "url": "https://saved.example", "spaceId": "sp1"}]
+    GROUPS = []
+
+    # === helpers ===
+
+    def _inject_real_styles(self):
+        # Харнес ставит только body.innerHTML — подгружаем настоящие стили
+        # (theme.css + <style> view.html), чтобы computed-значения были реальными
+        theme = load_file("theme.css")
+        html = load_file("view.html")
+        style = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate(
+            "(styles) => { var st = document.createElement('style'); st.textContent = styles; document.head.appendChild(st); }",
+            [theme + "\n" + style])
+
+    def _box(self, sel):
+        return self.page.evaluate("""(sel) => {
+            const el = document.querySelector(sel);
+            if (!el) return null;
+            const r = el.getBoundingClientRect();
+            return {left: r.left, top: r.top, width: r.width, height: r.height,
+                    x: r.left + r.width / 2, y: r.top + r.height / 2};
+        }""", sel)
+
+    def _arm_drag(self, item_id, to_x, to_y, steps=10):
+        """press the rail item, move (armed) to (to_x, to_y); button stays down"""
+        pg = self.page
+        box = self._box('#browser-tabs-list .bt-tab[data-id="%s"]' % item_id)
+        pg.mouse.move(box["x"], box["y"])
+        pg.mouse.down()
+        for i in range(1, steps + 1):
+            pg.mouse.move(box["x"] + (to_x - box["x"]) * i / steps,
+                          box["y"] + (to_y - box["y"]) * i / steps)
+
+    def _drag_to_center(self, item_id="bt1"):
+        card = self._card_ref()
+        self._arm_drag(item_id, card["x"], card["y"], steps=12)
+
+    def _clone(self):
+        return self.page.evaluate("""() => {
+            const c = document.querySelector('.pd-clone');
+            if (!c) return null;
+            const cs = getComputedStyle(c);
+            const name = c.querySelector('.btl-clone-card-name');
+            const fav = c.querySelector('.tab-favicon') || c.querySelector('.tab-favicon-fallback');
+            const nr = name ? name.getBoundingClientRect() : null;
+            const fr = fav ? fav.getBoundingClientRect() : null;
+            return {
+                w: c.offsetWidth, h: c.offsetHeight,
+                full: c.classList.contains('btl-clone-full'),
+                bg: cs.backgroundColor, radius: cs.borderRadius,
+                name: name ? {text: name.textContent,
+                              color: getComputedStyle(name).color,
+                              top: nr.top} : null,
+                fav: fav ? {kind: fav.tagName.toLowerCase(), top: fr.top} : null,
+                title: (c.querySelector('.bt-title') || {}).textContent || null,
+                names: c.querySelectorAll('.btl-clone-card-name').length,
+                favs: c.querySelectorAll('.tab-favicon, .tab-favicon-fallback').length,
+                titles: c.querySelectorAll('.bt-title').length};
+        }""")
+
+    def _card_ref(self):
+        return self.page.evaluate("""() => {
+            const c = document.querySelector('#tabs-list .tab-card');
+            if (!c) return null;
+            const cs = getComputedStyle(c);
+            const name = c.querySelector('.tab-name');
+            const fav = c.querySelector('.tab-favicon') || c.querySelector('.tab-favicon-fallback');
+            const r = c.getBoundingClientRect();
+            return {bg: cs.backgroundColor, radius: cs.borderRadius,
+                    w: c.offsetWidth, h: c.offsetHeight,
+                    nameColor: name ? getComputedStyle(name).color : null,
+                    favKind: fav ? fav.tagName.toLowerCase() : null,
+                    x: r.left + r.width / 2, y: r.top + r.height / 2};
+        }""")
+    # === tests ===
+
+    def test_full_bg_and_radius_match_card_both_themes(self):
+        # (a)+(b): FULL clone background == a real .tab-card background and
+        # border-radius == card radius — both themes (var(--tab-card-bg) token)
+        for theme in ("light", "dark"):
+            load_view(self.page, tabs=self.TABS, spaces=self.SPACES,
+                      groups=self.GROUPS, browser_tabs=self.BT, theme=theme)
+            self.page.wait_for_timeout(80)
+            self._inject_real_styles()
+            self.page.wait_for_timeout(100)
+            card = self._card_ref()
+            self._drag_to_center()
+            self.page.wait_for_timeout(250)  # > 150ms size transition
+            c = self._clone()
+            assert c["full"] is True, c
+            assert c["bg"] == card["bg"], (theme, c, card)
+            assert c["radius"] == card["radius"], (theme, c, card)
+            self.page.mouse.up()
+            self.page.wait_for_timeout(300)
+        assert self.errors == [], self.errors
+
+    def test_full_bg_custom_tab_color(self):
+        # (a) custom card color (blattam-tab-color → inline --tab-card-bg on
+        # documentElement): the FULL clone picks it up — bg == card bg
+        load_view(self.page, tabs=self.TABS, spaces=self.SPACES,
+                  groups=self.GROUPS, browser_tabs=self.BT,
+                  tab_color="#ff8000")
+        self.page.wait_for_timeout(80)
+        self._inject_real_styles()
+        self.page.wait_for_timeout(100)
+        card = self._card_ref()
+        assert card["bg"] == "rgb(255, 128, 0)", card
+        self._drag_to_center()
+        self.page.wait_for_timeout(250)
+        c = self._clone()
+        assert c["full"] is True, c
+        assert c["bg"] == card["bg"] == "rgb(255, 128, 0)", c
+        self.page.mouse.up()
+        self.page.wait_for_timeout(300)
+        assert self.errors == [], self.errors
+
+    def test_full_name_text_and_tone(self):
+        # (c): name element present, text == the rail tab title, color ==
+        # the real .tab-name color (var(--card-name) tone)
+        card = self._card_ref()
+        self._drag_to_center()
+        self.page.wait_for_timeout(250)
+        c = self._clone()
+        assert c["full"] is True and c["name"] is not None, c
+        assert c["name"]["text"] == "Wiki", c
+        assert c["name"]["color"] == card["nameColor"], (c, card)
+        self.page.mouse.up()
+        self.page.wait_for_timeout(300)
+        assert self.errors == [], self.errors
+
+    def test_full_favicon_node_same_kind_as_card(self):
+        # (d): favicon node present (img or letter) — the same KIND the real
+        # card uses (img errors out to the letter fallback in the harness)
+        card = self._card_ref()
+        self._drag_to_center()
+        self.page.wait_for_timeout(400)  # img error → letter fallback
+        c = self._clone()
+        assert c["fav"] is not None, c
+        assert c["fav"]["kind"] in ("img", "span"), c
+        assert c["fav"]["kind"] == card["favKind"], (c, card)
+        self.page.mouse.up()
+        self.page.wait_for_timeout(300)
+        assert self.errors == [], self.errors
+
+    def test_full_name_above_favicon(self):
+        # (e): card layout — the name is ABOVE the favicon
+        self._drag_to_center()
+        self.page.wait_for_timeout(250)
+        c = self._clone()
+        assert c["name"] is not None and c["fav"] is not None, c
+        assert c["name"]["top"] < c["fav"]["top"], c
+        self.page.mouse.up()
+        self.page.wait_for_timeout(300)
+        assert self.errors == [], self.errors
+
+    def test_small_keeps_rail_item_look(self):
+        # (f): back over the right rail — the ORIGINAL rail-item content
+        # (.bt-title) and NOT the card background
+        card = self._card_ref()
+        self._drag_to_center()
+        self.page.wait_for_timeout(250)
+        assert self._clone()["full"] is True
+        rail2 = self._box('#browser-tabs-list .bt-tab[data-id="bt2"]')
+        self.page.mouse.move(rail2["x"], rail2["y"])
+        self.page.wait_for_timeout(250)
+        c = self._clone()
+        assert c["full"] is False, c
+        assert c["title"] == "Wiki", c
+        assert c["name"] is None and c["favs"] == 0, c
+        assert c["bg"] != card["bg"], (c, card)
+        self.page.mouse.up()
+        self.page.wait_for_timeout(300)
+        assert self.errors == [], self.errors
+
+    def test_flip_full_small_no_leftovers(self):
+        # (g): FULL → SMALL → FULL → SMALL — content rebuilds both ways,
+        # no leftovers / no duplication
+        self._drag_to_center()
+        self.page.wait_for_timeout(200)
+        c = self._clone()
+        assert c["full"] and c["names"] == 1 and c["favs"] == 1 and c["titles"] == 0, c
+        rail2 = self._box('#browser-tabs-list .bt-tab[data-id="bt2"]')
+        self.page.mouse.move(rail2["x"], rail2["y"])
+        self.page.wait_for_timeout(200)
+        c = self._clone()
+        assert (not c["full"]) and c["names"] == 0 and c["favs"] == 0 and c["titles"] == 1, c
+        assert c["title"] == "Wiki", c
+        card = self._card_ref()
+        self.page.mouse.move(card["x"], card["y"])
+        self.page.wait_for_timeout(200)
+        c = self._clone()
+        assert c["full"] and c["names"] == 1 and c["favs"] == 1 and c["titles"] == 0, c
+        assert c["name"]["text"] == "Wiki", c
+        rail3 = self._box('#browser-tabs-list .bt-tab[data-id="bt3"]')
+        self.page.mouse.move(rail3["x"], rail3["y"])
+        self.page.wait_for_timeout(200)
+        c = self._clone()
+        assert (not c["full"]) and c["names"] == 0 and c["titles"] == 1, c
+        self.page.mouse.up()
+        self.page.wait_for_timeout(300)
+        assert self.errors == [], self.errors
+
+    def test_card_look_does_not_change_full_size(self):
+        # the card look must not change the applied full width/height
+        card = self._card_ref()
+        self._drag_to_center()
+        self.page.wait_for_timeout(250)
+        c = self._clone()
+        assert c["full"] is True, c
+        assert abs(c["w"] - card["w"]) <= 2, (c, card)
+        assert abs(c["h"] - card["h"]) <= 2, (c, card)
+        self.page.mouse.up()
+        self.page.wait_for_timeout(300)
+        assert self.errors == [], self.errors
+
+    def test_both_themes_flip_no_pageerror(self):
+        # (h): full/small flip in both themes, no pageerror
+        for theme in ("light", "dark"):
+            load_view(self.page, tabs=self.TABS, spaces=self.SPACES,
+                      groups=self.GROUPS, browser_tabs=self.BT, theme=theme)
+            self.page.wait_for_timeout(80)
+            self._inject_real_styles()
+            self.page.wait_for_timeout(100)
+            card = self._card_ref()
+            self._arm_drag("bt1", card["x"], card["y"], steps=12)
+            self.page.wait_for_timeout(200)
+            c = self._clone()
+            assert c["full"] is True and c["name"] is not None, (theme, c)
+            assert c["bg"] == card["bg"], (theme, c, card)
+            rail2 = self._box('#browser-tabs-list .bt-tab[data-id="bt2"]')
+            self.page.mouse.move(rail2["x"], rail2["y"])
+            self.page.wait_for_timeout(200)
+            assert self._clone()["full"] is False
+            self.page.mouse.up()
+            self.page.wait_for_timeout(300)
+        assert self.errors == [], self.errors
