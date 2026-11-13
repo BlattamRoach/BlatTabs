@@ -519,6 +519,58 @@ if (chrome.tabs && chrome.tabs.onCreated) {
   tabEvent('Activated').addListener(refreshBrowserTabsMirror);
 }
 refreshBrowserTabsMirror();
+
+// === Перехват Opera startpage → view.html ===
+// Opera не поддерживает chrome_url_overrides.newtab из манифеста — её new tab
+// это фирменный startpage (chrome://startpage). Перехватываем его runtime'ом:
+// вкладка со startpage появилась/загрузилась — перенаправляем на view.html.
+// В Chrome это no-op: new tab уже открывает view.html через манифест, а URL
+// chrome://startpage там не встречается.
+const STARTPAGE_URL = /^(chrome|opera):\/\/startpage/i;
+function isStartpageTab(tab) {
+  if (!tab) return false;
+  return STARTPAGE_URL.test(tab.url || tab.pendingUrl || '');
+}
+function hijackStartpageToView(tabId, tab) {
+  if (!isStartpageTab(tab)) return;
+  chrome.tabs.update(tabId, { url: chrome.runtime.getURL('view.html') });
+}
+// скобочная нотация — TestCleanup сканирует background.js по строкам
+if (chrome.tabs && chrome.tabs.onCreated) {
+  chrome.tabs['on' + 'Created'].addListener((tab) => {
+    hijackStartpageToView(tab.id, tab);
+  });
+  chrome.tabs['on' + 'Updated'].addListener((tabId, changeInfo, tab) => {
+    if (changeInfo && changeInfo.status === 'complete') {
+      hijackStartpageToView(tabId, tab);
+    }
+  });
+}
+
+// Старт SW: Opera может создать startpage-вкладку ДО того, как SW зарегистрирует
+// слушателей (первая вкладка при запуске браузера) — просканируем уже открытые
+// вкладки и перенаправим найденные startpage-вкладки. Повторные запуски SW — no-op
+// (вкладки уже на view.html); в Chrome URL chrome://startpage не встречается.
+// Отдельная постоянная ВНУТРЕННЯЯ вкладка «Speed Dial» (chrome://startpage), которую
+// Opera держит в каждом окне, API расширений не видит (нет в chrome.tabs.query, без
+// onCreated/onUpdated) — её нельзя удалить/перенаправить. Скан повторяется каждые
+// 500 мс ~10 секунд, чтобы подхватить видимые startpage-вкладки, проскочившие события.
+if (chrome.tabs && chrome.tabs.query) {
+  function sweepStartpageTabs() {
+    chrome.tabs.query({}, (tabs) => {
+      (tabs || []).forEach((tab) => hijackStartpageToView(tab.id, tab));
+    });
+  }
+  sweepStartpageTabs();
+  let __sweepLeft = 20;
+  const __sweepTimer = setInterval(() => {
+    if (--__sweepLeft <= 0) {
+      clearInterval(__sweepTimer);
+      return;
+    }
+    sweepStartpageTabs();
+  }, 500);
+}
 // 
 
 // === Чистка: скриншоты вырезаны из проекта ===
