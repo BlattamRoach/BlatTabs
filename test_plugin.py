@@ -588,6 +588,35 @@ class TestManifest:
         }
         assert m["action"]["default_icon"]["128"] == "icons/icon128.png"
 
+    def test_update_url(self):
+        m = json.load(open(f"{EXT_PATH}/manifest.json"))
+        assert m["update_url"] == "https://blattamroach.github.io/BlatTabs/update.json"
+
+    def test_key_pinned_stable_id(self):
+        # ID = SHA-256 публичного ключа (первые 16 байт, a-p) — зафиксирован: смена ключа = смена ID
+        import base64, hashlib
+        m = json.load(open(f"{EXT_PATH}/manifest.json"))
+        der = base64.b64decode(m["key"])
+        h = hashlib.sha256(der).digest()[:16]
+        eid = "".join(chr(ord("a") + b // 16) + chr(ord("a") + b % 16) for b in h)
+        assert eid == "jbhpnhgbhaaijinlokaplonmffafbfhi"
+
+    def test_update_json_feed_matches_release(self):
+        # фид update.json: версия = версии manifest, zip в releases/ существует с той же версией
+        m = json.load(open(f"{EXT_PATH}/manifest.json"))
+        ver = m["version"]
+        feed = json.load(open(f"{EXT_PATH}/update.json", encoding="utf-8"))
+        app = feed["apps"][0]
+        assert app["name"] == "BlatTabs"
+        assert app["version"] == ver
+        assert app["update_url"] == f"https://blattamroach.github.io/BlatTabs/releases/BlatTabs-v{ver}.zip"
+        zip_path = os.path.join(EXT_PATH, "releases", f"BlatTabs-v{ver}.zip")
+        assert os.path.isfile(zip_path), f"release zip not found: {zip_path}"
+        with zipfile.ZipFile(zip_path) as zf:
+            zmanifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+            assert zmanifest["version"] == ver
+
+
 
 # ==========================================
 #  BACKGROUND.JS: ВКЛАДКИ

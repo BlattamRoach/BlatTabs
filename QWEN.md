@@ -12,6 +12,8 @@ view.html / view.js    — Страница новой вкладки (newtab ov
 theme.css              — дизайн-токены (CSS-переменные), общие для view и popup
 icons/                 — иконки расширения: icon16.png / icon48.png / icon128.png
 build_zip.py           — сборка dist/BlatTabs-v<версия>.zip для Chrome Web Store (только stdlib)
+update.json            — фид автообновления (manifest `update_url`): версия + URL свежего zip в releases/
+releases/              — zip-релизы автообновления (BlatTabs-v<версия>.zip; отдаёт GitHub Pages, default branch)
 store/                 — материалы магазина: DESCRIPTION.md + 3 PNG-макета
 ```
 
@@ -95,6 +97,7 @@ store/                 — материалы магазина: DESCRIPTION.md +
 - **Иконки** — `icons/icon16.png`, `icon48.png`, `icon128.png`: чёрный квадрат с белым глифом браузерной вкладки (flat, монохром, читаемо на 16px). В manifest — верхнеуровневый блок `icons` (16/48/128) и `action.default_icon`.
 - **Сборка zip** — `build_zip.py` (только stdlib; `python build_zip.py` из корня проекта) собирает `dist/BlatTabs-v<версия>.zip` по строгому списку файлов (manifest.json, background.js, popup.html, popup.js, view.html, view.js, theme.css, icons/*). Всё остальное (test_plugin.py, `__pycache__`, .pytest_cache, .git, *.md, dist/) исключается. Даты элементов zip зафиксированы → сборка воспроизводится байт-в-байт. `dist/` в `.gitignore` (артефакт сборки, пересобирается каждый раз).
 - **Store materials** — `store/DESCRIPTION.md` (короткое описание для поля магазина ≤132 символа + полное описание на русском и английская версия) и 3 PNG-макета в `store/` (~1280x800) — реальный view.html в headless Chromium с моком chrome API: светлая тема, тёмная тема, активный поиск. `store/` — часть дистрибутива (НЕ gitignore).
+- **Автообновление (self-hosted, без магазина)** — `update_url` в manifest.json → `https://blattamroach.github.io/BlatTabs/update.json` (GitHub Pages, default branch = master); фид `update.json` → свежий `releases/BlatTabs-v<версия>.zip` (сборка build_zip.py, manifest.json в корне zip). `key` в manifest (публичный RSA) — стабильный ID `jbhpnhgbhaaijinlokaplonmffafbfhi` (не зависит от пути unpacked-папки — обновление находит установленную копию на любой машине; закрытый ключ не в репозитории — vault-заметка «BlatTabs — релиз-ключи.md»). Chrome опрашивает фид ~раз в 24 ч и при старте браузера: новая версия → скачать zip → подменить установленную копию на месте (работает и для unpacked; storage привязан к ID — данные переживают обновление). Релиз: bump version в manifest.json → `python build_zip.py` → скопировать `dist/BlatTabs-v<версия>.zip` в `releases/` → обновить версию в `update.json` → коммит + merge в master (Pages разворачивается из default branch). Тесты: TestManifest +3.
 
 ## Сообщения между компонентами
 
@@ -120,6 +123,8 @@ store/                 — материалы магазина: DESCRIPTION.md +
 3. Нажать **«Load unpacked extension»** (Загрузить распакованное расширение) → выбрать директорию проекта.
 
 Разработчик перезагружает расширение после каждого изменения кода.
+
+Установка для друзей: скачать свежий `releases/BlatTabs-v<версия>.zip`, распаковать, Load unpacked — дальше расширение обновляется само (фид GitHub Pages, см. «Релиз»), переустановка не нужна.
 
 ## Стили и UI
 
