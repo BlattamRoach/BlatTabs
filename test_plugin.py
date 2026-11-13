@@ -7049,6 +7049,94 @@ class TestHotkey:
 
 
 # ==========================================
+#  OPERA STARTPAGE → view.html (runtime newtab-перехват)
+# ==========================================
+
+class TestOperaStartpage:
+    """Opera не поддерживает chrome_url_overrides.newtab из манифеста — её
+    new tab это фирменный startpage (chrome://startpage). background.js
+    перехватывает его: вкладка со startpage (onCreated / onUpdated complete)
+    → chrome.tabs.update → view.html. В Chrome это no-op (такой URL там не
+    встречается)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        page.goto("about:blank")
+        page.evaluate(MOCK_CHROME)
+        page.evaluate(load_file("background.js") + "; 'loaded'")
+
+    def _fire_created(self, tab):
+        self.page.evaluate("chrome.tabs.onCreated._fire(%s)" % json.dumps(tab))
+
+    def _fire_updated(self, tab_id, change_info, tab):
+        self.page.evaluate(
+            "chrome.tabs.onUpdated._fire(%s, %s, %s)"
+            % (json.dumps(tab_id), json.dumps(change_info), json.dumps(tab)))
+
+    def _last_update(self):
+        return self.page.evaluate("chrome.tabs._lastUpdate")
+
+    def test_on_created_startpage_redirects_to_view(self):
+        self._fire_created({"id": 42, "url": "chrome://startpage/"})
+        lu = self._last_update()
+        assert lu is not None
+        assert lu["tabId"] == 42
+        assert lu["opts"]["url"] == "chrome-extension://mock-extension-id/view.html"
+
+    def test_on_updated_complete_startpage_redirects(self):
+        self._fire_updated(7, {"status": "complete"}, {"id": 7, "url": "chrome://startpage"})
+        lu = self._last_update()
+        assert lu is not None
+        assert lu["tabId"] == 7
+        assert lu["opts"]["url"] == "chrome-extension://mock-extension-id/view.html"
+
+    def test_opera_scheme_startpage_redirects(self):
+        self._fire_created({"id": 3, "url": "opera://startpage"})
+        assert self._last_update()["opts"]["url"] == "chrome-extension://mock-extension-id/view.html"
+
+    def test_pending_startpage_redirects(self):
+        self._fire_created({"id": 5, "url": "", "pendingUrl": "chrome://startpage/"})
+        assert self._last_update()["opts"]["url"] == "chrome-extension://mock-extension-id/view.html"
+
+    def test_normal_tab_not_redirected(self):
+        self._fire_created({"id": 9, "url": "https://example.com"})
+        assert self._last_update() is None
+
+    def test_on_updated_loading_not_redirected(self):
+        self._fire_updated(11, {"status": "loading", "url": "chrome://startpage/"}, {"id": 11, "url": "chrome://startpage/", "status": "loading"})
+        assert self._last_update() is None
+
+    def test_chrome_newtab_not_redirected(self):
+        self._fire_updated(12, {"status": "complete"}, {"id": 12, "url": "chrome://newtab/"})
+        assert self._last_update() is None
+
+    def test_startup_sweep_redirects_loaded_startpage(self):
+        # SW может стартовать ПОСЛЕ создания startpage-вкладки (первая вкладка
+        # Opera при запуске) — sweep при старте SW (chrome.tabs.query) ловит её.
+        self.page.goto("about:blank")
+        self.page.evaluate(MOCK_CHROME)
+        self.page.evaluate(
+            "chrome.tabs._tabs = ["
+            "{id: 21, url: 'chrome://startpage/', windowId: 1, index: 0}, "
+            "{id: 22, url: 'https://example.com', windowId: 1, index: 1}];")
+        self.page.evaluate(load_file("background.js") + "; 'loaded'")
+        self.page.wait_for_timeout(100)
+        lu = self._last_update()
+        assert lu is not None
+        assert lu["tabId"] == 21
+        assert lu["opts"]["url"] == "chrome-extension://mock-extension-id/view.html"
+
+    def test_startup_sweep_noop_when_no_startpage(self):
+        self.page.goto("about:blank")
+        self.page.evaluate(MOCK_CHROME)
+        self.page.evaluate(
+            "chrome.tabs._tabs = [{id: 31, url: 'https://example.com', windowId: 1, index: 0}];")
+        self.page.evaluate(load_file("background.js") + "; 'loaded'")
+        self.page.wait_for_timeout(100)
+        assert self._last_update() is None
+
+# ==========================================
 #  РЕЛИЗ: zip-сборка, иконки, описание магазина
 # ==========================================
 
