@@ -2,8 +2,8 @@
   "apps": [
     {
       "name": "BlatTabs",
-      "version": "2.1.0",
-      "update_url": "https://blattamroach.github.io/BlatTabs/releases/BlatTabs-v2.1.0.zip"
+      "version": "2.2.0",
+      "update_url": "https://blattamroach.github.io/BlatTabs/releases/BlatTabs-v2.2.0.zip"
     }
   ]
 }

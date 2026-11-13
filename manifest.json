@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "BlatTabs",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA6JvetiYbgQQfQrFx5S2n2givgbVhJbGJz/vrpCVAVeCnekZ4VsqgTusRCTT39lPQpjksLH7BVGVniAH7kPyVD9D9xzq1UnOwXu5P63ZA1vSEHk7YiEJeMqI08Lthi+XDK1q/AvA/P9m406TUWVS8vTMY31gIrJmW4CIQz0o2Fn21sG1+v3oPtb9rnEvI0lrD8LI+DZcSHTqoVoJDMR/a0pw6RvXIODQxS9YbLzHZ7QN8RmsGMchUloFJO8V1ivKnh+nc+8GoGcEyiT0gYo6WdfGaPF6jvrc49rsqqpvwx2uRAqTwKC4pwBwvh+E03fZM5/Di8FZxyik6rzhXcnpCDQIDAQAB",
   "update_url": "https://blattamroach.github.io/BlatTabs/update.json",
   "description": "BlatTabs — менеджер сохранённых вкладок",
