@@ -1771,91 +1771,266 @@ function slotAnchor(idx, clientY) {
   return { el: card, side: 'before' };
 }
 
-// Touch-oriented anchor, CARD path only (dragSourceUrl set, no group drag).
-// Reflow happens ONLY when the cursor touches (enters) a card: the ghost
-// flips to the opposite side of the touched card, the card slides into the
-// ghost's old cell, the ghost takes the card's cell — from BOTH sides.
-// Inside the same card the anchor is frozen; in a gap of the ghost's own
-// row the ghost sticks (its current anchor); row/section ends and cross-row
-// follow keep the legacy slotAnchor/cardGapIndex semantics. Rail/chip paths
-// still call slotAnchor(cardGapIndex(...)) directly and are untouched.
+// Territory-oriented anchor, CARD path only (dragSourceUrl set, no group
+// drag). A card's TERRITORY = its rect + half of the gap to each neighbor
+// (midpoint split, horizontally within a row and vertically across
+// row/section borders). Cursor inside a territory -> that card becomes the
+// OWNER and starts moving (FLIP slide): the ghost takes the owner's old
+// cell, the owner slides to where the drag came from. Approach side maps to
+// the ghost side: left/above -> 'after' (owner slides earlier in the DOM),
+// right/below -> 'before' (owner slides later). The anchor is FROZEN while
+// the cursor stays in the same owner's territory (pdLastTouchCard); reflow
+// happens only at territory borders (gap midpoints, row/section midpoints).
+// Row ends keep the legacy A3a; above the first section header — legacy A3c;
+// the bottom band (below the last row of the last section) never reaches
+// this function (cardAreaEmptyBand handles it). Rail/chip paths still call
+// slotAnchor(cardGapIndex(...)) directly and are untouched.
 function cursorCardAnchor(clientX, clientY) {
   if (slotIsSourceHome(clientY)) return { el: dragSourceCardEl, side: 'after' };
+  // Гонка отложенного создания заглушки (dragover раньше setTimeout(0)):
+  // исходник ещё виден, курсор над НИМ — домашний слот (дроп — no-op).
+  if (dragSourceCardEl && dragSourceCardEl.isConnected &&
+      dragSourceCardEl.style.display !== 'none') {
+    const sr = dragSourceCardEl.getBoundingClientRect();
+    if (clientX >= sr.left && clientX <= sr.right && clientY >= sr.top && clientY <= sr.bottom)
+      return { el: dragSourceCardEl, side: 'after' };
+  }
   const cards = visibleCards();
   if (!cards.length) return null;
-  let overIdx = -1;
-  for (let i = 0; i < cards.length; i++) {
-    const r = cards[i].getBoundingClientRect();
-    if (clientX >= r.left && clientX <= r.right && clientY >= r.top && clientY <= r.bottom) { overIdx = i; break; }
-  }
-  if (overIdx >= 0) {
-    const card = cards[overIdx];
-    // Section boundary (first card of a section, header above): the same
-    // rule as slotAnchor, takes precedence over the touch side rule.
-    const header = sectionHeaderBefore(card);
-    if (header && overIdx > 0 && tabGroupOf(card.__tab) !== tabGroupOf(cards[overIdx - 1].__tab)) {
-      const r = header.getBoundingClientRect();
-      const below = clientY == null || clientY > r.top + r.height / 2;
-      if (below) return { el: header, side: 'after' };
-      return { el: cards[overIdx - 1], side: 'after' };
-    }
-    // Still inside a card touched earlier this drag: anchor frozen (no
-    // reflow while the cursor stays on the card). Keyed on the TOUCH anchor,
-    // not pdLastAnchor — gap/sticky anchors overwrite pdLastAnchor mid-walk
-    // and would defeat the freeze on re-entry (flaky re-anchor).
-    if (pdLastTouchCard === card) return pdLastTouchAnchor;
-    pdLastTouchCard = card;
-    // Touch: the ghost flips to the opposite side of the card.
-    const ghost = dragGhostSlot;
-    let anchor;
-    if (ghost && ghost.isConnected) {
-      const ghostBefore = ghost.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING;
-      anchor = { el: card, side: ghostBefore ? 'after' : 'before' };
+  const gIdx = new Map();
+  cards.forEach((c, i) => gIdx.set(c, i));
+  const lr = tabsList.getBoundingClientRect();
+  const rightEdge = lr.right - (parseFloat(getComputedStyle(tabsList).paddingRight) || 0);
+  const isHeader = el => el.classList.contains('gbar') || el.classList.contains('loose-label');
+  const legacy = () => slotAnchor(cardGapIndex(clientX, clientY), clientY);
+  // Sections in DOM order (same split as cardAreaEmptyBand): visible cards
+  // and the ghost slot (when connected and visible) are attached to their
+  // section, grouped into rows by rect.top (4px tolerance). The ghost is a
+  // ROW ITEM — its cell (home position) is its own territory (sticky).
+  const ghost = (dragGhostSlot && dragGhostSlot.isConnected &&
+      dragGhostSlot.style.display !== 'none') ? dragGhostSlot : null;
+  const sections = [];
+  let cur = null;
+  for (const el of tabsList.children) {
+    if (el.id === 'add-group-btn') continue;
+    if (isHeader(el)) {
+      cur = { topEl: el, items: [] };
+      sections.push(cur);
     } else {
-      anchor = { el: card, side: 'before' }; // no ghost yet (deferred creation) — legacy
+      if (!cur) { cur = { topEl: null, items: [] }; sections.push(cur); }
+      if (el.classList.contains('tab-card') && el !== dragSourceCardEl && el.style.display !== 'none')
+        cur.items.push({ el, ghost: false });
+      else if (ghost && el === ghost)
+        cur.items.push({ el, ghost: true });
     }
+  }
+  for (const s of sections) {
+    const rows = [];
+    for (const it of s.items) {
+      const r = it.el.getBoundingClientRect();
+      const last = rows[rows.length - 1];
+      if (last && Math.abs(last.top - r.top) < 4) { // <4: subpixel offsets must not split a row
+        last.items.push(it);
+        last.bottom = Math.max(last.bottom, r.bottom);
+      } else rows.push({ top: r.top, bottom: r.bottom, items: [it] });
+    }
+    for (const row of rows)
+      row.cards = row.items.filter(it => !it.ghost).map(it => it.el);
+    s.rows = rows;
+  }
+  // STICKY (ex-old A3b): the ghost's current anchor — the next visible
+  // card sibling (side 'before'); at the list end (no next sibling) —
+  // 'after' the last visible card; at the end of its section (next sibling
+  // is a header) — 'after' the section's last visible card; no card — legacy.
+  const stickyGhostAnchor = () => {
+    const g = dragGhostSlot;
+    let n = g.nextElementSibling;
+    while (n) {
+      if (n.classList.contains('gbar') || n.classList.contains('loose-label')) {
+        // Ghost at the end of its section: sticky anchor = after the
+        // section's last visible card (never crosses the section header)
+        let p = g.previousElementSibling;
+        while (p && !(p.classList.contains('tab-card') && p.style.display !== 'none'))
+          p = p.previousElementSibling;
+        if (p) return { el: p, side: 'after' };
+        break; // no section card — legacy fallback below
+      }
+      if (n.classList.contains('tab-card') && n.style.display !== 'none')
+        return { el: n, side: 'before' };
+      n = n.nextElementSibling;
+    }
+    if (n === null) return { el: cards[cards.length - 1], side: 'after' };
+    return legacy();
+  };
+  // Owner by its horizontal span in a row: the elements tile [leftEdge,
+  // rightEdge] by midpoints with the neighbors (edges — the list edges).
+  // Null outside.
+  const ownerOf = (els, x) => {
+    const n = els.length;
+    if (!n) return null;
+    const rects = els.map(el => el.getBoundingClientRect());
+    const leftEdge = rects[0].left;
+    if (x < leftEdge || x > rightEdge) return null;
+    for (let i = 0; i < n; i++) {
+      const lo = i === 0 ? leftEdge : (rects[i - 1].right + rects[i].left) / 2;
+      const hi = i === n - 1 ? rightEdge : (rects[i].right + rects[i + 1].left) / 2;
+      if (x >= lo && x < hi) return els[i];
+    }
+    return els[n - 1];
+  };
+  // Owner anchor with freeze: entering a territory = "touch" — while the
+  // cursor stays in the same owner's territory the anchor is frozen. With
+  // flip=true (the horizontal approach path, owner's cell outside the card
+  // rect) the side is also compared: crossing to the opposite side of the
+  // owner (e.g. into the ghost|owner gap's far half) flips the approach side
+  // and re-commits. The vertical zones (default flip=false) freeze on the
+  // owner alone (freeze по территории).
+  const commitOwner = (owner, side, flip) => {
+    if (pdLastTouchCard === owner &&
+        (!flip || (pdLastTouchAnchor && pdLastTouchAnchor.side === side)))
+      return pdLastTouchAnchor;
+    pdLastTouchCard = owner;
+    const anchor = { el: owner, side };
     pdLastTouchAnchor = anchor;
     return anchor;
-  }
-  // Not over a card.
-  // A3a: empty end of the cursor's row (right of its rightmost card) —
-  // legacy end-of-row/end-of-section behavior.
-  let rowLastIdx = -1;
-  for (let i = 0; i < cards.length; i++) {
-    const r = cards[i].getBoundingClientRect();
-    if (clientY >= r.top && clientY <= r.bottom) rowLastIdx = i;
-  }
-  if (rowLastIdx >= 0) {
-    const r = cards[rowLastIdx].getBoundingClientRect();
-    if (clientX > r.right) return slotAnchor(rowLastIdx + 1, clientY);
-  }
-  // A3b: gap on the ghost's own row — STICKY: the ghost's current anchor
-  // (next visible card sibling, or the last visible card at the list end);
-  // no reflow in the gap, cards move only on touch.
-  const ghost = dragGhostSlot;
-  if (ghost && ghost.isConnected) {
-    const gr = ghost.getBoundingClientRect();
-    if (clientY >= gr.top - 1 && clientY <= gr.bottom + 1) {
-      let n = ghost.nextElementSibling;
-      while (n) {
-        if (n.classList.contains('gbar') || n.classList.contains('loose-label')) {
-          // Ghost at the end of its section: sticky anchor = after the
-          // section's last visible card (never crosses the section header)
-          let p = ghost.previousElementSibling;
-          while (p && !(p.classList.contains('tab-card') && p.style.display !== 'none'))
-            p = p.previousElementSibling;
-          if (p) return { el: p, side: 'after' };
-          break; // no section card — legacy fallback below
-        }
-        if (n.classList.contains('tab-card') && n.style.display !== 'none')
-          return { el: n, side: 'before' };
-        n = n.nextElementSibling;
+  };
+  // Between-section zone (from the upper section S's last row bottom to the
+  // lower section N's first row top, N's header included): midpoint split.
+  // N without visible cards — the whole zone belongs to S's tail.
+  // Spans only by CARDS (the ghost column is irrelevant for vertical zones).
+  // Tail: the nearest section ABOVE with visible rows — a run of empty
+  // (collapsed) sections between them is all that upper section's tail
+  // territory; no such section — legacy.
+  const betweenSections = (S, N, sections) => {
+    if (N.rows.length) {
+      const sLast = S.rows.length ? S.rows[S.rows.length - 1].bottom
+        : (S.topEl ? S.topEl.getBoundingClientRect().bottom : lr.top);
+      const M = (sLast + N.rows[0].top) / 2;
+      if (clientY > M) {
+        const owner = ownerOf(N.rows[0].cards, clientX);
+        if (owner) return commitOwner(owner, 'after'); // approach from above
+        return legacy();
       }
-      if (n === null) return { el: cards[cards.length - 1], side: 'after' };
     }
+    let up = S;
+    while (up && !up.rows.length) {
+      const i = sections.indexOf(up);
+      up = i > 0 ? sections[i - 1] : null;
+    }
+    if (!up || !up.rows.length) return legacy();
+    const row = up.rows[up.rows.length - 1];
+    // The band below a section's last row is that section's TAIL territory:
+    // the owner is the last card of the last row (the section end), NOT the
+    // nearest-by-x card — a band point far from the last card still anchors
+    // before it (approach from below -> side 'before').
+    const owner = row.cards[row.cards.length - 1];
+    if (owner) return commitOwner(owner, 'before'); // approach from below
+    return legacy();
+  };
+  for (let si = 0; si < sections.length; si++) {
+    const s = sections[si];
+    const topBound = s.topEl ? s.topEl.getBoundingClientRect().top : lr.top;
+    const rows = s.rows;
+    // Above this section's top bound: the tail zone of the previous section
+    // (or above the first header — legacy A3c).
+    if (clientY < topBound) {
+      if (si === 0) return legacy();
+      return betweenSections(sections[si - 1], s, sections);
+    }
+    if (!rows.length) continue; // no visible items — the next topBound handles it
+    const firstRowTop = rows[0].top;
+    if (clientY < firstRowTop) {
+      // Header-row zone above the first row.
+      if (si === 0) {
+        const owner = ownerOf(rows[0].cards, clientX);
+        if (owner) return commitOwner(owner, 'after'); // approach from above
+        return legacy();
+      }
+      return betweenSections(sections[si - 1], s, sections);
+    }
+    for (let ri = 0; ri < rows.length; ri++) {
+      const row = rows[ri];
+      const prev = ri > 0 ? rows[ri - 1] : null;
+      if (prev && clientY >= prev.bottom && clientY < row.top) {
+        // Row-gap zone (same section): midpoint split — above M the owner is
+        // the upper row's card (approach from below), below M the lower row's.
+        const M = (prev.bottom + row.top) / 2;
+        const pick = clientY >= M ? row : prev;
+        const owner = ownerOf(pick.cards, clientX);
+        if (owner) return commitOwner(owner, clientY >= M ? 'after' : 'before');
+        return legacy();
+      }
+      if (clientY < row.top || clientY > row.bottom) continue;
+      // Row zone: cursor Y inside this row. The row is tiled over ALL its
+      // items (visible cards + the ghost slot when visible in it) by
+      // midpoints — each item owns [midPrev, midNext].
+      const itemEls = row.items.map(it => it.el);
+      const n = itemEls.length;
+      if (!n) continue;
+      const rects = itemEls.map(el => el.getBoundingClientRect());
+      // A3a: empty end of the row (right of the rightmost item) — legacy
+      // end-of-row behavior (unchanged).
+      if (clientX > rects[n - 1].right) {
+        const lastCard = row.cards[row.cards.length - 1];
+        return lastCard ? slotAnchor(gIdx.get(lastCard) + 1, clientY) : legacy();
+      }
+      // Left of the first item — approach from the left of the row.
+      if (clientX < rects[0].left) {
+        const first = itemEls[0];
+        return first === ghost ? stickyGhostAnchor() : commitOwner(first, 'after');
+      }
+      const owner = ownerOf(itemEls, clientX);
+      if (!owner) return legacy();
+      // The ghost's own cell — STICKY (home position): the anchor is the
+      // ghost's current position, no reflow while the cursor stays in it.
+      if (owner === ghost) return stickyGhostAnchor();
+      // Owner is a card.
+      const card = owner;
+      const crect = card.getBoundingClientRect();
+      if (clientX >= crect.left && clientX <= crect.right) {
+        // Touch rule (unchanged): section-boundary override for the first
+        // card of a section + freeze + DOM-side flip.
+        const gi = gIdx.get(card);
+        const header = sectionHeaderBefore(card);
+        if (header && gi > 0 && tabGroupOf(card.__tab) !== tabGroupOf(cards[gi - 1].__tab)) {
+          const hr = header.getBoundingClientRect();
+          const below = clientY == null || clientY > hr.top + hr.height / 2;
+          if (below) return { el: header, side: 'after' };
+          return { el: cards[gi - 1], side: 'after' };
+        }
+        if (pdLastTouchCard === card) return pdLastTouchAnchor;
+        pdLastTouchCard = card;
+        const g = dragGhostSlot;
+        let anchor;
+        if (g && g.isConnected) {
+          const ghostBefore = g.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING;
+          anchor = { el: card, side: ghostBefore ? 'after' : 'before' };
+        } else {
+          anchor = { el: card, side: 'before' }; // no ghost yet (deferred creation)
+        }
+        pdLastTouchAnchor = anchor;
+        return anchor;
+      }
+      // In the owner's cell but outside the card rect: approach from the
+      // left (clientX < card.left) → side 'after'; from the right → 'before'.
+      // flip=true: crossing to the opposite side of the owner re-commits.
+      return commitOwner(card, clientX < crect.left ? 'after' : 'before', true);
+    }
+    // Below all rows of this section: the between-sections zone ends at the
+    // next section's first row (or header) top — deeper is the next
+    // section's territory (its own iteration handles it).
+    if (si < sections.length - 1) {
+      const next = sections[si + 1];
+      const nextTop = next.rows.length ? next.rows[0].top
+        : (next.topEl ? next.topEl.getBoundingClientRect().top : lr.top);
+      if (clientY < nextTop) return betweenSections(s, next, sections);
+      continue;
+    }
+    // Below the last row of the last section — the bottom band
+    // (unreachable: cardAreaEmptyBand catches it first).
+    return legacy();
   }
-  // A3c: otherwise — legacy fallback (cross-row follow, above/below the grid)
-  return slotAnchor(cardGapIndex(clientX, clientY), clientY);
+  return legacy();
 }
 
 // Секция позиции заглушки (groupId или null): карточка — группа её вкладки;
@@ -1982,23 +2157,18 @@ function setGhostDisplay(v) {
   if (dragGhostSlot) dragGhostSlot.style.display = v;
 }
 
-// Пустая полоса центр.сетки #tabs-list — пространство МЕЖДУ видимыми
-// строками карточек, во ВСЕХ секциях (группы + негрупповая): (A) вся строка
-// шапки секции (верх → низ: компактная «пилюля» .gbar занимает лишь левую
-// часть строки, .loose-label — всю строку; у секции без шапки — верх списка)
-// плюс пространство до верха её первой видимой строки; (B) между низом
-// последней видимой строки и верхом шапки следующей секции (.gbar —
-// свёрнутой/развёрнутой / .loose-label); у последней секции — до НИЗА списка
-// (строка #add-group-btn и отступ .tabs-list не являются границами полосы);
-// (C) вертикальный зазор сетки (row-gap)
-// между двумя строками карточек внутри секции. Над полосой — как над
-// шапкой: заглушка прячется ЦЕЛИКОМ, дроп — отмена (вкладка возвращается
-// в исходный слот, storage не тронут). Пустые ячейки СВОЙ строки (справа
-// от последней карточки незаполненной строки, та же полоса Y) — НЕ полоса:
-// заглушка остаётся видимой в потенциальном слоте. Видимая заглушка, слот
-// пустой группы и row-keeper ЗАНИМАЮТ строку — их строки заняты (иначе
-// курсор над собственной строкой заглушки прятал бы её и схлопывал сетку).
-// Возвращает id секции под курсором (groupId; «loose» — негрупповая) или null.
+// Пустая полоса центр.сетки #tabs-list — НИЗОВАЯ ЗОНА:
+// пространство ниже последней видимой строки ПОСЛЕДНЕЙ
+// секции, до низа #tabs-list (строка #add-group-btn + отступ .tabs-list
+// — не границы полосы). Всё остальное место (шапные строки,
+// зазоры между карточками/строками/секциями) — территории
+// карточек (cursorCardAnchor): заглушка видима, дроп — в слот.
+// Над полосой — как над шапкой: заглушка прячется ЦЕЛИКОМ, дроп — отмена
+// (вкладка возвращается в исходный слот, storage не тронут). Пустые
+// ячейки СВОЙ строки (справа от последней карточки) — НЕ полоса.
+// Видимая заглушка и слот пустой группы ЗАНИМАЮТ строку (полоса
+// не глотает их). Возвращает id секции под курсором (groupId;
+// «loose» — негрупповая) или null.
 function cardAreaEmptyBand(clientX, clientY) {
   if (clientX == null || clientY == null) return null;
   const lr = tabsList.getBoundingClientRect();
@@ -2031,36 +2201,29 @@ function cardAreaEmptyBand(clientX, clientY) {
     s2.nextTop = (next && next.id !== 'add-group-btn')
       ? next.getBoundingClientRect().top : lr.bottom;
   }
-  for (const s2 of sections) {
-    // Занятые строки секции: видимые карточки + видимая заглушка в ней +
-    // слот пустой группы. Row-keeper НЕ занимает строку для полос:
-    // он невидим — его строка остаётся пустой полосой (заглушка там
-    // спрятана, дроп — отмена)
-    const rows = [];
-    const addRow = (r) => {
-      if (!r || r.height <= 0) return;
-      const last = rows[rows.length - 1];
-      if (last && Math.abs(last.top - r.top) < 1) { if (r.bottom > last.bottom) last.bottom = r.bottom; }
-      else rows.push({ top: r.top, bottom: r.bottom });
-    };
-    for (const el of s2.items) {
-      if (el.classList.contains('tab-card') && el.style.display !== 'none') addRow(el.getBoundingClientRect());
-      else if (el.classList.contains('group-empty-slot')) addRow(el.getBoundingClientRect());
-    }
-    if (g && ghostSlotSectionId() === (s2.id === 'loose' ? null : s2.id)) addRow(g);
-    rows.sort((a, b) => a.top - b.top);
-    const inBand = (y1, y2) => clientY > y1 && clientY < y2;
-    const res = s2.id === 'loose' ? 'loose' : s2.id;
-    if (!rows.length) {
-      if (inBand(s2.topBound, s2.nextTop)) return res;
-      continue;
-    }
-    if (inBand(s2.topBound, rows[0].top)) return res;
-    for (let i = 0; i + 1 < rows.length; i++)
-      if (inBand(rows[i].bottom, rows[i + 1].top)) return res;
-    if (inBand(rows[rows.length - 1].bottom, s2.nextTop)) return res;
+  // Осталась ОДНА полоса (территории курсора — в
+  // cursorCardAnchor): ниже последней видимой строки ПОСЛЕДНЕЙ секции —
+  // до низа списка (строка кнопки + отступ). Всё остальное (шапа А/Б/С)
+  // — больше не полосы: территории карточек.
+  if (!sections.length) return null;
+  const last2 = sections[sections.length - 1];
+  const rows = [];
+  const addRow = (r) => {
+    if (!r || r.height <= 0) return;
+    const last = rows[rows.length - 1];
+    if (last && Math.abs(last.top - r.top) < 4) { if (r.bottom > last.bottom) last.bottom = r.bottom; } // <4: subpixel offsets must not split a row
+    else rows.push({ top: r.top, bottom: r.bottom });
+  };
+  for (const el of last2.items) {
+    if (el.classList.contains('tab-card') && el.style.display !== 'none') addRow(el.getBoundingClientRect());
+    else if (el.classList.contains('group-empty-slot')) addRow(el.getBoundingClientRect());
   }
-  return null;
+  if (g && ghostSlotSectionId() === (last2.id === 'loose' ? null : last2.id)) addRow(g);
+  rows.sort((a, b) => a.top - b.top);
+  const inBand = (y1, y2) => clientY > y1 && clientY < y2;
+  const res = last2.id === 'loose' ? 'loose' : last2.id;
+  if (!rows.length) return inBand(last2.topBound, last2.nextTop) ? res : null;
+  return inBand(rows[rows.length - 1].bottom, last2.nextTop) ? res : null;
 }
 
 document.addEventListener('dragover', (e) => {

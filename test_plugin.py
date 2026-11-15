@@ -4052,12 +4052,12 @@ class TestGroupAwareGhostSlot:
 class TestCollapsedRunGhostSlot:
     """Прогон свёрнутых групп между раскрытыми: курсор ниже последней
     карточки раскрытой группы, дальше — (через свёрнутые) ещё раскрытая
-    группа. Всё пространство прогона — ЦЕЛИКОМ строки шапок свёрнутых групп
-    и зазоры между ними — пустая полоса: заглушка ПРЯЧЕТСЯ ЦЕЛИКОМ (а не
-    «встаёт на границе» и тем более не в пространство НИЗКОЙ свёрнутой
-    группы — из-за неё группа выглядела «раскрытой» с призрачной вкладкой);
-    дроп в прогоне — ОТМЕНА (вкладка на месте, storage не тронут). Дроп НА
-    саму шапку свёрнутой группы (.gbar) — в группу (semantics unchanged)."""
+    группа. Всё пространство прогона (строки шапок свёрнутых групп и зазоры
+    между ними) — ТЕРРИТОРИЯ хвоста СВЕРХНЕЙ раскрытой группы: заглушка
+    ВИДИМАЯ в её хвоте (а не в пространстве НИЗКОЙ свёрнутой группы — из-за
+    неё группа выглядела бы «раскрытой» с призрачной вкладкой); дроп в
+    прогоне — КОММИТ в хвот верхней секции. Дроп НА саму шапку свёрнутой
+    группы (.gbar) — в группу (semantics unchanged)."""
 
     @pytest.fixture(autouse=True)
     def _setup(self, page):
@@ -4144,10 +4144,10 @@ class TestCollapsedRunGhostSlot:
 
     def _region_point(self):
         """Точка в прогоне свёрнутых групп: ниже последней видимой карточки
-        g1 (C) и выше шапки g5."""
+        g1 (C) и выше шапки g5; x — центр C (owner хвоста g1 по span)."""
         c = self._card_rect("C")
         bar5 = self._rect('.gbar[data-group-id="g5"]')
-        return (bar5["left"] + bar5["width"] * 0.5,
+        return (c["left"] + c["width"] * 0.5,
                 (c["top"] + c["height"] + bar5["top"]) / 2)
 
     def _names(self):
@@ -4163,30 +4163,39 @@ class TestCollapsedRunGhostSlot:
           return t.groupId;
         })""", name)
 
-    def test_ghost_hidden_in_collapsed_run(self):
-        # Полоса над прогоном свёрнутых групп (точка — на строке шапки g3):
-        # заглушка ПРЯЧЕТСЯ ЦЕЛИКОМ (не «дома»-видима, не в хвоте g1 и не в
-        # пространстве НИЗКОЙ свёрнутой группы); строку исходной секции
-        # держит условный row-keeper
+    def test_ghost_visible_in_collapsed_run(self):
+        # Прогон свёрнутых групп — территория хвоста СВЕРХУ (g1): у нижних
+        # секций нет видимых карточек — вся зона за хвостом g1: заглушка
+        # ВИДИМАЯ в хвоте g1 (перед C, подход снизу -> 'before'), row-keeper
+        # не нужен (заглушка в исходной секции)
         self._load()
         self._start_drag("A")
         x, y = self._region_point()
         self._hover(x, y)
         d = json.loads(self.page.evaluate("""(() => JSON.stringify({
-          atHome: window.__srcCard.nextElementSibling === document.querySelector('.tab-ghost-slot'),
           hidden: (() => { const s = document.querySelector('.tab-ghost-slot');
             return !s || getComputedStyle(s).display === 'none'; })(),
+          prev: (() => { const s = document.querySelector('.tab-ghost-slot');
+            const p = s && s.previousElementSibling;
+            return p && p.querySelector && p.querySelector('.tab-name')
+              ? p.querySelector('.tab-name').textContent.trim() : null; })(),
+          next: (() => { const s = document.querySelector('.tab-ghost-slot');
+            const n = s && s.nextElementSibling;
+            return n && n.querySelector && n.querySelector('.tab-name')
+              ? n.querySelector('.tab-name').textContent.trim() : null; })(),
           keepers: document.querySelectorAll('.tab-row-keeper').length
         }))()"""))
-        assert d["hidden"] is True and d["atHome"] is True, d
-        assert self._slot_order() == ["gbar", "card", "slot", "card", "card",
+        assert d["hidden"] is False and d["keepers"] == 0, d
+        assert d["prev"] == "B" and d["next"] == "C", d  # заглушка перед C в хвоте g1
+        assert self._slot_order() == ["gbar", "card", "card", "slot", "card",
                                       "gbar", "gbar", "gbar", "gbar",
                                       "card", "card", "card", "other"]
         self._end_drag()
 
     def test_ghost_above_first_collapsed_header(self):
-        # Геометрия: заглушка прячется в полосе — её rect (0x0 для
-        # display:none) НЕ в прогоне свёрнутых групп: выше шапки g2
+        # Геометрия: заглушка ВИДИМАЯ в хвоте g1 — её rect НЕ в прогоне
+        # свёрнутых групп: выше шапки g2 (не «в пространстве» НИЗКОЙ
+        # свёрнутой группы — из-за неё группа выглядела бы «раскрытой»)
         self._load()
         self._start_drag("A")
         x, y = self._region_point()
@@ -4197,20 +4206,20 @@ class TestCollapsedRunGhostSlot:
           const s = document.querySelector('.tab-ghost-slot');
           return !s || getComputedStyle(s).display === 'none';
         })()""")
-        assert hidden is True
+        assert hidden is False
         assert slot is not None
         assert slot["top"] < bar2["top"]
         self._end_drag()
 
-    def test_drop_in_collapsed_region_cancels(self):
-        # Дроп в прогон свёрнутых групп — ОТМЕНА: порядок и группы не
-        # изменились (полоса — no place-tab; дроп НА саму шапку .gbar —
-        # в группу, semantics unchanged)
+    def test_drop_in_collapsed_region_commits(self):
+        # Дроп в прогон свёрнутых групп — КОММИТ в хвот верхней секции:
+        # заглушка перед C — A встаёт в её слот (B, A, C), groupId g1
+        # (дроп НА саму шапку .gbar — в группу, semantics unchanged)
         self._load()
         self._start_drag("A")
         x, y = self._region_point()
         self._drop(x, y)
-        assert self._names() == ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L"]
+        assert self._names() == ["B", "A", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L"]
         assert self._group_of("A") == "g1"
         self._end_drag()
 
@@ -4688,11 +4697,11 @@ class TestDragGhostOverCollapsed:
     свёрнутой или пустой) заглушка ПРЯЧЕТСЯ ЦЕЛИКОМ (display:none — её ячейка
     сетки освобождается: ни «тёплая» заглушка на старом месте, ни дырки);
     число строк исходной секции держит видимая схваченная карточка (row-keeper
-    больше нет). В пустой полосе прямо над шапкой
-    следующей группы (не сама шапка), т.е. НИЖЕ последней строки карточек группы сверху,
-    — заглушка тоже ПРЯЧЕТСЯ ЦЕЛИКОМ (число строк держит видимая карточка), а
-    дроп в эту
-    полосу — ОТМЕНА (вкладка возвращается в исходный слот, storage не тронут).
+    больше нет). Зона в пустом пространстве прямо над шапкой следующей группы
+    (не сама шапка), т.е. НИЖЕ последней строки карточек группы сверху, —
+    TERRITORY (волна «территории вкладок»): это ХВОСТ территории секции сверху
+    (если у нижней секции нет видимых карточек — вся зона) — заглушка ВИДИМА,
+    дроп — КОМИТ в слот заглушки (не отмена).
     Семантика дропа не меняется: дроп на шапку свёрнутой группы переносит
     вкладку в группу, группа остаётся свёрнутой; дроп на развёрнутую шапку —
     no-op."""
@@ -4813,13 +4822,13 @@ class TestDragGhostOverCollapsed:
         assert d == {"hidden": True, "atHome": True, "notAfterLastG1": True, "keepers": 0}, d
         self._end_drag()
 
-    def test_ghost_hidden_in_band_above_next_gbar_drop_cancels(self):
-        # Курсор в полосе МЕЖДУ последней карточкой g1 и шапкой g2 (пустое
-        # пространство внутри карт.области g1 НИЖЕ её вкладок): заглушка
-        # ПРЯЧЕТСЯ ЦЕЛИКОМ (computed display:none) — как над самой шапкой;
-        # число строк держит видимая карточка. Семантика дропа
-        # ИЗМЕНЕНА: дроп в эту полосу — ОТМЕНА (вкладка возвращается в
-        # исходный слот, storage не тронут)
+    def test_ghost_visible_tail_territory_above_collapsed_gbar_drop_commits(self):
+        # TERRITORIES: зона МЕЖДУ последней карточкой g1 и шапкой свёрнутой g2
+        # больше не ничья полоса — у g2 нет видимых карточек, вся зона
+        # принадлежит ХВОСТУ секции сверху (g1): заглушка ВИДИМА (не прячется),
+        # встанет перед последней карточкой g1 (подход снизу → side 'before'),
+        # число строк держит видимая заглушка. Дроп — КОМИТ в слот заглушки:
+        # A вставляется перед C → [B, A, C] в g1 (storage меняется).
         self._load()
         self._start_drag("A")
         before = json.loads(self.page.evaluate("""(async () => {
@@ -4834,6 +4843,8 @@ class TestDragGhostOverCollapsed:
         d = json.loads(self.page.evaluate("""(() => {
           const slot = document.querySelector('.tab-ghost-slot');
           const bar1 = document.querySelector('.gbar[data-group-id="g1"]');
+          const nm = el => el && el.querySelector && el.querySelector('.tab-name')
+            ? el.querySelector('.tab-name').textContent.trim() : null;
           const tops = [];
           for (let el = bar1.nextElementSibling; el && !el.classList.contains('gbar'); el = el.nextElementSibling) {
             if (el.classList.contains('tab-ghost-slot') || el.classList.contains('tab-card') ||
@@ -4845,11 +4856,14 @@ class TestDragGhostOverCollapsed:
           return JSON.stringify({
             exists: !!slot,
             hidden: slot && getComputedStyle(slot).display === 'none',
+            ghostPrev: nm(slot.previousElementSibling),
+            ghostNext: nm(slot.nextElementSibling),
             keepers: document.querySelectorAll('.tab-row-keeper').length,
             g1Rows: tops.length
           });
         })()"""))
-        assert d == {"exists": True, "hidden": True, "keepers": 0, "g1Rows": 1}, d
+        assert d == {"exists": True, "hidden": False, "ghostPrev": "B",
+                     "ghostNext": "C", "keepers": 0, "g1Rows": 1}, d
         self.page.evaluate("""([x, y]) => {
           document.getElementById('tabs-list').dispatchEvent(
             new DragEvent('drop', {dataTransfer: window.__dt, bubbles: true, cancelable: true, clientX: x, clientY: y}));
@@ -4858,7 +4872,10 @@ class TestDragGhostOverCollapsed:
           const d = await chrome.storage.get('blattam-tabs');
           return JSON.stringify((d['blattam-tabs'] || []).map(t => [t.name, t.groupId || null]));
         })()"""))
-        assert after == before, (before, after)  # A — home, storage не тронут
+        assert before == [["A", "g1"], ["B", "g1"], ["C", "g1"],
+                          ["D", "g2"], ["E", "g2"], ["F", "g3"], ["G", "g3"]], before
+        assert after == [["B", "g1"], ["A", "g1"], ["C", "g1"],
+                         ["D", "g2"], ["E", "g2"], ["F", "g3"], ["G", "g3"]], (before, after)
         assert self.page.evaluate("document.querySelectorAll('.tab-ghost-slot').length") == 0
         self._end_drag()
 
@@ -8787,9 +8804,11 @@ class TestDragSourceRowHold:
         self._end_drag()
         assert self._state()["keepers"] == 0
 
-    def test_ghost_hidden_over_empty_zone_row_held(self):
-        # Заглушка спрятана в пустой зоне НИЖЕ последней строки исходной
-        # группы: холдер держит освободившуюся строку
+    def test_ghost_visible_over_tail_territory_row_held(self):
+        # TERRITORIES: зона НИЖЕ последней строки g1 (над шапкой g2) —
+        # ХВОСТ территории g1 (верхняя половина межсекционного зазора):
+        # заглушка ВИДИМА (не прячется), встает перед T6 (подход снизу →
+        # side 'before') и сама держит строку (холдер не нужен); g2 не сдвинулся.
         self._load(self.G2, self._g1_tabs(6) + self._g2_tabs(2))
         pre = self._state()
         u1 = self._rect("U1")
@@ -8808,8 +8827,18 @@ class TestDragSourceRowHold:
         })()""")
         self._hover(*pt)
         d = self._state()
-        assert d["ghostHidden"] is True, d
-        assert d["keepers"] == 1, d
+        d2 = json.loads(self.page.evaluate("""(() => {
+          const s = document.querySelector('.tab-ghost-slot');
+          const nm = el => el && el.querySelector && el.querySelector('.tab-name')
+            ? el.querySelector('.tab-name').textContent.trim() : null;
+          return JSON.stringify({
+            ghostPrev: nm(s.previousElementSibling),
+            ghostNext: nm(s.nextElementSibling)
+          });
+        })()"""))
+        assert d["ghostHidden"] is False, d
+        assert d["keepers"] == 0, d
+        assert d2["ghostPrev"] == "T5" and d2["ghostNext"] == "T6", d2
         assert abs(d["gbar2Top"] - pre["gbar2Top"]) < 2, (pre["gbar2Top"], d["gbar2Top"])
         self._end_drag()
         assert self._state()["keepers"] == 0
@@ -9290,19 +9319,15 @@ class TestGhostOverExpandedGbar:
 # ==========================================
 
 class TestGhostOverGroupEmptyArea:
-    """Драг карточки в ПУСТУЮ ПОЛОСУ собственной карт.область группы:
-    пустые строки сетки ВЫШЕ первой строки видимых карточек группы и НИЖЕ
-    последней строки (зазор между шапкой/последней строкой и следующей
-    секцией). Над полосой заглушка ПРЯЧЕТСЯ ЦЕЛИКОМ (display:none, как над
-    шапкой группы и слотом пустой группы); число строк исходной секции
-    держится естественно (в этих лейаутах строка не схлопывается —
-    row-keeper не подключается); возврат курсора в
-    строку карточек — заглушка снова
-    видимая в честном слоте. Пустые ячейки СЕБЕ строки (справа от последней
-    карточки незаполненной строки) НЕ полоса: заглушка остаётся видимая в
-    потенциальном слоте. Семантика дропа ИЗМЕНЕНА волной empty-band:
-    дроп в эти полосы — ОТМЕНА (вкладка возвращается в исходный слот,
-    storage не тронут)."""
+    """Территории (волна «нет ничейных полос»): пустые строки ВЫШЕ первой
+    строки видимых карточек группы — ТЕРРИТОРИЯ первой строки (заглушка
+    видима в её полосе, owner по span, подход сверху -> 'after'), дроп —
+    КОММИТ в слот заглушки. Зона НИЖЕ последней строки последней секции —
+    низовая полоса (осталась): заглушка скрыта, дроп — отмена. Пустые
+    ячейки СЕБЕ строки (справа от последней карточки незаполненной строки)
+    НЕ полоса: заглушка остаётся видимая в потенциальном слоте. Число строк
+    исходной секции держится естественно (видимая заглушка в секции сама
+    держит клетку; в низовой полосе — row-keeper при необходимости)."""
 
     @pytest.fixture(autouse=True)
     def _setup(self, page):
@@ -9448,18 +9473,18 @@ class TestGhostOverGroupEmptyArea:
           return tops.length;
         }""", gid)
 
-    def test_ghost_hidden_above_first_row(self):
+    def test_ghost_visible_above_first_row(self):
         # (1) группа из 10 карточек (2 строки): курсор в пустой строке ВЫШЕ
-        # первой строки карточек — заглушка спрятана ЦЕЛИКОМ (computed
-        # display:none) и НЕ в первой позиции: остаётся там, куда курсор её
-        # поставил раньше (перед A3), а не перед первой видимой карточкой
+        # первой строки карточек — территория первой строки: заглушка
+        # ВИДИМАЯ в её полосе и не «перепрыгивает» на первую карточку:
+        # остаётся там, куда курсор её поставил раньше (перед A3)
         self._load(self._tabs10(), self.G10)
         self._start_drag("A5")
         self._hover("A3")
         pt = self._point("gA", "above")
         self._over_point(*pt)
         d = self._ghost()
-        assert d["exists"] is True and d["hidden"] is True, d
+        assert d["exists"] is True and d["hidden"] is False, d
         assert d["nextName"] == "A3" and d["prevName"] == "A2", d
         self._end_drag()
 
@@ -9477,11 +9502,12 @@ class TestGhostOverGroupEmptyArea:
         assert d["nextName"] == "A3", d
         self._end_drag()
 
-    def test_row_count_held_while_ghost_hidden(self):
-        # (3) пока схваченная карточка скрыта, её высвобожденная ячейка
-        # впитывает заглушку — число строк исходной секции (2 строки из 10
-        # карточек) постоянно (row-keeper в DOM нет); возврат в строку
-        # карточек — без следов
+    def test_row_count_held_while_ghost_visible(self):
+        # (3) число строк исходной секции (2 строки из 10 карточек)
+        # постоянно: в зоне ВЫШЕ первой строки заглушка ВИДИМА в первой
+        # строке (сама держит клетку, row-keeper не нужен), в низовой полосе
+        # (НИЖЕ последней строки последней секции) — скрыта, но строки
+        # тоже не схлопываются (в этом лейауте); возврат в строку — без следов
         self._load(self._tabs10(), self.G10)
         rows_before = self._rows_of_group("gA")
         assert rows_before == 2, rows_before
@@ -9490,12 +9516,12 @@ class TestGhostOverGroupEmptyArea:
         pt = self._point("gA", "above")
         self._over_point(*pt)
         d = self._ghost()
-        assert d["hidden"] is True and d["keepers"] == 0, d
+        assert d["hidden"] is False and d["keepers"] == 0, d
         assert self._rows_of_group("gA") == rows_before
         pt = self._point("gA", "below")
         self._over_point(*pt)
         d = self._ghost()
-        assert d["hidden"] is True, d
+        assert d["hidden"] is True and d["keepers"] == 0, d
         assert self._rows_of_group("gA") == rows_before
         self._hover("A3")
         d = self._ghost()
@@ -9506,19 +9532,22 @@ class TestGhostOverGroupEmptyArea:
         self._end_drag()
 
     def test_ghost_visible_again_back_in_row(self):
-        # (4) из спрятанного состояния (пустая зона) курсор возвращается в
-        # строку карточек — заглушка снова видимая в честном слоте
+        # (4) из состояния «заглушка видима в первой строке» (зона выше
+        # первой строки — её территория) курсор возвращается в другую
+        # строку карточек — заглушка видимая в честном слоте (touch-rule:
+        # флип на противоположную сторону A7)
         self._load(self._tabs10(), self.G10)
         self._start_drag("A5")
         self._hover("A3")
         pt = self._point("gA", "above")
         self._over_point(*pt)
         d = self._ghost()
-        assert d["hidden"] is True, d
+        assert d["hidden"] is False, d
+        assert d["prevName"] == "A2" and d["nextName"] == "A3", d
         self._hover("A7")
         d = self._ghost()
-        # touch-rule: заглушка была ДО A7 в DOM (домашняя позиция после
-        # схвата A5) — A7 уехала влево, заглушка в её прежней ячейке (after)
+        # touch-rule: заглушка была ДО A7 в DOM (в первой строке) — A7
+        # уехала влево, заглушка в её прежней ячейке (after, prevName A7)
         assert d["hidden"] is False and d["prevName"] == "A7", d
         self._end_drag()
 
@@ -9547,30 +9576,33 @@ class TestGhostOverGroupEmptyArea:
         # слот вставки — заглушка занимается место карточки под курсором
         self._end_drag()
 
-    def test_drop_in_above_zone_cancels(self):
-        # (6) дроп в пустой полосе ВЫШЕ первой строки — ОТМЕНА: вкладка
-        # возвращается в исходный слот (порядок и groupId в storage не
-        # изменились), без заглушки/холдеров
+    def test_drop_in_above_zone_commits(self):
+        # (6) дроп в зоне ВЫШЕ первой строки (территория первой строки,
+        # owner A3 по span, подход сверху -> 'after') — КОММИТ: L1 встаёт
+        # после A3 и получает groupId gA
         tabs = self._tabs10() + [{"name": "L1", "url": "https://l1.com", "spaceId": "sp1"}]
         self._load(tabs, self.G10)
-        before = json.loads(self.page.evaluate("""(async () => {
-          const d = await chrome.storage.get('blattam-tabs');
-          return JSON.stringify(d['blattam-tabs'].map(t => [t.name, t.groupId]));
-        })()"""))
         self._start_drag("L1")
         pt = self._point("gA", "above")
         self._over_point(*pt)
+        d = self._ghost()
+        assert d["hidden"] is False and d["prevName"] == "A3" and d["nextName"] == "A4", d
         self._drop_point(*pt)
         self._end_drag()
         names = json.loads(self.page.evaluate("""(async () => {
           const d = await chrome.storage.get('blattam-tabs');
-          return JSON.stringify(d['blattam-tabs'].map(t => [t.name, t.groupId]));
+          return JSON.stringify(d['blattam-tabs'].map(t => [t.name, t.groupId || null]));
         })()"""))
-        assert names == before, (before, names)
+        assert names == [["A1", "gA"], ["A2", "gA"], ["A3", "gA"], ["L1", "gA"],
+                          ["A4", "gA"], ["A5", "gA"], ["A6", "gA"], ["A7", "gA"],
+                          ["A8", "gA"], ["A9", "gA"], ["A10", "gA"]], names
 
-    def test_single_card_group_both_zones(self):
+    def test_single_card_group_both_zones_visible(self):
         # (7) группа из ОДНОЙ карточки (S1, первая секция): обе пустые зоны
-        # (выше/ниже её единственной строки) прячут заглушку целиком
+        # (выше/ниже её единственной строки) — территории S1: заглушка
+        # ВИДИМАЯ (выше — после S1, подход сверху; ниже — midpoint-расщепление
+        # зоны между gS и gA: выше M — хвост gS, owner S1 — якорь заморожен:
+        # заглушка остаётся после S1)
         tabs = [{"name": "S1", "url": "https://s1.com", "spaceId": "sp1", "groupId": "gS"},
                 {"name": "A1", "url": "https://a1.com", "spaceId": "sp1", "groupId": "gA"},
                 {"name": "A2", "url": "https://a2.com", "spaceId": "sp1", "groupId": "gA"}]
@@ -9581,11 +9613,14 @@ class TestGhostOverGroupEmptyArea:
         pt = self._point("gS", "above")
         self._over_point(*pt)
         d = self._ghost()
-        assert d["exists"] is True and d["hidden"] is True, d
+        assert d["exists"] is True and d["hidden"] is False, d
+        assert d["prevName"] == "S1" and d["nextName"] is None, d
         pt = self._point("gS", "below")
         self._over_point(*pt)
         d = self._ghost()
-        assert d["hidden"] is True, d
+        assert d["hidden"] is False, d
+        # freeze по территории S1: заглушка остаётся после S1 (без рефлоу)
+        assert d["prevName"] == "S1" and d["nextName"] is None, d
         self._end_drag()
 
     def test_dragend_after_hidden_no_leftovers(self):
@@ -14199,19 +14234,19 @@ class TestGhostHiddenOverRail:
 # ==========================================
 
 class TestDragEmptyBandHome:
-    """Пустые полосы центр.сетки #tabs-list (все секции): (A) между низом
-    шапки секции (.gbar / .loose-label / верх списка) и верхом её первой
-    видимой строки карточек; (B) между низом последней строки и верхом
-    шапки следующей секции (.gbar — свёрнутой/развёрнутой / .loose-label /
-    #add-group-btn / низ списка); (C) вертикальный зазор сетки (row-gap)
-    между двумя строками карточек внутри секции. Над любой полосой заглушка
-    ПРЯЧЕТСЯ ЦЕЛИКОМ (display:none — как над шапкой группы), строки
-    исходной секции держит условный row-keeper; ДРОП в полосе — ОТМЕНА:
-    вкладка возвращается в исходный слот, storage не меняется, без
-    заглушки/холдеров. Пустые ячейки СВОЕЙ строки (справа от последней
-    карточки незаполненной строки, та же полоса Y) — не полоса: заглушка
-    остаётся видимой в потенциальном слоте. Дроп на .gbar / .group-empty-slot
-    / карточку / чип / рейку — semantics unchanged."""
+    """Территории (волна «нет ничейных полос»): зоны (A) между низом шапки
+    секции и верхом первой строки, (B) между низом последней строки и
+    шапкой следующей секции и (C) row-gap между строками секции — теперь
+    ТЕРРИТОРИИ карточек: заглушка ВИДИМА в слоте (midpoint-расщепление:
+    зона (B) выше M — хвост верхней секции, ниже M — первая строка нижней;
+    зона (C) выше M — верхняя строка, ниже M — нижняя; (A) — первая строка
+    по span, подход сверху -> side 'after'), дроп — КОММИТ в слот заглушки.
+    Осталась ОДНА полоса — низовая зона (ниже последней строки последней
+    секции: строка #add-group-btn + отступ): там по-прежнему заглушка
+    СКРЫТА (строку исходной секции держит row-keeper), дроп — ОТМЕНА.
+    Пустые ячейки СВОЕЙ строки (справа от последней карточки) — не полоса.
+    Дроп на .gbar / .group-empty-slot / карточку / чип / рейку — semantics
+    unchanged."""
 
     @pytest.fixture(autouse=True)
     def _setup(self, page):
@@ -14274,12 +14309,13 @@ class TestDragEmptyBandHome:
         }""", name)
         self.page.wait_for_timeout(50)
 
-    def _band_point(self, kind, gid):
+    def _band_point(self, kind, gid, half=None):
         # Точка пустой полосы: 'above' — между шапкой секции и первой
         # видимой строкой карточек; 'below' — между последней строкой и
         # шапкой следующей секции (.gbar / .loose-label / #add-group-btn);
         # 'gap' — vertical grid row-gap between two rows of the section
-        return self.page.evaluate("""([kind, gid]) => {
+        # (half: 'above'/'below' — половины зазора по midpoint-расщеплению)
+        return self.page.evaluate("""([kind, gid, half]) => {
           const list = document.getElementById('tabs-list').getBoundingClientRect();
           const kids = [...document.getElementById('tabs-list').children];
           const isHeader = el => el.classList.contains('gbar') || el.classList.contains('loose-label');
@@ -14320,9 +14356,14 @@ class TestDragEmptyBandHome:
           if (kind === 'above') y = (topBound + groups[0].top) / 2;
           else if (kind === 'below') y = (groups[groups.length - 1].bottom + nextTop) / 2;
           else { if (groups.length < 2) throw new Error('need 2+ rows for gap band');
-                 y = (groups[0].bottom + groups[1].top) / 2; }
+                 const M = (groups[0].bottom + groups[1].top) / 2;
+                 // half: 'above' — верхняя половина зазора (территория верхней
+                 // строки), 'below' — нижняя (территория нижней); без half — ровно M
+                 if (half === 'above') y = (groups[0].bottom + M) / 2;
+                 else if (half === 'below') y = (M + groups[1].top) / 2;
+                 else y = M; }
           return [list.left + list.width / 2, y];
-        }""", [kind, gid])
+        }""", [kind, gid, half])
 
     def _over_point(self, x, y):
         self.page.evaluate("""([x, y]) => {
@@ -14391,46 +14432,61 @@ class TestDragEmptyBandHome:
           return tops.length;
         }""", gid)
 
-    def test_ghost_hidden_band_above_first_row_group(self):
-        # (A) группа из 7 карточек (2 строки): курсор в полосе ВЫШЕ первой
-        # строки (между .gbar и первой строкой) — заглушка спрятана целиком
+    def test_ghost_visible_above_first_row_group(self):
+        # (A) группа из 7 карточек (2 строки): курсор в зоне ВЫШЕ первой
+        # строки (между .gbar и первой строкой) — ТЕРРИТОРИЯ первой строки:
+        # заглушка видима в её полосе (owner по span, подход сверху -> 'after')
         self._load()
         self._start_drag("A5")
+        a1 = self.page.evaluate("(() => window.__cards['A1'].getBoundingClientRect().top)()")
         self._over_point(*self._band_point("above", "gA"))
         d = self._ghost()
-        assert d["exists"] is True and d["hidden"] is True, d
+        assert d["exists"] is True and d["hidden"] is False, d
+        assert a1 - 1 <= d["top"] <= a1 + 1, (d, a1)  # в полосе первой строки
+        assert d["prevName"] == "A3" and d["nextName"] == "A4", d
         self._end_drag()
 
-    def test_ghost_hidden_band_below_last_row_before_next_gbar(self):
-        # (B) курсор в полосе НИЖЕ последней строки gA (между ней и шапкой
-        # свёрнутой gZ) — заглушка спрятана целиком
+    def test_ghost_visible_below_last_row_before_next_gbar(self):
+        # (B) курсор в зоне НИЖЕ последней строки gA (между ней и шапкой
+        # свёрнутой gZ): у gZ нет видимых карточек — вся зона за хвостом
+        # gA: заглушка видима в полосе последней строки (подход снизу -> 'before')
         self._load()
         self._start_drag("A5")
+        a6 = self.page.evaluate("(() => window.__cards['A6'].getBoundingClientRect().top)()")
         self._over_point(*self._band_point("below", "gA"))
         d = self._ghost()
-        assert d["exists"] is True and d["hidden"] is True, d
+        assert d["exists"] is True and d["hidden"] is False, d
+        assert a6 - 1 <= d["top"] <= a6 + 1, (d, a6)  # в полосе последней строки
+        assert d["prevName"] == "A6" and d["nextName"] == "A7", d
         self._end_drag()
 
-    def test_ghost_hidden_inter_row_gap(self):
-        # (C) курсор в вертикальном зазоре сетки МЕЖДУ строками карточек
-        # одной секции — заглушка спрятана целиком
+    def test_ghost_visible_inter_row_gap(self):
+        # (C) курсор в НИЖНЕЙ половине row-gap (ниже midpoint): территория
+        # нижней строки — заглушка видима в её полосе (подход сверху -> 'after')
         self._load()
         self._start_drag("A5")
-        pt = self._band_point("gap", "gA")
+        a6 = self.page.evaluate("(() => window.__cards['A6'].getBoundingClientRect().top)()")
+        pt = self._band_point("gap", "gA", half="below")
         assert pt is not None
         self._over_point(*pt)
         d = self._ghost()
-        assert d["exists"] is True and d["hidden"] is True, d
+        assert d["exists"] is True and d["hidden"] is False, d
+        assert a6 - 1 <= d["top"] <= a6 + 1, (d, a6)  # в полосе нижней строки
+        assert d["prevName"] == "A7" and d["nextName"] is None, d  # конец секции
         self._end_drag()
 
-    def test_ghost_hidden_loose_band_above_first_row(self):
-        # (A) негрупповая секция: полоса МЕЖДУ .loose-label и первой строкой
-        # карточек — заглушка спрятана целиком
+    def test_ghost_visible_loose_band_above_first_row(self):
+        # (A) негрупповая секция: зона МЕЖДУ .loose-label и первой строкой —
+        # территория первой строки loose (ниже midpoint зоны: у gZ-секции
+        # нет карточек): заглушка видима в полосе (подход сверху -> 'after')
         self._load()
         self._start_drag("A3")
+        l1 = self.page.evaluate("(() => window.__cards['L1'].getBoundingClientRect().top)()")
         self._over_point(*self._band_point("above", "loose"))
         d = self._ghost()
-        assert d["exists"] is True and d["hidden"] is True, d
+        assert d["exists"] is True and d["hidden"] is False, d
+        assert l1 - 1 <= d["top"] <= l1 + 1, (d, l1)  # в полосе первой строки loose
+        assert d["prevName"] == "L2" and d["nextName"] is None, d  # конец списка
         self._end_drag()
 
     def test_ghost_hidden_loose_band_below_last_row(self):
@@ -14443,52 +14499,57 @@ class TestDragEmptyBandHome:
         assert d["exists"] is True and d["hidden"] is True, d
         self._end_drag()
 
-    def test_release_in_band_above_first_row_cancels(self):
-        # дроп в полосе ВЫШЕ первой строки — ОТМЕНА: storage не изменился
-        # (порядок и groupId), карточка в исходном слоте, без следов
+    def test_release_above_first_row_commits(self):
+        # дроп в зоне ВЫШЕ первой строки (территория owner A3, подход сверху
+        # -> 'after') — КОММИТ в слот заглушки: A5 встаёт после A3, groupId
+        # не меняется, без следов
         self._load()
-        before = self._names_groups()
         self._start_drag("A5")
         self._over_point(*self._band_point("above", "gA"))
         self._drop_point(*self._band_point("above", "gA"))
         self._end_drag()
-        assert self._names_groups() == before, (before, self._names_groups())
-        pos = self.page.evaluate("""(() => {
-          const c = window.__cards['A5'];
-          return c.previousElementSibling && c.previousElementSibling.querySelector
-            && c.previousElementSibling.querySelector('.tab-name')
-              ? c.previousElementSibling.querySelector('.tab-name').textContent.trim() : null;
-        })()""")
-        assert pos == "A4", pos
+        assert self._names_groups() == [["A1", "gA"], ["A2", "gA"], ["A3", "gA"],
+                                        ["A5", "gA"], ["A4", "gA"], ["A6", "gA"],
+                                        ["A7", "gA"], ["Z1", "gZ"], ["L1", None],
+                                        ["L2", None]], self._names_groups()
+        # после коммита view перерисовывается: старый элемент исходника
+        # уничтожается — проверяем только отсутствие заглушек/холдеров
         lo = self._leftovers()
-        assert lo["slots"] == 0 and lo["keepers"] == 0 and lo["srcDisplay"] == "" and lo["srcConnected"] is True, lo
+        assert lo["slots"] == 0 and lo["keepers"] == 0, lo
 
-    def test_release_in_inter_row_gap_cancels(self):
-        # дроп в зазоре между строками — ОТМЕНА: storage не изменился
+    def test_release_inter_row_gap_commits(self):
+        # дроп в НИЖНЕЙ половине зазора между строками (территория нижней
+        # строки, owner A7, подход сверху -> 'after') — КОММИТ: A5 встаёт в
+        # хвост секции (после A7), без следов
         self._load()
-        before = self._names_groups()
         self._start_drag("A5")
-        pt = self._band_point("gap", "gA")
+        pt = self._band_point("gap", "gA", half="below")
         self._over_point(*pt)
         self._drop_point(*pt)
         self._end_drag()
-        assert self._names_groups() == before, (before, self._names_groups())
+        assert self._names_groups() == [["A1", "gA"], ["A2", "gA"], ["A3", "gA"],
+                                        ["A4", "gA"], ["A6", "gA"], ["A7", "gA"],
+                                        ["A5", "gA"], ["Z1", "gZ"], ["L1", None],
+                                        ["L2", None]], self._names_groups()
         lo = self._leftovers()
-        assert lo["slots"] == 0 and lo["keepers"] == 0 and lo["srcDisplay"] == "", lo
+        assert lo["slots"] == 0 and lo["keepers"] == 0, lo
 
-    def test_release_in_group_below_band_cancels(self):
-        # дроп в полосе НИЖЕ последней строки (до шапки свёрнутой gZ) —
-        # ОТМЕНА: не в хвост секции, storage не изменился
+    def test_release_below_last_row_commits(self):
+        # дроп в зоне НИЖЕ последней строки gA (до шапки свёрнутой gZ; у gZ
+        # нет карточек — хвост gA, owner A7, подход снизу -> 'before') —
+        # КОММИТ: A5 встаёт перед A7, без следов
         self._load()
-        before = self._names_groups()
         self._start_drag("A5")
         pt = self._band_point("below", "gA")
         self._over_point(*pt)
         self._drop_point(*pt)
         self._end_drag()
-        assert self._names_groups() == before, (before, self._names_groups())
+        assert self._names_groups() == [["A1", "gA"], ["A2", "gA"], ["A3", "gA"],
+                                        ["A4", "gA"], ["A6", "gA"], ["A5", "gA"],
+                                        ["A7", "gA"], ["Z1", "gZ"], ["L1", None],
+                                        ["L2", None]], self._names_groups()
         lo = self._leftovers()
-        assert lo["slots"] == 0 and lo["keepers"] == 0 and lo["srcDisplay"] == "", lo
+        assert lo["slots"] == 0 and lo["keepers"] == 0, lo
 
     def test_release_in_loose_band_cancels(self):
         # дроп в полосе негрупповой секции (до #add-group-btn) — ОТМЕНA:
@@ -14505,13 +14566,16 @@ class TestDragEmptyBandHome:
         assert lo["slots"] == 0 and lo["keepers"] == 0 and lo["srcDisplay"] == "", lo
 
     def test_cursor_back_to_row_ghost_visible(self):
-        # из спрятанного состояния (полоса) курсор возвращается в строку
-        # карточек — заглушка снова видимая в честном слоте
+        # из состояния «заглушка в зазоре между строками» (территория нижней
+        # строки: заглушка после A7, видима) курсор возвращается в строку
+        # карточек (на A7) — заглушка видима, якорь заморожен на территории
+        # A7 (без рефлоу)
         self._load()
         self._start_drag("A5")
-        self._over_point(*self._band_point("gap", "gA"))
+        self._over_point(*self._band_point("gap", "gA", half="below"))
         d = self._ghost()
-        assert d["hidden"] is True, d
+        assert d["exists"] is True and d["hidden"] is False, d
+        assert d["prevName"] == "A7" and d["nextName"] is None, d
         c7 = self.page.evaluate("""(() => {
           const r = window.__cards['A7'].getBoundingClientRect();
           return [r.left + r.width * 0.25, r.top + r.height * 0.5];
@@ -14519,24 +14583,30 @@ class TestDragEmptyBandHome:
         self._over_point(*c7)
         d = self._ghost()
         assert d["exists"] is True and d["hidden"] is False, d
-        # touch-rule: заглушка была ДО A7 в DOM (дом после схвата A5) —
-        # A7 уехала влево, заглушка в её прежней ячейке (after, prevName A7)
-        assert d["prevName"] == "A7", d
+        # freeze по территории A7: заглушка остаётся после A7 (без рефлоу)
+        assert d["prevName"] == "A7" and d["nextName"] is None, d
         self._end_drag()
 
     def test_row_keeper_holds_source_rows_in_band(self):
         # 11 карточек (3 строки 5+5+1): схвачена единственная карточка
-        # последней строки; пока заглушка спрятана в полосе, последнюю
-        # строку держит условный row-keeper (3 строки, 1 холдер)
+        # последней строки; пока заглушка спрятана в НИЗОВОЙ полосе (единственная
+        # оставшаяся), последнюю строку держит условный row-keeper
+        # (3 строки, 1 холдер)
         tabs = self._tabs(group_n=11)
         self._load(tabs)
         assert self._group_rows("gA") == 3, self._group_rows("gA")
         self._start_drag("A11")
-        self._over_point(*self._band_point("above", "gA"))
+        self._over_point(*self._band_point("below", "loose"))
         d = self._ghost()
         assert d["hidden"] is True and d["keepers"] == 1, d
         assert self._group_rows("gA") == 3
-        self._over_point(*self._band_point("gap", "gA"))
+        # и в другой точке той же низовой полосы
+        pt2 = self.page.evaluate("""(() => {
+          const lr = document.getElementById('tabs-list').getBoundingClientRect();
+          const b = document.getElementById('add-group-btn').getBoundingClientRect();
+          return [(lr.left + lr.right) / 2, b.bottom + (lr.bottom - b.bottom) / 2];
+        })()""")
+        self._over_point(*pt2)
         d = self._ghost()
         assert d["hidden"] is True and d["keepers"] == 1, d
         assert self._group_rows("gA") == 3
@@ -14544,9 +14614,9 @@ class TestDragEmptyBandHome:
         assert self._leftovers()["keepers"] == 0
 
     def test_pointer_release_in_band_cancels(self):
-        # pointer-путь (реальная мышь): press карточку, move >8px в
-        # inter-row gap полосы, release — вкладка возвращается домой,
-        # storage не изменился, без следов, без pageerror
+        # pointer-путь (реальная мышь): press карточку, move >8px в НИЗОВУЮ
+        # полосу (единственная оставшаяся), release — ОТМЕНА: вкладка
+        # возвращается домой, storage не изменился, без следов, без pageerror
         self._load()
         before = self._names_groups()
         self.page.evaluate("window.__srcCard = window.__cards['A3'];")
@@ -14554,7 +14624,7 @@ class TestDragEmptyBandHome:
           const r = window.__cards['A3'].getBoundingClientRect();
           return [r.left + r.width / 2, r.top + r.height / 2];
         })()""")
-        pt = self._band_point("gap", "gA")
+        pt = self._band_point("below", "loose")
         self.page.mouse.move(src[0], src[1])
         self.page.mouse.down()
         for i in range(1, 11):
@@ -14639,16 +14709,16 @@ class TestDragEmptyBandHome:
 
 
 class TestDragBandHeaderRowBottom:
-    """Полосы «целиком» (геометрия cardAreaEmptyBand расширена): (1) ЦЕЛАЯ
-    строка шапки секции — от её верха до верха первой строки секции:
-    компактная «пилюля» развёрнутой группы (.gbar, fit-content) занимает
-    лишь левую часть строки — ПУСТАЯ часть шапковой строки (справа от
-    пилюли) и строка .loose-label негрупповой секции — полоса: заглушка
-    прячется целиком, дроп — отмена; (2) нижняя зона списка: от последней
-    строки карточек до НИЗА .tabs-list — строка #add-group-btn и отступ
-    списка (110px) — полоса: заглушка прячется, дроп — отмена. Дроп НА
-    пилюлю .gbar — семантика прежняя (в пустую/свёрнутую группу — в
-    группу; в непустую — no-op)."""
+    """Территории (волна «нет ничейных полос»): (1) строка шапки секции —
+    от её верха до верха первой строки (ПУСТАЯ часть шапковой строки справа
+    от компактной пилюли .gbar и строка .loose-label) — ТЕРРИТОРИЯ первой
+    строки секции: заглушка видима в её полосе (owner по span, подход сверху
+    -> 'after'), дроп — КОММИТ в слот заглушки; (2) зона между группами (B) —
+    midpoint-расщепление: у нижней секции без видимых карточек (свёрнутая
+    gZ) вся зона — хвост верхней; (3) нижняя зона списка (строка
+    #add-group-btn + отступ) — ОСТАВШАЯСЯ полоса: заглушка прячется, дроп —
+    отмена. Дроп НА пилюлю .gbar — семантика прежняя (в пустую/свёрнутую
+    группу — в группу; в непустую — no-op)."""
 
     @pytest.fixture(autouse=True)
     def _setup(self, page):
@@ -14743,12 +14813,40 @@ class TestDragBandHeaderRowBottom:
           return [x, r.top + r.height / 2];
         }""", gid)
 
+    def _gbar_row_terr_point(self, gid="gA"):
+        # точка в шапной строке ПРАВАЯ от компактной пилюли (территория
+        # первой строки): x — центр A3, y — середина шапной строки
+        return self.page.evaluate("""(gid) => {
+          const bar = document.querySelector('#tabs-list .gbar[data-group-id="' + gid + '"]');
+          const c3 = [...document.querySelectorAll('#tabs-list .tab-card')]
+            .find(c => c.querySelector('.tab-name').textContent.trim() === 'A3');
+          const r = bar.getBoundingClientRect();
+          const c = c3.getBoundingClientRect();
+          return [c.left + c.width / 2, r.top + r.height / 2];
+        }""", gid)
+
     def _loose_label_row_point(self):
         return self.page.evaluate("""() => {
           const lbl = document.querySelector('#tabs-list .loose-label');
           const list = document.getElementById('tabs-list').getBoundingClientRect();
           const r = lbl.getBoundingClientRect();
           return [Math.min(r.right - 30, list.right - 4), r.top + r.height / 2];
+        }""")
+
+    def _loose_label_row_terr_point(self):
+        # зона между свёрнутой gZ и первой строкой loose (территория первой
+        # строки loose): x — центр L2 (справа от подписи), y — НИЖНЯЯ часть
+        # зоны (ниже midpoint: выше M — legacy, т.к. у gZ нет карточек)
+        return self.page.evaluate("""() => {
+          const gbar = document.querySelector('#tabs-list .gbar[data-group-id="gZ"]');
+          const c = n => [...document.querySelectorAll('#tabs-list .tab-card')]
+            .find(c => c.querySelector('.tab-name').textContent.trim() === n);
+          const l2 = c('L2'); // L1 может быть схвачен (скрыт) — строка по видимому L2
+          const gb = gbar.getBoundingClientRect().bottom;
+          const rowTop = l2.getBoundingClientRect().top;
+          const M = (gb + rowTop) / 2;
+          const r = l2.getBoundingClientRect();
+          return [r.left + r.width / 2, (M + rowTop) / 2];
         }""")
 
     def _inter_group_point(self, gid="gA"):
@@ -14828,40 +14926,54 @@ class TestDragBandHeaderRowBottom:
 
     # === (1) строка шапки секции — полоса: заглушка прячется ===
 
-    def test_ghost_hidden_over_expanded_gbar_row_right_of_pill(self):
+    def test_ghost_visible_gbar_row_right_of_pill(self):
         # курсор в ПУСТОЙ части шапковой строки развёрнутой группы (справа
-        # от компактной пилюли .gA) — заглушка спрятана целиком
+        # от компактной пилюли .gA) — территория первой строки: заглушка
+        # видима в её полосе (owner по span A3, подход сверху -> 'after')
         self._load()
         self._start_drag("A5")
-        pt = self._gbar_row_empty_point("gA")
+        a1 = self.page.evaluate("(() => window.__cards['A1'].getBoundingClientRect().top)()")
+        pt = self._gbar_row_terr_point("gA")
         self._over_point(*pt)
-        assert self._band_id(*pt) == "gA", pt
+        assert self._band_id(*pt) is None, pt  # не полоса — территория
         d = self._ghost()
-        assert d["exists"] is True and d["hidden"] is True, d
+        assert d["exists"] is True and d["hidden"] is False, d
+        assert a1 - 1 <= d["top"] <= a1 + 1, (d, a1)  # в полосе первой строки
+        assert d["prevName"] == "A3" and d["nextName"] == "A4", d
         self._end_drag()
 
-    def test_ghost_hidden_over_loose_label_row(self):
-        # негрупповая секция: курсор в строке .loose-label (справа от
-        # подписи) — заглушка спрятана целиком
+    def test_ghost_visible_over_loose_label_row(self):
+        # негрупповая секция: курсор в НИЖНЕЙ части зоны над первой строкой
+        # loose (строка .loose-label, справа от подписи; ниже midpoint) —
+        # территория первой строки loose: заглушка видима в её полосе
+        # (owner L2, подход сверху -> 'after')
         self._load()
         self._start_drag("A3")
-        pt = self._loose_label_row_point()
+        l1 = self.page.evaluate("(() => window.__cards['L1'].getBoundingClientRect().top)()")
+        pt = self._loose_label_row_terr_point()
         self._over_point(*pt)
-        assert self._band_id(*pt) == "loose", pt
+        assert self._band_id(*pt) is None, pt  # не полоса — территория
         d = self._ghost()
-        assert d["exists"] is True and d["hidden"] is True, d
+        assert d["exists"] is True and d["hidden"] is False, d
+        assert l1 - 1 <= d["top"] <= l1 + 1, (d, l1)  # в полосе первой строки loose
+        assert d["prevName"] == "L2" and d["nextName"] is None, d  # конец списка
         self._end_drag()
 
-    def test_ghost_hidden_between_groups_band_b(self):
-        # регресс: между группами — курсор в полосе (B) ниже последней
-        # строки gA (до шапки свёрнутой gZ) — заглушка спрятана целиком
+    def test_ghost_visible_between_groups_band_b(self):
+        # между группами — курсор в зоне (B) ниже последней строки gA (до
+        # шапки свёрнутой gZ): у gZ нет видимых карточек — вся зона за
+        # хвостом gA: заглушка видима в полосе последней строки (подход
+        # снизу -> 'before')
         self._load()
         self._start_drag("A5")
+        a6 = self.page.evaluate("(() => window.__cards['A6'].getBoundingClientRect().top)()")
         pt = self._inter_group_point("gA")
         self._over_point(*pt)
-        assert self._band_id(*pt) == "gA", pt
+        assert self._band_id(*pt) is None, pt  # не полоса — территория
         d = self._ghost()
-        assert d["exists"] is True and d["hidden"] is True, d
+        assert d["exists"] is True and d["hidden"] is False, d
+        assert a6 - 1 <= d["top"] <= a6 + 1, (d, a6)  # в полосе последней строки
+        assert d["prevName"] == "A6" and d["nextName"] == "A7", d
         self._end_drag()
 
     # === (2) нижняя зона списка — полоса: заглушка прячется ===
@@ -14907,10 +15019,24 @@ class TestDragBandHeaderRowBottom:
         assert lo["slots"] == 0 and lo["keepers"] == 0 and lo["srcDisplay"] == "" \
             and lo["srcConnected"] is True, lo
 
-    def test_release_over_gbar_row_right_of_pill_cancels(self):
-        # дроп в пустую часть шапковой строки развёрнутой группы — ОТМЕНА:
-        # порядок и groupId не изменились, карточка в исходном слоте
-        self._release_cancels("A5", self._gbar_row_empty_point("gA"), "A4")
+    def test_release_over_gbar_row_right_of_pill_commits(self):
+        # дроп в пустую часть шапковой строки развёрнутой группы (территория
+        # первой строки, owner A3, подход сверху -> 'after') — КОММИТ: A5
+        # встаёт после A3, groupId не меняется, без следов
+        self._load()
+        self._start_drag("A5")
+        pt = self._gbar_row_terr_point("gA")
+        self._over_point(*pt)
+        d = self._ghost()
+        assert d["hidden"] is False and d["prevName"] == "A3" and d["nextName"] == "A4", d
+        self._drop_point(*pt)
+        self._end_drag()
+        assert self._names_groups() == [["A1", "gA"], ["A2", "gA"], ["A3", "gA"],
+                                        ["A5", "gA"], ["A4", "gA"], ["A6", "gA"],
+                                        ["A7", "gA"], ["Z1", "gZ"], ["L1", None],
+                                        ["L2", None]], self._names_groups()
+        lo = self._leftovers()
+        assert lo["slots"] == 0 and lo["keepers"] == 0, lo
 
     def test_release_over_add_group_btn_row_cancels(self):
         # дроп на строку #add-group-btn — ОТМЕНА: не в хвост списка
@@ -14920,9 +15046,25 @@ class TestDragBandHeaderRowBottom:
         # дроп в отступ .tabs-list ниже #add-group-btn — ОТМЕНА
         self._release_cancels("A5", self._bottom_padding_point(), "A4")
 
-    def test_release_over_loose_label_row_cancels(self):
-        # дроп в строку .loose-label — ОТМЕНА: не в хвост «Без группы»
-        self._release_cancels("L1", self._loose_label_row_point(), None)
+    def test_release_over_loose_label_row_commits(self):
+        # дроп в НИЖНЕЙ части зоны над первой строкой loose (строка
+        # .loose-label, ниже midpoint; территория первой строки loose, owner
+        # L2, подход сверху -> 'after') — КОММИТ: L1 встаёт после L2 (конец
+        # списка), groupId null, без следов
+        self._load()
+        self._start_drag("L1")
+        pt = self._loose_label_row_terr_point()
+        self._over_point(*pt)
+        d = self._ghost()
+        assert d["hidden"] is False and d["prevName"] == "L2" and d["nextName"] is None, d
+        self._drop_point(*pt)
+        self._end_drag()
+        assert self._names_groups() == [["A1", "gA"], ["A2", "gA"], ["A3", "gA"],
+                                        ["A4", "gA"], ["A5", "gA"], ["A6", "gA"],
+                                        ["A7", "gA"], ["Z1", "gZ"], ["L2", None],
+                                        ["L1", None]], self._names_groups()
+        lo = self._leftovers()
+        assert lo["slots"] == 0 and lo["keepers"] == 0, lo
 
     # === регресс: семантика на пилюле и в строках карточек не тронута ===
 
@@ -14978,19 +15120,24 @@ class TestDragBandHeaderRowBottom:
           return [r.left + r.width / 2, r.top + r.height / 2];
         }""", name)
 
-    def test_pointer_over_gbar_row_right_of_pill_hidden(self):
+    def test_pointer_over_gbar_row_right_of_pill_visible(self):
         # pointer-путь: move в пустую часть шапковой строки развёрнутой
-        # группы — .tab-ghost-slot не видна (display:none)
+        # группы (территория первой строки) — .tab-ghost-slot ВИДИМА в
+        # слоте (после A3); release — КОММИТ в слот заглушки (A5 после A3)
         self._load()
         self.page.evaluate("window.__srcCard = window.__cards['A5'];")
-        self._pointer_move(self._card_center("A5"), self._gbar_row_empty_point("gA"))
+        self._pointer_move(self._card_center("A5"), self._gbar_row_terr_point("gA"))
         d = self._ghost()
-        assert d["exists"] is True and d["hidden"] is True, d
+        assert d["exists"] is True and d["hidden"] is False, d
+        assert d["prevName"] == "A3" and d["nextName"] == "A4", d
         self.page.mouse.up()
         self.page.wait_for_timeout(400)  # settle завершён
+        assert self._names_groups() == [["A1", "gA"], ["A2", "gA"], ["A3", "gA"],
+                                        ["A5", "gA"], ["A4", "gA"], ["A6", "gA"],
+                                        ["A7", "gA"], ["Z1", "gZ"], ["L1", None],
+                                        ["L2", None]], self._names_groups()
         lo = self._leftovers()
-        assert lo["slots"] == 0 and lo["keepers"] == 0 and lo["clones"] == 0 \
-            and lo["srcDisplay"] == "", lo
+        assert lo["slots"] == 0 and lo["keepers"] == 0 and lo["clones"] == 0, lo
 
     def test_pointer_release_in_bottom_region_cancels(self):
         # pointer-путь: release в нижней зоне (отступ .tabs-list ниже
@@ -16046,20 +16193,44 @@ class TestTouchOrientedMove:
         assert d["nextName"] is None and d["prevName"] == "C9", d
         self._end_drag()
 
-    # 6. Cross-row gap: ghost on row1 (home), cursor in the row2 gap between
-    #    C7 and C8 -> legacy center-line follow to the cursor's row (the
-    #    ghost lands before C8), unchanged from the cursor-oriented wave.
-    def test_cross_row_gap_follows_legacy(self):
+    # 6. Cross-row gap — TERRITORY (no man's land is gone): the ghost starts
+    #    in row1 (home, C1's cell); the row2 gap between C7 and C8 belongs to
+    #    C7 on its left half (midpoint split, integer-truncated event coords).
+    #    Hovering the left half of the C7|C8 gap pulls the ghost to row2,
+    #    BEFORE C7; crossing the midpoint into C7's territory (right half of
+    #    the ghost|C7 gap) moves it one card right, AFTER C7.
+    def test_cross_row_gap_territory_midpoint_split(self):
         self._load()
         self._start_drag("C1")
         r7 = self._card_rect("C7")
         r8 = self._card_rect("C8")
-        gx, gy = (r7["right"] + r8["left"]) / 2, r7["centerY"]
-        assert self._point_over_any_card(gx, gy) is False, (gx, gy)
-        self._over_point(gx, gy)
+        # Left half of the C7|C8 gap (clear of the ~0.6px midpoint).
+        x1 = r7["right"] + 1
+        y = r7["centerY"]
+        assert self._point_over_any_card(x1, y) is False, (x1, y)
+        self._over_point(x1, y)
         d = self._ghost()
         assert d["exists"] is True and d["hidden"] is False, d
-        assert d["nextName"] == "C8" and d["prevName"] == "C7", d
+        assert d["prevName"] == "C6" and d["nextName"] == "C7", (x1, d)
+        # Ghost now sits between C6 and C7; the gap to its RIGHT (ghost|C7)
+        # is split at its midpoint: the right half is C7's territory —
+        # crossing it moves the ghost one card right (after C7).
+        g = self.page.evaluate("""(() => {
+          const s = document.querySelector('.tab-ghost-slot');
+          const gs = s.getBoundingClientRect();
+          const c7 = [...document.querySelectorAll('#tabs-list .tab-card')]
+            .find(c => c.querySelector('.tab-name').textContent.trim() === 'C7');
+          const cr = c7.getBoundingClientRect();
+          return {right: gs.right, c7left: cr.left};
+        })()""")
+        # Cross the midpoint of the ghost|C7 gap by 1px (right half is C7's
+        # territory -> ghost moves after C7). Gap width is layout-dependent,
+        # so measure both edges live instead of a fixed +7px offset.
+        x2 = (g["right"] + g["c7left"]) / 2 + 1
+        self._over_point(x2, y)
+        d2 = self._ghost()
+        assert d2["exists"] is True and d2["hidden"] is False, d2
+        assert d2["prevName"] == "C7" and d2["nextName"] == "C8", (x2, d2)
         self._end_drag()
 
     # 7. Full drag+drop in both themes, both directions: drop commits at the
@@ -16186,3 +16357,559 @@ class TestTouchOrientedMove:
         self.page.mouse.move(c["x"], c["y"])
         self.page.mouse.up()
         self.page.wait_for_timeout(300)
+
+
+class TestNoMansLandTerritory:
+    """Территории вкладок — нет ничейных полос между вкладками и шапками.
+    Территория карточки = её rect + половина зазора до каждого соседа
+    (midpoint-расщепление: горизонтальное в строке, вертикальное между
+    строками/секциями, межсекционное — по середине зоны). Курсор в
+    территории несхваченной карточки -> заглушка ВИДИМА и закреплена за
+    ней (карточка сдвигается FLIP-ом и уступает свою клетку), отпущение —
+    КОММИТ в слот заглушки (никогда не отмена/возврат домой). Заглушка
+    скрыта + отмена — только в низовой полосе (ниже последней строки
+    последней секции: строка #add-group-btn + отступ) и над особыми
+    целями (.gbar/.group-empty-slot — дроп В группу, чипы, рейка).
+    Над первой шапкой вверху списка — legacy (заглушка в начале списка).
+
+    Фикстура: 1 пространство sp1; группа gA (7 карточек A1..A7 -> 2 строки
+    при 5 колонках: A1..A5 / A6..A7), группа gB (B1, B2), 2 loose-вкладки
+    (L1, L2); viewport 1280x800 -> 5 колонок. DOM: gbar(gA) A1..A7
+    gbar(gB) B1 B2 loose-label L1 L2 #add-group-btn."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self._errors = []
+        page.on("pageerror", self._on_err)
+        yield
+        assert not self._errors, self._errors
+        page.remove_listener("pageerror", self._on_err)
+
+    def _on_err(self, err):
+        self._errors.append(str(err))
+
+    SP = [{"id": "sp1", "name": "Main"}]
+    GROUPS = [{"id": "gA", "name": "A", "spaceId": "sp1", "collapsed": False},
+              {"id": "gB", "name": "B", "spaceId": "sp1", "collapsed": False}]
+
+    def _tabs(self):
+        t = [{"name": "A%d" % i, "url": "https://a%d.com" % i,
+              "spaceId": "sp1", "groupId": "gA"} for i in range(1, 8)]
+        t += [{"name": "B%d" % i, "url": "https://b%d.com" % i,
+               "spaceId": "sp1", "groupId": "gB"} for i in range(1, 3)]
+        t += [{"name": "L%d" % i, "url": "https://l%d.com" % i,
+               "spaceId": "sp1"} for i in range(1, 3)]
+        return t
+
+    def _load(self, theme=None, collapsed_b=False):
+        groups = [dict(g) for g in self.GROUPS]
+        if collapsed_b:
+            groups[1]["collapsed"] = True
+        load_view(self.page, spaces=self.SP, groups=groups,
+                  tabs=self._tabs(), last_space="sp1", theme=theme)
+        css = load_file("theme.css")
+        html = load_file("view.html")
+        style_block = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate("""(css) => {
+          const s = document.createElement('style');
+          s.textContent = css;
+          document.head.appendChild(s);
+        }""", css + style_block)
+        self.page.set_viewport_size({"width": 1280, "height": 800})
+        self.page.mouse.move(0, 0)
+        self.page.wait_for_timeout(200)
+
+    def _card(self, name):
+        return self.page.evaluate("""(name) => {
+          const c = [...document.querySelectorAll('#tabs-list .tab-card')]
+            .find(c => c.querySelector('.tab-name').textContent.trim() === name);
+          if (!c) return null;
+          const r = c.getBoundingClientRect();
+          return {left: r.left, right: r.right, top: r.top, bottom: r.bottom,
+                  width: r.width, centerY: r.top + r.height / 2};
+        }""", name)
+
+    def _start_drag(self, name):
+        self.page.evaluate("""(name) => {
+          const card = [...document.querySelectorAll('#tabs-list .tab-card')]
+            .find(c => c.querySelector('.tab-name').textContent.trim() === name);
+          window.__srcCard = card;
+          const dt = new DataTransfer();
+          window.__dt = dt;
+          card.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true, cancelable: true}));
+        }""", name)
+        self.page.wait_for_timeout(50)
+
+    def _over_point(self, x, y):
+        self.page.evaluate("""([x, y]) => {
+          document.getElementById('tabs-list').dispatchEvent(new DragEvent('dragover', {
+            dataTransfer: window.__dt, bubbles: true, cancelable: true, clientX: x, clientY: y
+          }));
+        }""", [x, y])
+
+    def _drop_point(self, x, y):
+        self.page.evaluate("""([x, y]) => {
+          document.getElementById('tabs-list').dispatchEvent(new DragEvent('drop', {
+            dataTransfer: window.__dt, bubbles: true, cancelable: true, clientX: x, clientY: y
+          }));
+        }""", [x, y])
+
+    def _end_drag(self):
+        self.page.evaluate("""(() => {
+          const card = window.__srcCard;
+          if (card) card.dispatchEvent(new DragEvent('dragend', {bubbles: true, cancelable: true}));
+        })()""")
+
+    def _ghost(self):
+        return json.loads(self.page.evaluate("""(() => {
+          const slot = document.querySelector('.tab-ghost-slot');
+          const nm = el => el && el.querySelector && el.querySelector('.tab-name')
+            ? el.querySelector('.tab-name').textContent.trim() : null;
+          const r = slot ? slot.getBoundingClientRect() : null;
+          return JSON.stringify({
+            exists: !!slot,
+            hidden: slot ? getComputedStyle(slot).display === 'none' : false,
+            prevName: slot ? nm(slot.previousElementSibling) : null,
+            nextName: slot ? nm(slot.nextElementSibling) : null,
+            top: r ? r.top : null, bottom: r ? r.bottom : null
+          });
+        })()"""))
+
+    def _storage_order(self):
+        return json.loads(self.page.evaluate("""(async () => {
+          const d = await chrome.storage.get('blattam-tabs');
+          return JSON.stringify((d['blattam-tabs'] || []).map(t => t.name));
+        })()"""))
+
+    def _group_of(self, name):
+        return self.page.evaluate("""(async (name) => {
+          const d = await chrome.storage.get('blattam-tabs');
+          const t = (d['blattam-tabs'] || []).find(t => t.name === name);
+          return t ? t.groupId : null;
+        })""", name)
+
+    def _gbar_rect(self, group_id):
+        return self.page.evaluate("""(gid) => {
+          const el = [...document.querySelectorAll('#tabs-list .gbar')]
+            .find(el => el.dataset.groupId === gid);
+          if (!el) return null;
+          const r = el.getBoundingClientRect();
+          return {left: r.left, right: r.right, top: r.top, bottom: r.bottom};
+        }""", group_id)
+
+    def _loose_label_rect(self):
+        return self.page.evaluate("""(() => {
+          const el = document.querySelector('#tabs-list .loose-label');
+          if (!el) return null;
+          const r = el.getBoundingClientRect();
+          return {left: r.left, right: r.right, top: r.top, bottom: r.bottom};
+        })()""")
+
+    def _bottom_point(self):
+        """Точка в низовой полосе: строка #add-group-btn под последней строкой."""
+        return self.page.evaluate("""(() => {
+          const lr = document.getElementById('tabs-list').getBoundingClientRect();
+          const btn = document.getElementById('add-group-btn').getBoundingClientRect();
+          return {x: (lr.left + lr.right) / 2, y: (btn.top + btn.bottom) / 2};
+        })()""")
+
+    # 1. Зазор между двумя карточками, левая половина: заглушка ВИДИМА,
+    #    якорь на левой карточке (подход справа -> side 'before'); движение
+    #    внутри левой половины НЕ вызывает рефлоу (freeze по owner).
+    def test_gap_left_half_ghost_visible_on_left_card(self):
+        self._load()
+        self._start_drag("A7")
+        r2, r3 = self._card("A2"), self._card("A3")
+        assert r3["left"] - r2["right"] > 4, (r2, r3)  # реальный зазор
+        gx = r2["right"] + (r3["left"] - r2["right"]) * 0.25
+        self._over_point(gx, r2["centerY"])
+        d = self._ghost()
+        assert d["exists"] is True and d["hidden"] is False, d
+        assert d["nextName"] == "A2" and d["prevName"] == "A1", d  # заглушка перед A2 (A1 — слева)
+        a3_before = self._card("A3")
+        for f in (0.10, 0.40):  # движение внутри левой половины — стабильно
+            self._over_point(r2["right"] + (r3["left"] - r2["right"]) * f, r2["centerY"])
+            d = self._ghost()
+            assert d["hidden"] is False and d["nextName"] == "A2", (f, d)
+            assert abs(self._card("A3")["left"] - a3_before["left"]) < 0.5, "рефлоу в своей половине"
+        self._end_drag()
+
+    # 2. Пересечение midpoints зазора: якорь перескакивает на правую
+    #    карточку — заглушка ПОСЛЕ неё (подход слева -> side 'after'),
+    #    rect'и сдвинулись (правая карточка уехала влево, уступив клетку).
+    def test_gap_midpoint_cross_reflows_to_right_card(self):
+        self._load()
+        self._start_drag("A7")
+        r2, r3 = self._card("A2"), self._card("A3")
+        self._over_point(r2["right"] + (r3["left"] - r2["right"]) * 0.25, r2["centerY"])
+        d = self._ghost()
+        assert d["nextName"] == "A2" and d["prevName"] == "A1", d  # заглушка перед A2
+        a3_h1 = self._card("A3")  # A3 после рефлоу (заглушка заняла старую клетку A2)
+        # Рефлоу сдвинул зазор A2-A3: пересчитываем по текущим rect'ам и
+        # пересекаем midpoint НОВОГО зазора — в территорию правой карточки.
+        n2, n3 = self._card("A2"), self._card("A3")
+        assert n2["left"] > r2["left"], (r2, n2)  # A2 уехала вправо на клетку
+        self._over_point(n2["right"] + (n3["left"] - n2["right"]) * 0.75, n2["centerY"])
+        d = self._ghost()
+        assert d["exists"] is True and d["hidden"] is False, d
+        assert d["prevName"] == "A3" and d["nextName"] == "A4", d
+        a3_after = self._card("A3")
+        assert a3_after["left"] < a3_h1["left"] - 1, (a3_h1, a3_after)  # A3 сдвинулась влево (уступила клетку заглушке)
+        self._end_drag()
+
+    # 3. Полный drag+drop в левой половине зазора: вставка ПЕРЕД левой
+    #    карточкой (side 'before' по подходу справа) — точный порядок.
+    def test_drop_left_half_gap_inserts_before_left_card(self):
+        self._load()
+        self._start_drag("A7")
+        r2, r3 = self._card("A2"), self._card("A3")
+        gx = r2["right"] + (r3["left"] - r2["right"]) * 0.25
+        self._over_point(gx, r2["centerY"])
+        self._drop_point(gx, r2["centerY"])
+        self._end_drag()
+        assert self._storage_order() == ["A1", "A7", "A2", "A3", "A4", "A5", "A6",
+                                         "B1", "B2", "L1", "L2"]
+
+    # 4. Drop в правой половине того же зазора: вставка ПОСЛЕ правой
+    #    карточки (side 'after' по подходу слева) — точный порядок.
+    def test_drop_right_half_gap_inserts_after_right_card(self):
+        self._load()
+        self._start_drag("A7")
+        r2, r3 = self._card("A2"), self._card("A3")
+        gx = r2["right"] + (r3["left"] - r2["right"]) * 0.75
+        self._over_point(gx, r2["centerY"])
+        self._drop_point(gx, r2["centerY"])
+        self._end_drag()
+        assert self._storage_order() == ["A1", "A2", "A3", "A7", "A4", "A5", "A6",
+                                         "B1", "B2", "L1", "L2"]
+
+    # 5. Шапная строка развёрнутой группы (справа от компактной пилюли) —
+    #    территория первой строки: заглушка видима в полосе первой строки
+    #    (после owner по span, подход сверху -> side 'after'); drop — вкладка
+    #    уходит В группу, порядок — после owner.
+    def test_header_row_expanded_group_ghost_in_first_row_drop_into_group(self):
+        self._load()
+        self._start_drag("B2")
+        gbar = self._gbar_rect("gA")
+        a1, a3 = self._card("A1"), self._card("A3")
+        assert gbar is not None and a3 is not None
+        y = gbar["top"] + (a1["top"] - gbar["top"]) * 0.5  # середина шапной строки
+        x = a3["left"] + a3["width"] * 0.5
+        self._over_point(x, y)
+        d = self._ghost()
+        assert d["exists"] is True and d["hidden"] is False, d
+        assert a1["top"] - 1 <= d["top"] <= a1["top"] + 1, (d, a1["top"])  # в полосе первой строки
+        assert d["prevName"] == "A3" and d["nextName"] == "A4", d
+        self._drop_point(x, y)
+        self._end_drag()
+        assert self._group_of("B2") == "gA"
+        assert self._storage_order() == ["A1", "A2", "A3", "B2", "A4", "A5", "A6", "A7",
+                                         "B1", "L1", "L2"]
+
+    # 6. Шапная строка loose-секции (.loose-label) — территория первой
+    #    строки loose: заглушка видима после owner по span; drop — groupId
+    #    становится null, порядок — после owner.
+    def test_header_row_loose_label_ghost_in_first_row_drop_loose(self):
+        self._load()
+        self._start_drag("B2")
+        label = self._loose_label_rect()
+        l1, l2 = self._card("L1"), self._card("L2")
+        assert label is not None and l2 is not None
+        y = label["top"] + (l1["top"] - label["top"]) * 0.5
+        x = l2["left"] + l2["width"] * 0.5
+        self._over_point(x, y)
+        d = self._ghost()
+        assert d["exists"] is True and d["hidden"] is False, d
+        assert l1["top"] - 1 <= d["top"] <= l1["top"] + 1, (d, l1["top"])
+        assert d["prevName"] == "L2" and d["nextName"] is None, d  # конец списка
+        self._drop_point(x, y)
+        self._end_drag()
+        assert self._group_of("B2") is None
+        assert self._storage_order() == ["A1", "A2", "A3", "A4", "A5", "A6", "A7",
+                                         "B1", "L1", "L2", "B2"]
+
+    # 7. Межсекционный зазор ВЫШЕ midpoints: заглушка в хвосте верхней
+    #    секции (перед owner последней строки, подход снизу -> 'before');
+    #    drop — коммит в хвост верхней секции (groupId верхней).
+    def test_intersection_gap_above_midpoint_tail_of_upper_section(self):
+        self._load()
+        self._start_drag("B1")
+        a6, a7 = self._card("A6"), self._card("A7")
+        b2 = self._card("B2")
+        M = (a7["bottom"] + b2["top"]) / 2
+        y = (a7["bottom"] + M) / 2  # выше M — ближе к верхней секции
+        assert y < M, (y, M)
+        x = a7["left"] + a7["width"] * 0.5
+        self._over_point(x, y)
+        d = self._ghost()
+        assert d["exists"] is True and d["hidden"] is False, d
+        assert a6["top"] - 1 <= d["top"] <= a6["top"] + 1, (d, a6["top"])  # полоса последней строки gA
+        assert d["prevName"] == "A6" and d["nextName"] == "A7", d
+        # Рефлоу: заглушка заняла клетку A7 — территория A7 сдвинулась вправо,
+        # граница span'ов теперь в центре СТАРОЙ клетки. Дроп — в центре НОВОЙ
+        # позиции A7 (всё ещё межсекционный зазор выше M).
+        a7n = self._card("A7")
+        self._drop_point(a7n["left"] + a7n["width"] * 0.5, y)
+        self._end_drag()
+        assert self._group_of("B1") == "gA"
+        assert self._storage_order() == ["A1", "A2", "A3", "A4", "A5", "A6", "B1", "A7",
+                                         "B2", "L1", "L2"]
+
+    # 8. Межсекционный зазор НИЖЕ midpoints: заглушка в первой строке нижней
+    #    секции (после owner, подход сверху -> 'after'); drop — начало нижней
+    #    секции (groupId нижней).
+    def test_intersection_gap_below_midpoint_start_of_lower_section(self):
+        self._load()
+        self._start_drag("A7")
+        a6 = self._card("A6")
+        b1, b2 = self._card("B1"), self._card("B2")
+        M = (a6["bottom"] + b1["top"]) / 2
+        y = (M + b1["top"]) / 2  # ниже M — ближе к нижней секции
+        assert y > M, (y, M)
+        x = b1["left"] + b1["width"] * 0.5
+        self._over_point(x, y)
+        d = self._ghost()
+        assert d["exists"] is True and d["hidden"] is False, d
+        assert b1["top"] - 1 <= d["top"] <= b1["top"] + 1, (d, b1["top"])  # полоса первой строки gB
+        assert d["prevName"] == "B1" and d["nextName"] == "B2", d
+        self._drop_point(x, y)
+        self._end_drag()
+        assert self._group_of("A7") == "gB"
+        assert self._storage_order() == ["A1", "A2", "A3", "A4", "A5", "A6", "B1", "A7",
+                                         "B2", "L1", "L2"]
+
+    # 9. Row-gap внутри секции: выше M — заглушка в полосе верхней строки
+    #    (перед owner, подход снизу -> 'before'); ниже M — в полосе нижней
+    #    (после owner, подход сверху -> 'after').
+    def test_row_gap_split_by_midpoint(self):
+        self._load()
+        self._start_drag("A7")  # A7 из второй строки: строка 2 = [A6]
+        a3 = self._card("A3")
+        a6 = self._card("A6")
+        M = (a3["bottom"] + a6["top"]) / 2
+        y_above = (a3["bottom"] + M) / 2
+        assert y_above < M, (y_above, M)
+        x = a3["left"] + a3["width"] * 0.5
+        self._over_point(x, y_above)
+        d = self._ghost()
+        assert d["exists"] is True and d["hidden"] is False, d
+        assert a3["top"] - 1 <= d["top"] <= a3["top"] + 1, (d, a3["top"])  # верхняя строка
+        assert d["prevName"] == "A2" and d["nextName"] == "A3", d
+        self._end_drag()
+        self._start_drag("A1")  # свежий драг: A1 из первой строки
+        a3 = self._card("A3")
+        a6 = self._card("A6")
+        M = (a3["bottom"] + a6["top"]) / 2
+        y_below = (M + a6["top"]) / 2
+        assert y_below > M, (y_below, M)
+        x = a6["left"] + a6["width"] * 0.5
+        self._over_point(x, y_below)
+        d = self._ghost()
+        assert d["exists"] is True and d["hidden"] is False, d
+        assert a6["top"] - 1 <= d["top"] <= a6["top"] + 1, (d, a6["top"])  # нижняя строка
+        assert d["prevName"] == "A6" and d["nextName"] == "A7", d
+        self._end_drag()
+
+    # 10. Над СВЁРНУТОЙ группой (между последней строкой верхней секции и
+    #     её шапкой): заглушка ВИДИМА в хвосте верхней секции (у N нет
+    #     видимых карточек — вся зона за хвостом S, подход снизу -> 'before');
+    #     drop — КОММИТ в хвост верхней секции (НЕ отмена, НЕ в свёрнутую
+    #     группу: группа остаётся свёрнутой).
+    def test_above_collapsed_group_ghost_at_upper_tail_drop_commits(self):
+        self._load(collapsed_b=True)
+        self._start_drag("L1")
+        a6, a7 = self._card("A6"), self._card("A7")
+        gbar_b = self._gbar_rect("gB")
+        assert gbar_b is not None
+        y = (a7["bottom"] + gbar_b["top"]) / 2
+        assert a7["bottom"] < y < gbar_b["top"], (y, a7["bottom"], gbar_b["top"])
+        x = a7["left"] + a7["width"] * 0.5
+        self._over_point(x, y)
+        d = self._ghost()
+        assert d["exists"] is True and d["hidden"] is False, d
+        assert d["prevName"] == "A6" and d["nextName"] == "A7", d
+        # Рефлоу: заглушка заняла клетку A7 — дроп в центре НОВОЙ позиции A7
+        # (зона над свёрнутой группой не меняется).
+        a7n = self._card("A7")
+        self._drop_point(a7n["left"] + a7n["width"] * 0.5, y)
+        self._end_drag()
+        assert self._group_of("L1") == "gA"
+        assert self._storage_order() == ["A1", "A2", "A3", "A4", "A5", "A6", "L1", "A7",
+                                         "B1", "B2", "L2"]
+        # гB осталась свёрнутой (вкладка в неё не ушла)
+        collapsed = self.page.evaluate("""(async () => {
+          const d = await chrome.storage.get('blattam-groups');
+          return (d['blattam-groups'] || []).find(g => g.id === 'gB').collapsed;
+        })()""")
+        assert collapsed is True
+
+    # 11. Низовая полоса (строка #add-group-btn + отступ под последней
+    #     строкой последней секции) — ОСТАВШАЯСЯ полоса: заглушка СКРЫТА,
+    #     drop — ОТМЕНА (storage не тронут). Регрессия.
+    def test_bottom_band_ghost_hidden_drop_cancels(self):
+        self._load()
+        self._start_drag("A1")
+        p = self._bottom_point()
+        self._over_point(p["x"], p["y"])
+        d = self._ghost()
+        assert d["exists"] is True and d["hidden"] is True, d
+        self._drop_point(p["x"], p["y"])
+        self._end_drag()
+        assert self._storage_order() == ["A1", "A2", "A3", "A4", "A5", "A6", "A7",
+                                         "B1", "B2", "L1", "L2"]
+
+    # 12. Над первой шапкой вверху списка — legacy: заглушка в НАЧАЛЕ
+    #     списка (перед первой карточкой), drop — позиция 0.
+    def test_above_first_header_legacy_ghost_at_list_start(self):
+        self._load()
+        self._start_drag("L2")
+        gbar_a = self._gbar_rect("gA")
+        a1 = self._card("A1")
+        y = gbar_a["top"] - 4
+        assert y < gbar_a["top"], (y, gbar_a)
+        x = a1["left"] + a1["width"] * 0.5
+        self._over_point(x, y)
+        d = self._ghost()
+        assert d["exists"] is True and d["hidden"] is False, d
+        assert d["nextName"] == "A1" and d["prevName"] is None, d
+        self._drop_point(x, y)
+        self._end_drag()
+        assert self._storage_order()[0] == "L2"
+        assert self._group_of("L2") == "gA"  # слот — в секции gA (начало списка)
+        assert self._storage_order() == ["L2", "A1", "A2", "A3", "A4", "A5", "A6", "A7",
+                                         "B1", "B2", "L1"]
+
+    # 13. Полный drag по ВСЕМ зонам в обеих темах без pageerror: территории —
+    #     заглушка видима, низовая полоса — скрыта.
+    def test_full_walk_all_zones_both_themes_no_pageerror(self):
+        for theme in (None, "dark"):
+            self._load(theme=theme)
+            self._start_drag("A7")
+            gbar_a = self._gbar_rect("gA")
+            a1, a2, a3 = self._card("A1"), self._card("A2"), self._card("A3")
+            # (a) над первой шапкой — legacy, видима в начале списка
+            self._over_point(a1["left"] + 10, gbar_a["top"] - 4)
+            d = self._ghost()
+            assert d["hidden"] is False and d["nextName"] == "A1", (theme, "a", d)
+            # (b) шапная строка gA — видима в первой строке
+            a1, a3 = self._card("A1"), self._card("A3")
+            self._over_point(a3["left"] + a3["width"] / 2, gbar_a["top"] + (a1["top"] - gbar_a["top"]) / 2)
+            d = self._ghost()
+            assert d["hidden"] is False and d["nextName"] == "A4", (theme, "b", d)
+            # (c) левая половина зазора A2-A3 — видима перед A2
+            a2, a3 = self._card("A2"), self._card("A3")
+            self._over_point(a2["right"] + (a3["left"] - a2["right"]) * 0.25, a2["centerY"])
+            d = self._ghost()
+            assert d["hidden"] is False and d["nextName"] == "A2", (theme, "c", d)
+            # (d) row-gap gA выше M — видима в первой строке
+            a3, a6 = self._card("A3"), self._card("A6")
+            M = (a3["bottom"] + a6["top"]) / 2
+            self._over_point(a3["left"] + a3["width"] / 2, (a3["bottom"] + M) / 2)
+            d = self._ghost()
+            assert d["hidden"] is False, (theme, "d", d)
+            # (e) row-gap gA ниже M — видима во второй строке
+            a3, a6 = self._card("A3"), self._card("A6")
+            M = (a3["bottom"] + a6["top"]) / 2
+            self._over_point(a6["left"] + a6["width"] / 2, (M + a6["top"]) / 2)
+            d = self._ghost()
+            assert d["hidden"] is False, (theme, "e", d)
+            # (f) межсекционный зазор gA-gB выше M — видима в хвосте gA
+            a6, a7 = self._card("A6"), self._card("A7")
+            b2 = self._card("B2")
+            M = (a7["bottom"] + b2["top"]) / 2
+            self._over_point(a7["left"] + a7["width"] / 2, (a7["bottom"] + M) / 2)
+            d = self._ghost()
+            assert d["hidden"] is False, (theme, "f", d)
+            # (g) межсекционный зазор ниже M — видима в первой строке gB
+            a6, b1 = self._card("A6"), self._card("B1")
+            M = (a6["bottom"] + b1["top"]) / 2
+            self._over_point(b1["left"] + b1["width"] / 2, (M + b1["top"]) / 2)
+            d = self._ghost()
+            assert d["hidden"] is False, (theme, "g", d)
+            # (h) шапная строка loose — видима в её первой строке
+            label = self._loose_label_rect()
+            l1, l2 = self._card("L1"), self._card("L2")
+            self._over_point(l2["left"] + l2["width"] / 2, label["top"] + (l1["top"] - label["top"]) / 2)
+            d = self._ghost()
+            assert d["hidden"] is False and d["nextName"] is None, (theme, "h", d)
+            # (i) низовая полоса — скрыта
+            p = self._bottom_point()
+            self._over_point(p["x"], p["y"])
+            d = self._ghost()
+            assert d["hidden"] is True, (theme, "i", d)
+            self._end_drag()
+
+    # 14. Dragend без drop: без следов — заглушки/холдеры удалены, все
+    #     карточки видны, storage не тронут.
+    def test_dragend_without_drop_no_leftovers(self):
+        self._load()
+        self._start_drag("A7")
+        a2, a3 = self._card("A2"), self._card("A3")
+        self._over_point(a2["right"] + (a3["left"] - a2["right"]) * 0.25, a2["centerY"])
+        d = self._ghost()
+        assert d["exists"] is True and d["hidden"] is False, d
+        self._end_drag()
+        state = self.page.evaluate("""(() => JSON.stringify({
+          ghosts: document.querySelectorAll('.tab-ghost-slot').length,
+          clones: document.querySelectorAll('.pd-clone').length,
+          keepers: document.querySelectorAll('.tab-row-keeper').length,
+          hiddenCards: [...document.querySelectorAll('#tabs-list .tab-card')]
+            .filter(c => c.style.display === 'none').length
+        }))()""")
+        s = json.loads(state)
+        assert s["ghosts"] == 0 and s["clones"] == 0 and s["keepers"] == 0, s
+        assert s["hiddenCards"] == 0, s
+        assert self._storage_order() == ["A1", "A2", "A3", "A4", "A5", "A6", "A7",
+                                         "B1", "B2", "L1", "L2"]
+
+    # 15. REAL MOUSE (pointer-путь): хождение из rect A2 в rect A3 через
+    #     зазор — в левой половине зазора якорь стабилен (freeze), рефлоу
+    #     происходит при пересечении MIDPOINT'а (не на границе rect A3),
+    #     в rect A3 — стабильно. Отпускание в низовой полосе — отмена.
+    def test_real_mouse_gap_walk_freeze_then_midpoint_reflow(self):
+        self._load()
+        a1 = self._card("A1")
+        x, y = a1["left"] + a1["width"] * 0.5, a1["centerY"]
+        self.page.mouse.move(x, y)
+        self.page.mouse.down()
+        self.page.mouse.move(x + 14, y)  # arm (>8px) — A1 yanked out
+        self.page.wait_for_timeout(300)
+        a2, a3 = self._card("A2"), self._card("A3")  # re-measure after the yank
+        gap = a3["left"] - a2["right"]
+        assert gap > 4, gap
+        # шаг к центру A2 — touch: заглушка после A2
+        self.page.mouse.move(a2["left"] + a2["width"] * 0.5, y)
+        self.page.wait_for_timeout(250)
+        d_touch = self._ghost()
+        assert d_touch["prevName"] == "A2" and d_touch["nextName"] == "A3", d_touch
+        # левая половина зазора — freeze: заглушка не двигается
+        self.page.mouse.move(a2["right"] + gap * 0.25, y)
+        self.page.wait_for_timeout(120)
+        d_left = self._ghost()
+        assert d_left["prevName"] == "A2" and d_left["nextName"] == "A3", d_left
+        a3_still = self._card("A3")
+        assert abs(a3_still["left"] - a3["left"]) < 0.5, "рефлоу в левой половине"
+        # правая половина — рефлоу: заглушка после A3 (пересечён midpoint)
+        self.page.mouse.move(a2["right"] + gap * 0.75, y)
+        self.page.wait_for_timeout(300)
+        d_right = self._ghost()
+        assert d_right["prevName"] == "A3" and d_right["nextName"] == "A4", d_right
+        a3_new = self._card("A3")
+        assert a3_new["left"] < a3["left"] - 1, (a3, a3_new)  # A3 уехала влево
+        # рефлоу случился в точке ЛЕВЕЕ старого левого края A3 (midpoint,
+        # а не граница rect)
+        assert a2["right"] + gap * 0.75 < a3["left"], (gap, a3["left"])
+        # в rect A3 (новом) — freeze: стабильно
+        self.page.mouse.move(a3_new["left"] + a3_new["width"] * 0.5, y)
+        self.page.wait_for_timeout(250)
+        d_in3 = self._ghost()
+        assert d_in3["prevName"] == "A3" and d_in3["nextName"] == "A4", d_in3
+        # отпускание в низовой полосе — отмена
+        p = self._bottom_point()
+        self.page.mouse.move(p["x"], p["y"])
+        self.page.wait_for_timeout(120)
+        self.page.mouse.up()
+        self.page.wait_for_timeout(300)
+        assert self._storage_order() == ["A1", "A2", "A3", "A4", "A5", "A6", "A7",
+                                         "B1", "B2", "L1", "L2"]
