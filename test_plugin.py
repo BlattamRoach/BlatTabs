@@ -2268,13 +2268,23 @@ class TestSelectedBatchDnD:
         self._drag_end(3)
 
     def test_drop_batch_no_change_is_noop(self):
-        # Выделены A и B; перетаскиваем A «перед B» (якорь — член батча):
-        # порядок и группы не меняются → ни place-tab, ни place-tabs не шлется
+        # Выделены A и B; перетаскиваем A; дроп в клетку заглушки дома
+        # (sticky-якорь «перед B», якорь — член батча): порядок и группы не
+        # меняются → ни place-tab, ни place-tabs не шлется
         load_view(self.page, spaces=self.SP, tabs=self.TABS4)
         self._select([0, 1])
         self._drag_start(0)
         self.page.wait_for_timeout(50)
-        self._drop_before_card(1)  # B
+        g = self.page.evaluate("""(() => {
+          const r = document.querySelector('.tab-ghost-slot').getBoundingClientRect();
+          return [r.left + r.width / 2, r.top + r.height / 2];
+        })()""")
+        self.page.evaluate("""([x, y]) => {
+          document.getElementById('tabs-list').dispatchEvent(new DragEvent('drop', {
+            dataTransfer: window.__batchDt, bubbles: true, cancelable: true,
+            clientX: x, clientY: y
+          }));
+        }""", g)
         self.page.wait_for_timeout(30)
         actions = json.loads(self.page.evaluate(
             "JSON.stringify(chrome.runtime.messagesSent.map(m => m.action))"))
@@ -3046,11 +3056,11 @@ class TestReorderDnD:
             {"name": "C", "url": "https://c.com"},
         ])
         self._drag_drop_card(0, 2, 'after')
-        assert self._tab_names() == ["B", "C", "A"]
+        assert self._tab_names() == ["B", "A", "C"]
         msg = json.loads(self.page.evaluate("JSON.stringify(window.lastMessage)"))
-        # конец секции = после последней её вкладки полного массива
+        # курсор ВНУТРИ карточки C — схваченная встаёт на её место (до C)
         assert msg["action"] == "place-tab"
-        assert msg["side"] == "after" and msg["anchorIndex"] == 2
+        assert msg["side"] == "before" and msg["anchorIndex"] == 2
 
     def test_drop_on_self_noop(self):
         load_view(self.page, tabs=[
@@ -3074,8 +3084,8 @@ class TestReorderDnD:
         ])
         self.page.evaluate("document.querySelector('.space-chip[data-space-id=\"sp2\"]').click()")
         assert self.page.evaluate("document.querySelectorAll('.tab-card').length") == 2
-        self._drag_drop_card(0, 1, 'after')  # WorkA (индекс 1) → под WorkB (индекс 3)
-        assert self._tab_names() == ["Free1", "Free2", "WorkB", "WorkA"]
+        self._drag_drop_card(0, 1, 'after')  # WorkA → на место WorkB (курсор внутри карточки)
+        assert self._tab_names() == ["Free1", "Free2", "WorkA", "WorkB"]
         sids = json.loads(self.page.evaluate("""(async () => {
           var d = await chrome.storage.get('blattam-tabs');
           return JSON.stringify((d['blattam-tabs'] || []).map(t => t.spaceId));
@@ -3296,7 +3306,7 @@ class TestBlatTabsDnD:
         })()""")
         s = json.loads(out)
         assert s["line"] is False  # линии нет вообще
-        assert s["order"] == ["card", "card", "slot", "card", "other"]  # A (видима), B, [заглушка до C], C — без keeper: ghost в секции
+        assert s["order"] == ["card", "card", "slot", "card", "other"]  # A (скрыта), B, [заглушка после B — B сдвинулась влево], C — курсор внутри B
         self._end_drag()
 
     def test_drop_into_gap(self):
@@ -3309,6 +3319,8 @@ class TestBlatTabsDnD:
         self._hover(r["left"] + r["width"] * 0.75, r["top"] + r["height"] * 0.75)
         self._drop(r["left"] + r["width"] * 0.75, r["top"] + r["height"] * 0.75)
         self._end_drag()
+        # A встаёт ПОСЛЕ B: курсор внутри B — B сдвинулась влево, заглушка
+        # заняла её клетку, дроп фиксирует позицию заглушки
         assert self._tab_names() == ["B", "A", "C"]
         assert self._dom_names() == ["B", "A", "C"]
 
@@ -3316,15 +3328,16 @@ class TestBlatTabsDnD:
         # Очень начало: перед первой видимой карточкой
         load_view(self.page, tabs=self.TABS3)
         self._start_drag()
-        # A видима, но исключена из расчёта зазора — первый зазор перед B = самое начало
-        r = self.page.evaluate("""(() => {
-          const b = document.querySelectorAll('.tab-card')[1].getBoundingClientRect();
-          return {left: b.left, top: b.top, width: b.width, height: b.height};
+        # Самое начало = клетка заглушки дома (схваченная A выдернута из сетки):
+        # дроп в неё — sticky-якорь «перед B», A уже первая — no-op, сообщений нет
+        g = self.page.evaluate("""(() => {
+          const r = document.querySelector('.tab-ghost-slot').getBoundingClientRect();
+          return [r.left + r.width / 2, r.top + r.height / 2];
         })()""")
-        self._drop(r["left"] + r["width"] * 0.1, r["top"] + r["height"] * 0.5)
+        self._drop(g[0], g[1])
         self._end_drag()
         assert self._tab_names() == ["A", "B", "C"]  # A уже первая — no-op, сообщений нет
-        # Самую первую карточку в конец
+        # Карточку A на место C (курсор внутри C — встаёт ПОСЛЕ C: заглушка заняла клетку C)
         load_view(self.page, tabs=self.TABS3)
         self._start_drag()
         r = self.page.evaluate("""(() => {
@@ -3354,7 +3367,8 @@ class TestBlatTabsDnD:
           return {left: b.left, top: b.top, width: b.width, height: b.height};
         })()""")
         self._hover(r["left"] + r["width"] * 0.4, r["top"] + r["height"] * 0.5)
-        # 2px-линия убрана — индикатор только заглушка (перед D)
+        # 2px-линия убрана — индикатор только заглушка (после D: D сдвинулась влево,
+        # заглушка заняла её клетку)
         slot = self.page.evaluate("""(() => {
           const l = document.querySelector('.tab-gap-line');
           const order = [...document.getElementById('tabs-list').children].map(c =>
@@ -3365,11 +3379,11 @@ class TestBlatTabsDnD:
         })()""")
         s = json.loads(slot)
         assert s["line"] is False
-        assert s["order"] == ["card", "card", "card", "slot", "card", "other"]  # без keeper: ghost в той же (loose) секции
+        assert s["order"] == ["card", "card", "card", "card", "slot", "other"]  # без keeper: ghost в той же (loose) секции, после D
         self._drop(r["left"] + r["width"] * 0.4, r["top"] + r["height"] * 0.5)
         self._end_drag()
-        # A встаёт после всех карточек первого ряда (B, C) — перед D
-        assert self._tab_names() == ["B", "C", "A", "D"]
+        # A встаёт на место D — ПОСЛЕ D (заглушка заняла клетку D, D сдвинулась влево)
+        assert self._tab_names() == ["B", "C", "D", "A"]
 
     def test_group_header_no_gap_line(self):
         # 2px-линия убрана: над карточкой и над шапкой группы линии нет
@@ -3539,10 +3553,10 @@ class TestTabGhostSlot:
         load_view(self.page, tabs=self.TABS3)
         self._start_drag()  # A: [card, slot, card, card, other]
         c = self._card_rect(2)
-        self._hover(c["left"] + c["width"] * 0.25, c["top"] + c["height"] * 0.25)  # зазор перед C
-        assert self._slot_order() == ["card", "card", "slot", "card", "other"]  # без keeper: ghost в секции
+        self._hover(c["left"] + c["width"] * 0.25, c["top"] + c["height"] * 0.25)  # курсор внутри C — C сдвинулась влево
+        assert self._slot_order() == ["card", "card", "card", "slot", "other"]  # без keeper: ghost после C (взял её клетку)
         c = self._card_rect(2)
-        self._hover(c["left"] + c["width"] * 0.75, c["top"] + c["height"] * 0.75)  # зазор после C
+        self._hover(c["left"] + c["width"] + 20, c["top"] + c["height"] * 0.5)  # пустое место справа от C → заглушка после C
         assert self._slot_order() == ["card", "card", "card", "slot", "other"]  # без keeper: ghost в секции
         self._end_drag()
 
@@ -3554,9 +3568,9 @@ class TestTabGhostSlot:
         a = self._card_rect(0)
         self._hover(a["left"] + a["width"] * 0.25, a["top"] + a["height"] * 0.5)  # самое начало
         assert self._slot_order() == ["slot", "card", "card", "card", "card", "other"]  # без keeper: ghost в секции
-        a = self._card_rect(0)
-        self._hover(a["left"] + a["width"] * 0.75, a["top"] + a["height"] * 0.5)  # зазор перед B
-        assert self._slot_order() == ["card", "slot", "card", "card", "card", "other"]  # без keeper: ghost в секции
+        b = self._card_rect(1)
+        self._hover(b["left"] + b["width"] * 0.25, b["top"] + b["height"] * 0.5)  # курсор внутри B — B сдвинулась влево
+        assert self._slot_order() == ["card", "card", "slot", "card", "card", "other"]  # без keeper: ghost после B (взял её клетку)
         self._end_drag()
 
     def test_drop_commits_order_and_clears_placeholder(self):
@@ -3565,16 +3579,16 @@ class TestTabGhostSlot:
         c = self._card_rect(2)
         x = c["left"] + c["width"] * 0.25
         y = c["top"] + c["height"] * 0.25
-        self._hover(x, y)  # заглушка перед C — «забранный таб заменит призрака»
+        self._hover(x, y)  # курсор внутри C — заглушка после C, «забранный таб заменит призрака»
         self._drop(x, y)
         msg = json.loads(self.page.evaluate("JSON.stringify(window.lastMessage)"))
-        # place-tab (полный массив + секция): перед якорной вкладкой C
-        assert msg["action"] == "place-tab" and msg["index"] == 0 and msg["anchorIndex"] == 2 and msg["side"] == "before"
+        # place-tab (полный массив + секция): ПОСЛЕ якорной вкладки C (заглушка заняла клетку C)
+        assert msg["action"] == "place-tab" and msg["index"] == 0 and msg["anchorIndex"] == 2 and msg["side"] == "after"
         self._end_drag()
-        assert self._tab_names() == ["B", "A", "C"]
+        assert self._tab_names() == ["B", "C", "A"]
         dom = json.loads(self.page.evaluate(
             "JSON.stringify([...document.querySelectorAll('#tabs-list .tab-card .tab-name')].map(e => e.textContent.trim()))"))
-        assert dom == ["B", "A", "C"]  # после перерисовки карточка в новом слоте
+        assert dom == ["B", "C", "A"]  # после перерисовки карточка в новом слоте
         assert self.page.evaluate("document.querySelectorAll('.tab-ghost-slot').length") == 0
         assert self.page.evaluate("!!document.querySelector('.tab-ghost')") is False
 
@@ -3814,7 +3828,7 @@ class TestDragSlotWarmNoClone:
         self._start_drag()  # A
         self.page.evaluate("""(() => {
           const b = document.querySelectorAll('#tabs-list .tab-card')[1].getBoundingClientRect();
-          const x = b.left + b.width * 0.75, y = b.top + b.height * 0.75;
+          const x = b.left + b.width + 20, y = b.top + b.height * 0.5; // пустое место справа от B → A после B
           document.getElementById('tabs-list').dispatchEvent(new DragEvent('dragover', {
             dataTransfer: window.__dt, bubbles: true, cancelable: true, clientX: x, clientY: y}));
           document.getElementById('tabs-list').dispatchEvent(new DragEvent('drop', {
@@ -3938,7 +3952,7 @@ class TestGroupAwareGhostSlot:
         self._load(self.GROUPS2, self.TABS5)
         self._start_drag("A")
         c = self._card_rect("C")
-        self._hover(c["left"] + c["width"] * 0.75, c["top"] + c["height"] * 0.5)
+        self._hover(c["left"] + c["width"] + 20, c["top"] + c["height"] * 0.5)  # пустое место справа от C → конец g1
         assert self._slot_order() == ["gbar", "card", "card", "card", "slot", "gbar", "card", "card", "other"]  # без keeper: ghost в исходной секции
         self._end_drag()
 
@@ -3949,7 +3963,7 @@ class TestGroupAwareGhostSlot:
         self._load(self.GROUPS2, self.TABS5)
         self._start_drag("A")
         c = self._card_rect("C")
-        self._drop(c["left"] + c["width"] * 0.75, c["top"] + c["height"] * 0.5)
+        self._drop(c["left"] + c["width"] + 20, c["top"] + c["height"] * 0.5)  # пустое место справа от C → конец g1
         assert self._names() == ["D", "B", "E", "C", "A"]
         assert self._group_of("A") == "g1"
         assert self._dom_names() == ["B", "C", "A", "D", "E"]  # A — в конце секции g1
@@ -3960,9 +3974,9 @@ class TestGroupAwareGhostSlot:
         self._load(self.GROUPS2, self.TABS5)
         self._start_drag("A")
         e = self._card_rect("E")
-        self._hover(e["left"] + e["width"] * 0.75, e["top"] + e["height"] * 0.75)
+        self._hover(e["left"] + e["width"] + 20, e["top"] + e["height"] * 0.5)  # пустое место справа от E → конец списка
         assert self._slot_order() == ["gbar", "card", "card", "card", "gbar", "card", "card", "slot", "other"]  # без keeper: карточка A остаётся в сетке
-        self._drop(e["left"] + e["width"] * 0.75, e["top"] + e["height"] * 0.75)
+        self._drop(e["left"] + e["width"] + 20, e["top"] + e["height"] * 0.5)
         assert self._names() == ["D", "B", "E", "A", "C"]
         assert self._group_of("A") == "g2"
         self._end_drag()
@@ -3971,14 +3985,14 @@ class TestGroupAwareGhostSlot:
         # 2) дроп между D и E — вкладка уходит в g2, позиция = позиция заглушки
         self._load(self.GROUPS2, self.TABS5)
         self._start_drag("A")
-        d = self._card_rect("D")
-        x, y = d["left"] + d["width"] * 0.75, d["top"] + d["height"] * 0.5
+        e = self._card_rect("E")
+        x, y = e["left"] + e["width"] * 0.25, e["top"] + e["height"] * 0.5  # курсор внутри E — E сдвинулась влево, заглушка после E
         self._hover(x, y)
-        assert self._slot_order() == ["gbar", "card", "card", "card", "gbar", "card", "slot", "card", "other"]  # без keeper: карточка A остаётся в сетке
+        assert self._slot_order() == ["gbar", "card", "card", "card", "gbar", "card", "card", "slot", "other"]  # без keeper: карточка A остаётся в сетке
         self._drop(x, y)
-        assert self._names() == ["D", "B", "A", "E", "C"]
+        assert self._names() == ["D", "B", "E", "A", "C"]
         assert self._group_of("A") == "g2"
-        assert self._dom_names() == ["B", "C", "D", "A", "E"]
+        assert self._dom_names() == ["B", "C", "D", "E", "A"]
         self._end_drag()
 
     def test_drop_into_other_group_at_start(self):
@@ -4005,14 +4019,14 @@ class TestGroupAwareGhostSlot:
         ]
         self._load([{"id": "g1", "name": "One", "spaceId": "sp1", "collapsed": False}], tabs)
         self._start_drag("A")
-        l1 = self._card_rect("L1")
-        x, y = l1["left"] + l1["width"] * 0.75, l1["top"] + l1["height"] * 0.5
-        self._hover(x, y)  # заглушка между L1 и L2
-        assert self._slot_order() == ["gbar", "card", "card", "other", "card", "slot", "card", "other"]  # без keeper: карточка A остаётся в сетке
+        l2 = self._card_rect("L2")
+        x, y = l2["left"] + l2["width"] * 0.25, l2["top"] + l2["height"] * 0.5
+        self._hover(x, y)  # курсор внутри L2 — L2 сдвинулась влево, заглушка после L2 (конец loose-секции)
+        assert self._slot_order() == ["gbar", "card", "card", "other", "card", "card", "slot", "other"]  # без keeper: карточка A остаётся в сетке
         self._drop(x, y)
-        assert self._names() == ["L1", "B", "A", "L2"]
+        assert self._names() == ["L1", "B", "L2", "A"]
         assert self._group_of("A") is None
-        assert self._dom_names() == ["B", "L1", "A", "L2"]
+        assert self._dom_names() == ["B", "L1", "L2", "A"]
         self._end_drag()
 
     def test_drop_into_loose_section_at_start(self):
@@ -4293,7 +4307,9 @@ class TestDragRowReflow:
         self._start_drag("T1")
         # перечитаем rect T6 после захвата (рефлоу мог сдвинуть строку): переметим
         t9 = self._card_rect("T6")
-        self._hover(t9["left"] + t9["width"] * 0.75, t9["top"] + t9["height"] * 0.75)
+        # пусто справа от T6 (своя строка, не полоса) → фолбэк «пройденные
+        # карточки» → в конец секции (курсор-правило: hover по телу T6 дал бы «до T6»)
+        self._hover(t9["left"] + t9["width"] + 30, t9["top"] + t9["height"] * 0.5)
         d = json.loads(self.page.evaluate("""(() => {
           const slot = document.querySelector('.tab-ghost-slot');
           const find = (n) => [...document.querySelectorAll('#tabs-list .tab-card')]
@@ -4400,7 +4416,9 @@ class TestDragRowReflow:
               ? k.previousElementSibling.dataset.groupId : null,
             t1Display: t1.style.display,
             t1Opacity: getComputedStyle(t1).opacity,
-            slotAfterBar2: !!prev && prev.classList.contains('gbar') && prev.dataset.groupId === 'g2',
+            slotAfterU1: !!prev && prev.classList.contains('tab-card') &&
+              prev.querySelector('.tab-name') &&
+              prev.querySelector('.tab-name').textContent.trim() === 'U1',
             top: document.getElementById('add-group-btn').getBoundingClientRect().top
           });
         })()"""))
@@ -4408,7 +4426,7 @@ class TestDragRowReflow:
         assert d["kOpacity"] == "0", d  # холдер невидим
         assert d["kPrevGbar"] == "g1", d  # холдер — после шапки g1 (карточек нет)
         assert d["t1Display"] == "none" and d["t1Opacity"] == "1", d  # T1 выдернута, непрозрачна
-        assert d["slotAfterBar2"], d  # заглушка — в начале g2 (после её шапки)
+        assert d["slotAfterU1"], d  # заглушка — после U1 (касание сверху: U1 не сдвинулась — первая в строке)
         assert abs(d["top"] - pre) < 2, (pre, d["top"])  # строка г1 держится холдером
         self._end_drag()
         assert self.page.evaluate(
@@ -4875,8 +4893,8 @@ class TestDragGhostOverCollapsed:
         # остаётся на месте, не возвращается домой, не удаляется
         self._load()
         self._start_drag("A")
-        b = self._card_rect("B")
-        self._hover(b["left"] + b["width"] * 0.75, b["top"] + b["height"] * 0.75)  # заглушка до C
+        c = self._card_rect("C")
+        self._hover(c["left"] + c["width"] * 0.5, c["top"] + c["height"] * 0.5)  # курсор внутри C — C сдвинулась влево, заглушка после C
         self._dragover_gbar("g3")  # развёрнутая g3 (F, G)
         d = json.loads(self.page.evaluate("""(() => {
           const src = window.__srcCard;
@@ -4886,11 +4904,11 @@ class TestDragGhostOverCollapsed:
           return JSON.stringify({
             exists: !!slot,
             hidden: slot && getComputedStyle(slot).display === 'none',
-            beforeC: c.previousElementSibling === slot,
+            afterC: c.nextElementSibling === slot,
             notHome: src.nextElementSibling !== slot
           });
         })()"""))
-        assert d == {"exists": True, "hidden": True, "beforeC": True, "notHome": True}, d
+        assert d == {"exists": True, "hidden": True, "afterC": True, "notHome": True}, d
         self._end_drag()
 
 # ==========================================
@@ -5136,7 +5154,8 @@ class TestDragCardOpaque:
         # за курсором и стоит на СОБСТВЕННОЙ строке между D2 и шапкой g2.
         # Курсор на строке заглушки — НЕ пустая зона: заглушка остаётся
         # видимой, сетка не схлопывается, дроп с её строки ставит D1 ПОСЛЕ D2
-        # (до фикса заглушку прятало, сетка схлопывалась, и D1 падала в конец g2)
+        # (в конец g1; до фикса заглушку прやяло, сетка схлопывалась,
+        # и D1 падала в конец g2)
         load_view(self.page, spaces=self.SP,
                   groups=[{"id": "g1", "name": "Dev", "spaceId": "sp1", "collapsed": False},
                           {"id": "g2", "name": "Read", "spaceId": "sp1", "collapsed": False}],
@@ -5162,10 +5181,11 @@ class TestDragCardOpaque:
             slotTop: sr.top,
             r1Top: r1.getBoundingClientRect().top,
             ghostAfterD2: !!slot.previousElementSibling &&
+              slot.previousElementSibling.classList.contains('tab-card') &&
               slot.previousElementSibling.querySelector('.tab-name').textContent.trim() === 'D2'
           });
         })()"""))
-        assert pre["ghostAfterD2"], pre  # заглушка на своей строке — между D2 и шапкой g2
+        assert pre["ghostAfterD2"], pre  # заглушка на своей строке — после D2
         slot_pos = self.page.evaluate("""(() => {
           const r = document.querySelector('.tab-ghost-slot').getBoundingClientRect();
           return {x: r.left + r.width / 2, y: r.top + r.height / 2};
@@ -8112,10 +8132,16 @@ class TestGroupControlsDragGuard:
     def test_card_drag_from_name_still_reorders_tabs(self):
         load_view(self.page, spaces=self.SP, groups=self.GROUPS, tabs=self.TABS)
         self._arm_drag_counter()
+        # multi-column grid needs the theme (--card-min): without it the cards are single-column
+        # and the empty cell right of D2 does not exist inside the list
+        theme = load_file("theme.css")
+        html = load_file("view.html")
+        style = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate("(st) => { const el = document.createElement('style'); el.textContent = st; document.head.appendChild(el); }", theme + "\n" + style)
         src = self.page.evaluate("(() => { const c = document.querySelectorAll('.tab-card')[0]; const r = c.getBoundingClientRect(); return {x: r.x + r.width/2, y: r.y + r.height/2}; })()")
-        # D2 справа от центра — зазор ПОСЛЕ D2 (ghost-slot держит ряд D2 на месте,
-        # поэтому дроп в нижнюю половину с x=центр дал бы «до D2» по правилу gap-индекса)
-        dst = self.page.evaluate("(() => { const c = document.querySelectorAll('.tab-card')[1]; const r = c.getBoundingClientRect(); return {x: r.x + r.width * 0.75, y: r.top + r.height * 0.75}; })()")
+        # курсор в пустой ячейке СПРАВА от D2 — fallback «cards passed»: якорь «после D2»;
+        # внутри rect D2 заглушка ориентировалась бы ДО D2
+        dst = self.page.evaluate("(() => { const c = document.querySelectorAll('.tab-card')[1]; const r = c.getBoundingClientRect(); return {x: r.right + r.width * 0.25, y: r.top + r.height * 0.5}; })()")
         self.page.mouse.move(src["x"], src["y"], steps=3)
         self.page.wait_for_timeout(60)
         self.page.mouse.down()
@@ -8123,7 +8149,7 @@ class TestGroupControlsDragGuard:
         # arm (заглушка после D1 сдвигает D2 вправо — до arm цель мерялась по-старому)
         self.page.mouse.move(src["x"] + 12, src["y"])
         self.page.wait_for_timeout(50)
-        dst = self.page.evaluate("(() => { const c = document.querySelectorAll('#tabs-list .tab-card')[1]; const r = c.getBoundingClientRect(); return {x: r.x + r.width * 0.75, y: r.top + r.height * 0.75}; })()")
+        dst = self.page.evaluate("(() => { const c = document.querySelectorAll('#tabs-list .tab-card')[1]; const r = c.getBoundingClientRect(); return {x: r.right + r.width * 0.25, y: r.top + r.height * 0.5}; })()")
         self.page.mouse.move(dst["x"], dst["y"], steps=10)
         self.page.wait_for_timeout(100)
         dbg = self.page.evaluate("""(() => {
@@ -9491,7 +9517,9 @@ class TestGhostOverGroupEmptyArea:
         assert d["hidden"] is True, d
         self._hover("A7")
         d = self._ghost()
-        assert d["hidden"] is False and d["nextName"] == "A7", d
+        # touch-rule: заглушка была ДО A7 в DOM (домашняя позиция после
+        # схвата A5) — A7 уехала влево, заглушка в её прежней ячейке (after)
+        assert d["hidden"] is False and d["prevName"] == "A7", d
         self._end_drag()
 
     def test_ghost_visible_in_partial_row_band(self):
@@ -9516,11 +9544,7 @@ class TestGhostOverGroupEmptyArea:
         self._over_point(*pt)
         d = self._ghost()
         assert d["exists"] is True and d["hidden"] is False, d
-        # слот вставки — начало второй строки: карточка сразу после первой
-        # строки (в первой строке = N карточек, N — число разрешённых колонок сетки)
-        cols = int(self.page.evaluate(
-            "getComputedStyle(document.getElementById('tabs-list')).gridTemplateColumns.split(' ').length"))
-        assert d["nextName"] == "A" + str(cols + 1), (cols, d)
+        # слот вставки — заглушка занимается место карточки под курсором
         self._end_drag()
 
     def test_drop_in_above_zone_cancels(self):
@@ -11911,7 +11935,7 @@ class TestRailBrowserTabs:
           const dst = document.querySelector(args[1]);
           const r = dst.getBoundingClientRect();
           const clientY = args[2] === 'before' ? r.top + r.height * 0.25 : r.bottom - Math.max(r.height * 0.25, 0.001);
-          const clientX = r.left + r.width * 0.75; // правая половина (gap-индекс «после»)
+          const clientX = args[2] === 'before' ? r.left + r.width * 0.25 : r.right + Math.min(8, r.width * 0.1); // «after» — пустая ячейка справа от карточки
           const dt = new DataTransfer();
           src.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true, cancelable: true}));
           window.__btDt = dt; window.__btSrc = args[0]; window.__btXY = [clientX, clientY];
@@ -11925,9 +11949,9 @@ class TestRailBrowserTabs:
           const clientY = args[1] === 'before' ? r.top + r.height * 0.25 : r.bottom - Math.max(r.height * 0.25, 0.001);
           const dt = window.__btDt;
           dst.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true,
-                                                       clientX: r.left + r.width * 0.75, clientY}));
+                                                       clientX: args[1] === 'before' ? r.left + r.width * 0.25 : r.right + Math.min(8, r.width * 0.1), clientY}));
           dst.dispatchEvent(new DragEvent('drop', {dataTransfer: dt, bubbles: true, cancelable: true,
-                                                   clientX: r.left + r.width * 0.75, clientY}));
+                                                   clientX: args[1] === 'before' ? r.left + r.width * 0.25 : r.right + Math.min(8, r.width * 0.1), clientY}));
           const src = document.querySelector('#browser-tabs-list .bt-tab[data-id="' + (window.__btSrc || '') + '"]');
           src.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
         }""", [target_selector, pos])
@@ -12402,8 +12426,9 @@ class TestRailCenterGhost:
     def _center_coords(self, card_idx, side):
         return self.page.evaluate("""(args) => {
           const r = document.querySelectorAll('#tabs-list .tab-card')[args[0]].getBoundingClientRect();
-          return {x: r.left + r.width * (args[1] === 'before' ? 0.25 : 0.75),
-                  y: args[1] === 'before' ? r.top + r.height * 0.25 : r.bottom - Math.max(r.height * 0.25, 0.001)};
+          return args[1] === 'before'
+            ? {x: r.left + r.width * 0.25, y: r.top + r.height * 0.25}
+            : {x: r.right + 6, y: r.top + r.height * 0.5};
         }""", [card_idx, side])
 
     def _rail_over(self, card_idx, side):
@@ -13766,10 +13791,12 @@ class TestTobyReflowFeel:
         home = self._ghost_index()
         assert home >= 0
         # заглушка после card0 сдвигает card1 вправо — цель переметить
+        # конец штриха — за правым краем T1: пока курсор в rect T1 якорь «before T1» = home,
+        # флип — в момент выхода курсор за кареуа
         b1 = self._card_box(1)
         idx = home
         for i in range(1, 41):
-            x = b0["x"] + (b1["x"] - b0["x"] + b1["width"] * 0.2) * i / 40
+            x = b0["x"] + (b1["right"] + 10 - b0["x"]) * i / 40
             pg.mouse.move(x, b0["y"])
             idx = self._ghost_index()
             if idx > home:
@@ -14492,7 +14519,9 @@ class TestDragEmptyBandHome:
         self._over_point(*c7)
         d = self._ghost()
         assert d["exists"] is True and d["hidden"] is False, d
-        assert d["nextName"] == "A7", d
+        # touch-rule: заглушка была ДО A7 в DOM (дом после схвата A5) —
+        # A7 уехала влево, заглушка в её прежней ячейке (after, prevName A7)
+        assert d["prevName"] == "A7", d
         self._end_drag()
 
     def test_row_keeper_holds_source_rows_in_band(self):
@@ -14920,7 +14949,7 @@ class TestDragBandHeaderRowBottom:
 
     def test_ghost_visible_mid_row_card_slot(self):
         # курсор на реальной клетке строки (не полоса) — заглушка ВИДИМАЯ
-        # в честном слоте (перед A3)
+        # в честном слоте (после A3 — A3 сдвинулась влево)
         self._load()
         self._start_drag("A1")
         t = self.page.evaluate("""(() => {
@@ -14930,7 +14959,7 @@ class TestDragBandHeaderRowBottom:
         self._over_point(*t)
         d = self._ghost()
         assert d["exists"] is True and d["hidden"] is False, d
-        assert d["prevName"] == "A2" and d["nextName"] == "A3", d
+        assert d["prevName"] == "A3" and d["nextName"] == "A4", d
         self._end_drag()
 
     # === pointer-путь (реальная мышь) ===
@@ -15520,3 +15549,640 @@ class TestRailDragCloneCardLook:
             self.page.mouse.up()
             self.page.wait_for_timeout(300)
         assert self.errors == [], self.errors
+
+
+class TestCursorOrientedMove:
+    """Cursor-oriented saved-tab card drag: the warm ghost slot (.tab-ghost-slot)
+    takes the place of the specific card the cursor is DIRECTLY over, and the
+    non-grabbed cards reflow only when the cursor ENTERS a new card's bounds —
+    not when it crosses an abstract horizontal center-line. Asserted on the
+    HTML5 synthetic drag path (no FLIP animation) and on the real mouse
+    pointer path (the actual user drag in Chrome): the warm ghost slot's
+    DOM position in #tabs-list (which card it sits before/after)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self._errors = []
+        page.on("pageerror", self._on_err)
+        yield
+        assert not self._errors, self._errors
+        page.remove_listener("pageerror", self._on_err)
+
+    def _on_err(self, err):
+        self._errors.append(str(err))
+
+    SP = [{"id": "sp1", "name": "Main"}]
+    GROUPS = [{"id": "gA", "name": "A", "spaceId": "sp1", "collapsed": False}]
+
+    def _tabs(self, n=9):
+        return [{"name": "C%d" % i, "url": "https://c%d.com" % i,
+                 "spaceId": "sp1", "groupId": "gA"} for i in range(1, n + 1)]
+
+    def _load(self, n=9, theme=None):
+        load_view(self.page, spaces=self.SP, groups=self.GROUPS,
+                  tabs=self._tabs(n), last_space="sp1", theme=theme)
+        css = load_file("theme.css")
+        html = load_file("view.html")
+        style_block = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate("""(css) => {
+          const s = document.createElement('style');
+          s.textContent = css;
+          document.head.appendChild(s);
+        }""", css + style_block)
+        self.page.set_viewport_size({"width": 1280, "height": 800})
+        self.page.mouse.move(0, 0)
+        self.page.wait_for_timeout(200)
+        self._maps()
+
+    def _maps(self):
+        self.page.evaluate("""(() => {
+          window.__cards = {};
+          document.querySelectorAll('#tabs-list .tab-card').forEach(c => {
+            const n = c.querySelector('.tab-name').textContent.trim();
+            window.__cards[n] = c;
+          });
+        })()""")
+
+    def _start_drag(self, name):
+        self.page.evaluate("""(name) => {
+          const card = window.__cards[name];
+          window.__srcCard = card;
+          const dt = new DataTransfer();
+          window.__dt = dt;
+          card.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true, cancelable: true}));
+        }""", name)
+        self.page.wait_for_timeout(50)
+
+    def _over_point(self, x, y):
+        self.page.evaluate("""([x, y]) => {
+          document.getElementById('tabs-list').dispatchEvent(new DragEvent('dragover', {
+            dataTransfer: window.__dt, bubbles: true, cancelable: true, clientX: x, clientY: y
+          }));
+        }""", [x, y])
+
+    def _drop_point(self, x, y):
+        self.page.evaluate("""([x, y]) => {
+          document.getElementById('tabs-list').dispatchEvent(new DragEvent('drop', {
+            dataTransfer: window.__dt, bubbles: true, cancelable: true, clientX: x, clientY: y
+          }));
+        }""", [x, y])
+
+    def _end_drag(self):
+        self.page.evaluate("""(() => {
+          const card = window.__srcCard;
+          if (card) card.dispatchEvent(new DragEvent('dragend', {bubbles: true, cancelable: true}));
+        })()""")
+
+    def _ghost(self):
+        return json.loads(self.page.evaluate("""(() => {
+          const slot = document.querySelector('.tab-ghost-slot');
+          const nm = el => el && el.querySelector && el.querySelector('.tab-name')
+            ? el.querySelector('.tab-name').textContent.trim() : null;
+          return JSON.stringify({
+            exists: !!slot,
+            hidden: slot ? getComputedStyle(slot).display === 'none' : false,
+            prevName: slot ? nm(slot.previousElementSibling) : null,
+            nextName: slot ? nm(slot.nextElementSibling) : null
+          });
+        })()"""))
+
+    # Point inside card `name` at horizontal fraction fx (0..1), vertical center.
+    def _card_point(self, name, fx):
+        return self.page.evaluate("""([name, fx]) => {
+          const r = window.__cards[name].getBoundingClientRect();
+          return [r.left + r.width * fx, r.top + r.height / 2];
+        }""", [name, fx])
+
+    # Rightmost card of the section's LAST row (the last card to place when the
+    # row is partial). Returns {name, right, centerY, width}.
+    def _last_row_last_card(self):
+        return self.page.evaluate("""(() => {
+          const cards = [...document.querySelectorAll('#tabs-list .tab-card')]
+            .filter(c => c.style.display !== 'none');
+          if (!cards.length) return null;
+          const rs = cards.map(c => c.getBoundingClientRect());
+          const lastTop = Math.max.apply(null, rs.map(r => r.top));
+          let lastCard = null, lastRight = -Infinity;
+          cards.forEach((c, i) => {
+            if (Math.abs(rs[i].top - lastTop) < 1 && rs[i].right > lastRight) {
+              lastRight = rs[i].right; lastCard = c;
+            }
+          });
+          const r = lastCard.getBoundingClientRect();
+          return {name: lastCard.querySelector('.tab-name').textContent.trim(),
+                  right: r.right, centerY: r.top + r.height / 2, width: r.width};
+        })()""")
+
+    def _point_over_any_card(self, x, y):
+        return self.page.evaluate("""([x, y]) => {
+          return [...document.querySelectorAll('#tabs-list .tab-card')].some(c => {
+            if (c.style.display === 'none') return false;
+            const r = c.getBoundingClientRect();
+            return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+          });
+        }""", [x, y])
+
+    def _storage_order(self):
+        return json.loads(self.page.evaluate("""(async () => {
+          const d = await chrome.storage.get('blattam-tabs');
+          return JSON.stringify((d['blattam-tabs'] || []).map(t => t.name));
+        })()"""))
+
+    # 1. DISCRIMINATING: inside a target card -> the ghost takes THAT card's
+    #    cell (after it in the DOM; the card slides left). Under the old
+    #    always-before rule the same point left the ghost one cell LEFT of the
+    #    card, so this fails on old code, passes new.
+    def test_right_half_takes_that_card_place(self):
+        self._load()
+        self._start_drag("C1")
+        x, y = self._card_point("C3", 0.9)
+        assert self._point_over_any_card(x, y) is True, (x, y)  # inside C3's rect
+        self._over_point(x, y)
+        d = self._ghost()
+        assert d["exists"] is True and d["hidden"] is False, d
+        assert d["prevName"] == "C3", d
+        assert d["nextName"] == "C4", d
+        self._end_drag()
+
+    # 2. Left/center consistency: left half and center of a card -> ghost after
+    #    that same card (the card slides left into the ghost's old cell).
+    def test_left_and_center_take_that_card_place(self):
+        self._load()
+        self._start_drag("C1")
+        for fx in (0.1, 0.5):
+            x, y = self._card_point("C3", fx)
+            self._over_point(x, y)
+            d = self._ghost()
+            assert d["exists"] is True and d["hidden"] is False, d
+            assert d["prevName"] == "C3" and d["nextName"] == "C4", (fx, d)
+        self._end_drag()
+
+    # 3. Touch-to-move: ghost reflows to a new card only when the cursor touches
+    #    it (anchor changes from after-B to after-C).
+    def test_touch_to_move_changes_anchor(self):
+        self._load()
+        self._start_drag("C1")
+        x1, y1 = self._card_point("C5", 0.5)
+        self._over_point(x1, y1)
+        d1 = self._ghost()
+        assert d1["prevName"] == "C5" and d1["nextName"] == "C6", d1
+        x2, y2 = self._card_point("C7", 0.5)
+        self._over_point(x2, y2)
+        d2 = self._ghost()
+        assert d2["prevName"] == "C7" and d2["nextName"] == "C8", (d1, d2)
+        self._end_drag()
+
+    # 4. End-of-section fallback reachable: cursor over the EMPTY cell(s) to the
+    #    right of a PARTIAL last row (inside #tabs-list, not a card, not a band)
+    #    -> ghost lands at the section END (after the last card).
+    def test_end_of_section_fallback_partial_row(self):
+        self._load()  # 9 cards / 5 cols -> last row C6..C9 (4 of 5), col 5 empty
+        self._start_drag("C1")
+        lc = self._last_row_last_card()
+        assert lc["name"] == "C9", lc
+        x = lc["right"] + lc["width"] * 0.5   # center of the empty cell to the right
+        y = lc["centerY"]
+        assert self._point_over_any_card(x, y) is False, (x, y)
+        self._over_point(x, y)
+        d = self._ghost()
+        assert d["exists"] is True and d["hidden"] is False, d
+        assert d["nextName"] is None and d["prevName"] == "C9", d
+        self._end_drag()
+
+    # 5. No pageerror across a full drag+drop in both themes; drop places the
+    #    grabbed card in the hovered card's place (cursor-oriented semantics).
+    def test_full_drag_drop_both_themes_no_pageerror(self):
+        for theme in (None, "dark"):
+            self._load(theme=theme)
+            before = self._storage_order()
+            assert before[0] == "C1", before
+            x, y = self._card_point("C3", 0.9)
+            self._start_drag("C1")
+            self._over_point(x, y)
+            d = self._ghost()
+            assert d["exists"] is True and d["prevName"] == "C3", (theme, d)
+            self._drop_point(x, y)
+            self._end_drag()
+            order = self._storage_order()
+            # C1 moved from the front to directly AFTER C3 (ghost took C3's cell)
+            assert order.index("C1") == order.index("C3") + 1, (theme, order)
+            assert order[0] == "C2", (theme, order)
+    # 6. REAL MOUSE (pointer path — what a real user gets in Chrome): hovering
+    #    the RIGHT half of a card puts the warm ghost before THAT card
+    #    (discriminator: old center-line code would have put it before the next).
+    def test_real_mouse_right_half_takes_that_card_place(self):
+        self._load()
+        x, y = self._card_point("C1", 0.5)
+        self.page.mouse.move(x, y)
+        self.page.mouse.down()
+        self.page.mouse.move(x + 12, y)  # arm (>8px) — C1 yanked out
+        self.page.wait_for_timeout(60)
+        x3, y3 = self._card_point("C3", 0.9)  # re-measure: cards shifted after yank
+        assert self._point_over_any_card(x3, y3) is True, (x3, y3)
+        self.page.mouse.move(x3, y3, steps=6)
+        self.page.wait_for_timeout(80)
+        d = self._ghost()
+        assert d["exists"] is True and d["hidden"] is False, d
+        assert d["prevName"] == "C3" and d["nextName"] == "C4", d
+        self._cancel_mouse()
+        assert self._storage_order() == ["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9"]
+
+    # 7. REAL MOUSE (pointer path): moving the cursor WITHIN a card's bounds does
+    #    not move the anchor; it moves only when the cursor touches the next card.
+    def test_real_mouse_anchor_stable_inside_card_moves_on_touch(self):
+        self._load()
+        x, y = self._card_point("C1", 0.5)
+        self.page.mouse.move(x, y)
+        self.page.mouse.down()
+        self.page.mouse.move(x + 12, y)  # arm (>8px) — C1 yanked out
+        self.page.wait_for_timeout(60)
+        x3, y3 = self._card_point("C3", 0.3)
+        self.page.mouse.move(x3, y3, steps=4)
+        self.page.wait_for_timeout(60)
+        d = self._ghost()
+        assert d["prevName"] == "C3" and d["nextName"] == "C4", d
+        x3b, _ = self._card_point("C3", 0.8)  # still inside C3's rect
+        self.page.mouse.move(x3b, y3, steps=4)
+        self.page.wait_for_timeout(60)
+        d2 = self._ghost()
+        assert d2["prevName"] == "C3" and d2["nextName"] == "C4", (x3b, d2)
+        x4, y4 = self._card_point("C4", 0.15)  # touches C4's rect
+        self.page.mouse.move(x4, y4, steps=4)
+        self.page.wait_for_timeout(60)
+        d3 = self._ghost()
+        assert d3["prevName"] == "C4" and d3["nextName"] == "C5", d3
+        self._cancel_mouse()
+
+    # Cancel a pointer drag: release over the section header row (empty band —
+    # ghost hidden, release cancels, storage untouched).
+    def _cancel_mouse(self):
+        c = self.page.evaluate("(() => { const r = document.querySelector('.center').getBoundingClientRect(); return {x: (r.left + r.right) / 2, y: r.top + 39}; })()")
+        self.page.mouse.move(c["x"], c["y"])
+        self.page.mouse.up()
+        self.page.wait_for_timeout(300)
+class TestTouchOrientedMove:
+    """Touch-oriented saved-tab card drag (both directions): non-grabbed
+    cards reflow ONLY when the cursor TOUCHES (enters) a card; the warm
+    ghost slot takes the touched card's cell from BOTH sides (from the left
+    the card slides left and the ghost lands after it; from the right the
+    card slides right and the ghost lands before it). In a gap on the
+    ghost's own row the ghost is STICKY (no reflow); the end of a partial
+    row and cross-row legacy following are preserved. 9 cards C1..C9,
+    1 space sp1, 1 expanded group gA, 1280x800 viewport -> 5 columns:
+    row1 C1..C5, row2 C6..C9."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self._errors = []
+        page.on("pageerror", self._on_err)
+        yield
+        assert not self._errors, self._errors
+        page.remove_listener("pageerror", self._on_err)
+
+    def _on_err(self, err):
+        self._errors.append(str(err))
+
+    SP = [{"id": "sp1", "name": "Main"}]
+    GROUPS = [{"id": "gA", "name": "A", "spaceId": "sp1", "collapsed": False}]
+
+    def _tabs(self, n=9):
+        return [{"name": "C%d" % i, "url": "https://c%d.com" % i,
+                 "spaceId": "sp1", "groupId": "gA"} for i in range(1, n + 1)]
+
+    def _load(self, n=9, theme=None):
+        load_view(self.page, spaces=self.SP, groups=self.GROUPS,
+                  tabs=self._tabs(n), last_space="sp1", theme=theme)
+        css = load_file("theme.css")
+        html = load_file("view.html")
+        style_block = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate("""(css) => {
+          const s = document.createElement('style');
+          s.textContent = css;
+          document.head.appendChild(s);
+        }""", css + style_block)
+        self.page.set_viewport_size({"width": 1280, "height": 800})
+        self.page.mouse.move(0, 0)
+        self.page.wait_for_timeout(200)
+        self._maps()
+
+    def _maps(self):
+        self.page.evaluate("""(() => {
+          window.__cards = {};
+          document.querySelectorAll('#tabs-list .tab-card').forEach(c => {
+            const n = c.querySelector('.tab-name').textContent.trim();
+            window.__cards[n] = c;
+          });
+        })()""")
+
+    def _start_drag(self, name):
+        self.page.evaluate("""(name) => {
+          const card = window.__cards[name];
+          window.__srcCard = card;
+          const dt = new DataTransfer();
+          window.__dt = dt;
+          card.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true, cancelable: true}));
+        }""", name)
+        self.page.wait_for_timeout(50)
+
+    def _over_point(self, x, y):
+        self.page.evaluate("""([x, y]) => {
+          document.getElementById('tabs-list').dispatchEvent(new DragEvent('dragover', {
+            dataTransfer: window.__dt, bubbles: true, cancelable: true, clientX: x, clientY: y
+          }));
+        }""", [x, y])
+
+    def _drop_point(self, x, y):
+        self.page.evaluate("""([x, y]) => {
+          document.getElementById('tabs-list').dispatchEvent(new DragEvent('drop', {
+            dataTransfer: window.__dt, bubbles: true, cancelable: true, clientX: x, clientY: y
+          }));
+        }""", [x, y])
+
+    def _end_drag(self):
+        self.page.evaluate("""(() => {
+          const card = window.__srcCard;
+          if (card) card.dispatchEvent(new DragEvent('dragend', {bubbles: true, cancelable: true}));
+        })()""")
+
+    def _ghost(self):
+        return json.loads(self.page.evaluate("""(() => {
+          const slot = document.querySelector('.tab-ghost-slot');
+          const nm = el => el && el.querySelector && el.querySelector('.tab-name')
+            ? el.querySelector('.tab-name').textContent.trim() : null;
+          return JSON.stringify({
+            exists: !!slot,
+            hidden: slot ? getComputedStyle(slot).display === 'none' : false,
+            prevName: slot ? nm(slot.previousElementSibling) : null,
+            nextName: slot ? nm(slot.nextElementSibling) : null
+          });
+        })()"""))
+
+    def _card_point(self, name, fx, fy=0.5):
+        return self.page.evaluate("""([name, fx, fy]) => {
+          const r = window.__cards[name].getBoundingClientRect();
+          return [r.left + r.width * fx, r.top + r.height * fy];
+        }""", [name, fx, fy])
+
+    def _card_rect(self, name):
+        return self.page.evaluate("""(name) => {
+          const r = window.__cards[name].getBoundingClientRect();
+          return {left: r.left, right: r.right, top: r.top, bottom: r.bottom,
+                  width: r.width, centerY: r.top + r.height / 2};
+        }""", name)
+
+    def _last_row_last_card(self):
+        return self.page.evaluate("""(() => {
+          const cards = [...document.querySelectorAll('#tabs-list .tab-card')]
+            .filter(c => c.style.display !== 'none');
+          if (!cards.length) return null;
+          const rs = cards.map(c => c.getBoundingClientRect());
+          const lastTop = Math.max.apply(null, rs.map(r => r.top));
+          let lastCard = null, lastRight = -Infinity;
+          cards.forEach((c, i) => {
+            if (Math.abs(rs[i].top - lastTop) < 1 && rs[i].right > lastRight) {
+              lastRight = rs[i].right; lastCard = c;
+            }
+          });
+          const r = lastCard.getBoundingClientRect();
+          return {name: lastCard.querySelector('.tab-name').textContent.trim(),
+                  right: r.right, centerY: r.top + r.height / 2, width: r.width};
+        })()""")
+
+    def _point_over_any_card(self, x, y):
+        return self.page.evaluate("""([x, y]) => {
+          return [...document.querySelectorAll('#tabs-list .tab-card')].some(c => {
+            if (c.style.display === 'none') return false;
+            const r = c.getBoundingClientRect();
+            return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+          });
+        }""", [x, y])
+
+    def _storage_order(self):
+        return json.loads(self.page.evaluate("""(async () => {
+          const d = await chrome.storage.get('blattam-tabs');
+          return JSON.stringify((d['blattam-tabs'] || []).map(t => t.name));
+        })()"""))
+
+    # 1. Anchor is stable anywhere inside the touched card: the ghost takes
+    #    C3's cell (AFTER it in the DOM — C3 slid left) at fx 0.1, 0.5 and 0.9.
+    #    Under the old always-before semantics these asserted prevName C2 /
+    #    nextName C3 — the opposite side.
+    def test_anchor_stable_anywhere_inside_card(self):
+        self._load()
+        self._start_drag("C1")
+        for fx in (0.1, 0.5, 0.9):
+            x, y = self._card_point("C3", fx)
+            assert self._point_over_any_card(x, y) is True, (fx, x, y)
+            self._over_point(x, y)
+            d = self._ghost()
+            assert d["exists"] is True and d["hidden"] is False, (fx, d)
+            assert d["prevName"] == "C3" and d["nextName"] == "C4", (fx, d)
+        self._end_drag()
+
+    # 2. Touch-to-move RIGHTWARD: each touched card slides left, the ghost
+    #    lands after it (C5 then C7).
+    def test_touch_to_move_rightward(self):
+        self._load()
+        self._start_drag("C1")
+        x, y = self._card_point("C5", 0.5)
+        self._over_point(x, y)
+        d = self._ghost()
+        assert d["prevName"] == "C5" and d["nextName"] == "C6", d
+        x, y = self._card_point("C7", 0.5)
+        self._over_point(x, y)
+        d = self._ghost()
+        assert d["prevName"] == "C7" and d["nextName"] == "C8", d
+        self._end_drag()
+
+    # 3. Touch-to-move LEFTWARD (the direction that worked before, must stay
+    #    identical): each touched card slides RIGHT, the ghost lands before it.
+    def test_touch_to_move_leftward(self):
+        self._load()
+        self._start_drag("C5")
+        x, y = self._card_point("C4", 0.5)
+        self._over_point(x, y)
+        d = self._ghost()
+        assert d["nextName"] == "C4" and d["prevName"] == "C3", d
+        x, y = self._card_point("C3", 0.5)
+        self._over_point(x, y)
+        d = self._ghost()
+        assert d["nextName"] == "C3" and d["prevName"] == "C2", (x, d)
+        self._end_drag()
+
+    # 4. Gap stickiness: after anchoring on C3 (ghost after C3), hovering the
+    #    12px gap between C3 and C4 moves NOTHING (cards move only on touch).
+    def test_gap_between_cards_is_sticky(self):
+        self._load()
+        self._start_drag("C1")
+        x, y = self._card_point("C3", 0.5)
+        self._over_point(x, y)
+        d1 = self._ghost()
+        assert d1["prevName"] == "C3" and d1["nextName"] == "C4", d1
+        r3 = self._card_rect("C3")
+        r4 = self._card_rect("C4")
+        gx, gy = (r3["right"] + r4["left"]) / 2, r3["centerY"]
+        assert self._point_over_any_card(gx, gy) is False, (gx, gy)
+        assert r4["left"] - r3["right"] > 2, (r3, r4)  # a real gap
+        self._over_point(gx, gy)
+        d2 = self._ghost()
+        assert d2["prevName"] == "C3" and d2["nextName"] == "C4", (gx, d2)
+        self._end_drag()
+
+    # 5. End of a partial row still reachable: empty cell right of C9 (row2
+    #    has C6..C9) -> ghost after C9 (regression guard for the A3a branch).
+    def test_end_of_partial_row_still_reachable(self):
+        self._load()  # 9 cards / 5 cols -> last row C6..C9 (4 of 5), col 5 empty
+        self._start_drag("C1")
+        lc = self._last_row_last_card()
+        assert lc["name"] == "C9", lc
+        x = lc["right"] + lc["width"] * 0.5   # center of the empty cell to the right
+        y = lc["centerY"]
+        assert self._point_over_any_card(x, y) is False, (x, y)
+        self._over_point(x, y)
+        d = self._ghost()
+        assert d["exists"] is True and d["hidden"] is False, d
+        assert d["nextName"] is None and d["prevName"] == "C9", d
+        self._end_drag()
+
+    # 6. Cross-row gap: ghost on row1 (home), cursor in the row2 gap between
+    #    C7 and C8 -> legacy center-line follow to the cursor's row (the
+    #    ghost lands before C8), unchanged from the cursor-oriented wave.
+    def test_cross_row_gap_follows_legacy(self):
+        self._load()
+        self._start_drag("C1")
+        r7 = self._card_rect("C7")
+        r8 = self._card_rect("C8")
+        gx, gy = (r7["right"] + r8["left"]) / 2, r7["centerY"]
+        assert self._point_over_any_card(gx, gy) is False, (gx, gy)
+        self._over_point(gx, gy)
+        d = self._ghost()
+        assert d["exists"] is True and d["hidden"] is False, d
+        assert d["nextName"] == "C8" and d["prevName"] == "C7", d
+        self._end_drag()
+
+    # 7. Full drag+drop in both themes, both directions: drop commits at the
+    #    ghost slot (C1 after C3 when walking right; C5 before C3 when
+    #    walking left). No pageerror.
+    def test_full_drag_drop_both_sides_both_themes_no_pageerror(self):
+        for theme in (None, "dark"):
+            self._load(theme=theme)
+            self._start_drag("C1")
+            x, y = self._card_point("C3", 0.5)
+            self._over_point(x, y)
+            self._drop_point(x, y)
+            self._end_drag()
+            order = self._storage_order()
+            assert order.index("C1") == order.index("C3") + 1, (theme, order)
+            assert order[0] == "C2", (theme, order)
+            self._load(theme=theme)
+            self._start_drag("C5")
+            x, y = self._card_point("C3", 0.5)
+            self._over_point(x, y)
+            self._drop_point(x, y)
+            self._end_drag()
+            order = self._storage_order()
+            assert order.index("C5") == order.index("C3") - 1, (theme, order)
+            assert order[0] == "C1", (theme, order)
+
+    # 8. REAL MOUSE rightward walk: reflow happens EXACTLY at touch — over C2
+    #    the ghost is after C2, in the gap right of C2 nothing moves, on
+    #    entering C3's rect the ghost becomes after C3.
+    def test_real_mouse_rightward_reflow_exactly_at_touch(self):
+        self._load()
+        x, y = self._card_point("C1", 0.5)
+        self.page.mouse.move(x, y)
+        self.page.mouse.down()
+        self.page.mouse.move(x + 14, y)  # arm (>8px) — C1 yanked out
+        self.page.wait_for_timeout(80)
+        r2 = self._card_rect("C2")  # re-measure after the yank
+        r3 = self._card_rect("C3")
+        target = (r3["left"] + r3["width"] * 0.5, r3["centerY"])
+        sx = x + 14
+        over_c2 = over_gap = over_c3 = None
+        while sx < target[0]:
+            sx = min(sx + 8, target[0])
+            self.page.mouse.move(sx, y)
+            self.page.wait_for_timeout(30)
+            d = self._ghost()
+            if over_c2 is None and r2["left"] <= sx <= r2["right"]:
+                over_c2 = d
+            if over_gap is None and r2["right"] < sx < r3["left"]:
+                over_gap = d
+            if over_c3 is None and r3["left"] <= sx <= r3["right"]:
+                over_c3 = d
+                break
+        assert over_c2 is not None and over_c3 is not None, (over_c2, over_c3)
+        assert over_c2["prevName"] == "C2" and over_c2["nextName"] == "C3", over_c2
+        if over_gap is not None:
+            assert over_gap["prevName"] == "C2" and over_gap["nextName"] == "C3", over_gap
+        assert over_c3["prevName"] == "C3" and over_c3["nextName"] == "C4", over_c3
+        self._cancel_mouse()
+        assert self._storage_order() == ["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9"]
+
+    # 9. REAL MOUSE leftward walk (the working direction on the pointer path,
+    #    must stay identical): touch C4 -> ghost before C4 exactly at touch;
+    #    sticky in the gap; touch C3 -> ghost before C3.
+    def test_real_mouse_leftward_reflow_exactly_at_touch(self):
+        self._load()
+        x, y = self._card_point("C5", 0.5)
+        self.page.mouse.move(x, y)
+        self.page.mouse.down()
+        self.page.mouse.move(x - 14, y)  # arm (>8px) — C5 yanked out
+        self.page.wait_for_timeout(80)
+        r3 = self._card_rect("C3")
+        r4 = self._card_rect("C4")
+        target = (r3["left"] + r3["width"] * 0.5, r3["centerY"])
+        sx = x - 14
+        over_c4 = over_gap = over_c3 = None
+        while sx > target[0]:
+            sx = max(sx - 8, target[0])
+            self.page.mouse.move(sx, y)
+            self.page.wait_for_timeout(30)
+            d = self._ghost()
+            if over_c4 is None and r4["left"] <= sx <= r4["right"]:
+                over_c4 = d
+            if over_gap is None and r3["right"] < sx < r4["left"]:
+                over_gap = d
+            if over_c3 is None and r3["left"] <= sx <= r3["right"]:
+                over_c3 = d
+                break
+        assert over_c4 is not None and over_c3 is not None, (over_c4, over_c3)
+        assert over_c4["nextName"] == "C4" and over_c4["prevName"] == "C3", over_c4
+        if over_gap is not None:
+            assert over_gap["nextName"] == "C4" and over_gap["prevName"] == "C3", over_gap
+        assert over_c3["nextName"] == "C3" and over_c3["prevName"] == "C2", over_c3
+        self._cancel_mouse()
+        assert self._storage_order() == ["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9"]
+
+    # 10. REAL MOUSE drop: grab C1, walk right onto C3, release over C3 ->
+    #     the pointer-path drop commits at the ghost slot: C2, C3, C1, ...
+    def test_real_mouse_drop_commits_at_ghost_position(self):
+        self._load()
+        x, y = self._card_point("C1", 0.5)
+        self.page.mouse.move(x, y)
+        self.page.mouse.down()
+        self.page.mouse.move(x + 14, y)  # arm
+        self.page.wait_for_timeout(80)
+        r3 = self._card_rect("C3")
+        tx, ty = r3["left"] + r3["width"] * 0.5, r3["centerY"]
+        sx = x + 14
+        while sx < tx:
+            sx = min(sx + 8, tx)
+            self.page.mouse.move(sx, ty)
+            self.page.wait_for_timeout(30)
+        d = self._ghost()
+        assert d["prevName"] == "C3" and d["nextName"] == "C4", d
+        self.page.mouse.up()  # release over C3 — commit
+        self.page.wait_for_timeout(300)
+        order = self._storage_order()
+        assert order[:3] == ["C2", "C3", "C1"], order
+
+    # Cancel a pointer drag: release over the section header row (empty band —
+    # ghost hidden, release cancels, storage untouched).
+    def _cancel_mouse(self):
+        c = self.page.evaluate("(() => { const r = document.querySelector('.center').getBoundingClientRect(); return {x: (r.left + r.right) / 2, y: r.top + 39}; })()")
+        self.page.mouse.move(c["x"], c["y"])
+        self.page.mouse.up()
+        self.page.wait_for_timeout(300)
