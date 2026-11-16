@@ -1738,8 +1738,8 @@ function slotIsSourceHome(clientY) {
   let n = card.nextElementSibling;
   while (n && !n.classList.contains('gbar') && !n.classList.contains('loose-label'))
     n = n.nextElementSibling;
-  const top = header ? header.getBoundingClientRect().bottom : 0;
-  const bottom = n ? n.getBoundingClientRect().top : Infinity;
+  const top = header ? layoutRect(header).bottom : 0;
+  const bottom = n ? layoutRect(n).top : Infinity;
   return clientY != null && clientY >= top && clientY < bottom;
 }
 
@@ -1771,6 +1771,30 @@ function slotAnchor(idx, clientY) {
   return { el: card, side: 'before' };
 }
 
+// Layout-rect = rect МИНус in-flight FLIP-transform (то же вычитание
+// matrix(tx, ty), что и в applyFlipFrom): геометрия территорий (строки,
+// midpoint-tiling, touch-rect) должна быть детерминированной относительно
+// DOM-порядка + grid-layout и НЕ зависеть от состояния анимации — иначе
+// событие, прилетевшее во время 200ms-слайда, резолвит WRONG-owner
+// (mid-flight rect сдвинут до полуклетки), и freeze защёлкивает чужой
+// anchor (осцилляция между соседними вкладками: чем больше возишь, тем
+// хуже). Элемент без transform (ghost-slot, шапки, #tabs-list) — no-op.
+function layoutRect(el) {
+  const r = el.getBoundingClientRect();
+  const cs = getComputedStyle(el).transform;
+  if (cs && cs !== 'none') {
+    const m = cs.match(/matrix\(([^)]+)\)/);
+    if (m) {
+      const p = m[1].split(',');
+      const tx = parseFloat(p[4]) || 0;
+      const ty = parseFloat(p[5]) || 0;
+      return { left: r.left - tx, right: r.right - tx, top: r.top - ty,
+               bottom: r.bottom - ty, width: r.width, height: r.height };
+    }
+  }
+  return r;
+}
+
 // Territory-oriented anchor, CARD path only (dragSourceUrl set, no group
 // drag). A card's TERRITORY = its rect + half of the gap to each neighbor
 // (midpoint split, horizontally within a row and vertically across
@@ -1791,7 +1815,7 @@ function cursorCardAnchor(clientX, clientY) {
   // исходник ещё виден, курсор над НИМ — домашний слот (дроп — no-op).
   if (dragSourceCardEl && dragSourceCardEl.isConnected &&
       dragSourceCardEl.style.display !== 'none') {
-    const sr = dragSourceCardEl.getBoundingClientRect();
+    const sr = layoutRect(dragSourceCardEl);
     if (clientX >= sr.left && clientX <= sr.right && clientY >= sr.top && clientY <= sr.bottom)
       return { el: dragSourceCardEl, side: 'after' };
   }
@@ -1827,7 +1851,7 @@ function cursorCardAnchor(clientX, clientY) {
   for (const s of sections) {
     const rows = [];
     for (const it of s.items) {
-      const r = it.el.getBoundingClientRect();
+      const r = layoutRect(it.el);
       const last = rows[rows.length - 1];
       if (last && Math.abs(last.top - r.top) < 4) { // <4: subpixel offsets must not split a row
         last.items.push(it);
@@ -1868,7 +1892,7 @@ function cursorCardAnchor(clientX, clientY) {
   const ownerOf = (els, x) => {
     const n = els.length;
     if (!n) return null;
-    const rects = els.map(el => el.getBoundingClientRect());
+    const rects = els.map(el => layoutRect(el));
     const leftEdge = rects[0].left;
     if (x < leftEdge || x > rightEdge) return null;
     for (let i = 0; i < n; i++) {
@@ -1904,7 +1928,7 @@ function cursorCardAnchor(clientX, clientY) {
   const betweenSections = (S, N, sections) => {
     if (N.rows.length) {
       const sLast = S.rows.length ? S.rows[S.rows.length - 1].bottom
-        : (S.topEl ? S.topEl.getBoundingClientRect().bottom : lr.top);
+        : (S.topEl ? layoutRect(S.topEl).bottom : lr.top);
       const M = (sLast + N.rows[0].top) / 2;
       if (clientY > M) {
         const owner = ownerOf(N.rows[0].cards, clientX);
@@ -1929,7 +1953,7 @@ function cursorCardAnchor(clientX, clientY) {
   };
   for (let si = 0; si < sections.length; si++) {
     const s = sections[si];
-    const topBound = s.topEl ? s.topEl.getBoundingClientRect().top : lr.top;
+    const topBound = s.topEl ? layoutRect(s.topEl).top : lr.top;
     const rows = s.rows;
     // Above this section's top bound: the tail zone of the previous section
     // (or above the first header — legacy A3c).
@@ -1967,7 +1991,7 @@ function cursorCardAnchor(clientX, clientY) {
       const itemEls = row.items.map(it => it.el);
       const n = itemEls.length;
       if (!n) continue;
-      const rects = itemEls.map(el => el.getBoundingClientRect());
+      const rects = itemEls.map(el => layoutRect(el));
       // A3a: empty end of the row (right of the rightmost item) — legacy
       // end-of-row behavior (unchanged).
       if (clientX > rects[n - 1].right) {
@@ -1986,14 +2010,14 @@ function cursorCardAnchor(clientX, clientY) {
       if (owner === ghost) return stickyGhostAnchor();
       // Owner is a card.
       const card = owner;
-      const crect = card.getBoundingClientRect();
+      const crect = layoutRect(card);
       if (clientX >= crect.left && clientX <= crect.right) {
         // Touch rule (unchanged): section-boundary override for the first
         // card of a section + freeze + DOM-side flip.
         const gi = gIdx.get(card);
         const header = sectionHeaderBefore(card);
         if (header && gi > 0 && tabGroupOf(card.__tab) !== tabGroupOf(cards[gi - 1].__tab)) {
-          const hr = header.getBoundingClientRect();
+          const hr = layoutRect(header);
           const below = clientY == null || clientY > hr.top + hr.height / 2;
           if (below) return { el: header, side: 'after' };
           return { el: cards[gi - 1], side: 'after' };
@@ -2022,7 +2046,7 @@ function cursorCardAnchor(clientX, clientY) {
     if (si < sections.length - 1) {
       const next = sections[si + 1];
       const nextTop = next.rows.length ? next.rows[0].top
-        : (next.topEl ? next.topEl.getBoundingClientRect().top : lr.top);
+        : (next.topEl ? layoutRect(next.topEl).top : lr.top);
       if (clientY < nextTop) return betweenSections(s, next, sections);
       continue;
     }
@@ -2215,8 +2239,8 @@ function cardAreaEmptyBand(clientX, clientY) {
     else rows.push({ top: r.top, bottom: r.bottom });
   };
   for (const el of last2.items) {
-    if (el.classList.contains('tab-card') && el.style.display !== 'none') addRow(el.getBoundingClientRect());
-    else if (el.classList.contains('group-empty-slot')) addRow(el.getBoundingClientRect());
+    if (el.classList.contains('tab-card') && el.style.display !== 'none') addRow(layoutRect(el));
+    else if (el.classList.contains('group-empty-slot')) addRow(layoutRect(el));
   }
   if (g && ghostSlotSectionId() === (last2.id === 'loose' ? null : last2.id)) addRow(g);
   rows.sort((a, b) => a.top - b.top);
@@ -2602,19 +2626,40 @@ function trackCardDragAt(clientX, clientY, targetEl) {
   const anchor = cursorCardAnchor(clientX, clientY);
   setGhostDisplay('');
   if (anchor) {
-    // «row-full» группа: до переноса заглушки (и снимка FLIP) держим/снимаем
-    // временное скрытие крайней карточки — её рефлоу войдёт в стартовую
-    // позицию FLIP-слайда
-    updateWrapHiddenCard(anchor);
     // FLIP (pointer path ONLY): when the slot anchor actually CHANGES — record
     // rects of the visible cards before the move, then apply the slide
     // transform after it. One FLIP pass per anchor change. The synthetic
     // HTML5 path never FLIPs — its geometry is untouched.
+    // ВАЖНО: снимок — ДО ВСЕХ рефлоу этого события (wrap-hidden + ход
+    // заглушки + холдер): «first» = истинное до-состояние (settled-раскладка
+    // предыдущего тика), «last» = финальная раскладка после хода. Если любой
+    // рефлоу стоит ПЕРЕД снимком — снимок фиксирует фантомную раскладку:
+    // например, restoreWrapHiddenCard возвращает крайнюю карточку row-full
+    // группы, пока заглушка ЕЩЁ в её строке (6 ячеек = +1 строка), а затем
+    // moveGhostSlot уводит заглушку и строка схлопывается. FLIP старт-
+    // трансформ = (фантом − финал) = +высота строки: ВСЕ карточки ниже
+    // группы (крайняя карточка G, сама H и всё под ней) на 200ms уезжают
+    // ВНИЗ на строку и слайдом возвращаются — «дерганье вниз» вкладок под
+    // группой при касании зазора между её последней вкладкой и шапкой
+    // следующей группы (баг G<->H gap).
     const changed = pd && pd.armed &&
         (!pdLastAnchor || pdLastAnchor.el !== anchor.el || pdLastAnchor.side !== anchor.side);
     const firstRects = changed ? snapshotCardRects() : null;
+    // «row-full» группа: держим/снимаем временное скрытие крайней карточки —
+    // её рефлоу входит в post-геометрию FLIP (applyFlipFrom читает финальную
+    // раскладку); скрытая карточка в снимок не попадёт и «мигнёт» на месте
+    // заглушки без слайда
+    updateWrapHiddenCard(anchor);
     moveGhostSlot(anchor);
     pdLastAnchor = anchor;
+    // Холдер строки исходной секции пересчитываем ДО post-снимка FLIP
+    // (тот же тик): заглушка уехала из исходной секции — она могла потерять
+    // строку, и невидимый холдер её разворачивает обратно. Post-геометрия
+    // FLIP обязана учесть этот рефлоу: иначе старт-трансформ = (старая −
+    // схлопнутая) = +высота строки — все карточки НИЖЕ исходной секции
+    // («под ней») на кадр уезжают ВНИЗ на строку и 200ms-слайдом возвращаются
+    // (видимое «дерганье вниз» сохранённых вкладок при проносе мимо группы).
+    syncSourceRowKeeper();
     if (firstRects) applyFlipFrom(firstRects);
   } else {
     restoreWrapHiddenCard(); // заглушка не вставлена — скрытую карточку вернуть

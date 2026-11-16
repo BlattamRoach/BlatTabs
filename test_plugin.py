@@ -16359,6 +16359,239 @@ class TestTouchOrientedMove:
         self.page.wait_for_timeout(300)
 
 
+class TestTerritoryOscillation:
+    """Осцилляция курсора между соседними вкладками во время FLIP-слайда.
+
+    Баг (отчёт пользователя): «целая куча вкладок, хватаю левую, веду на
+    правую — сначала меняются местами, но чем больше возишь курсор туда-сюда,
+    тем больше тупит механизм перемещения». Корень: во время 200ms FLIP-
+    слайда getBoundingClientRect() сдвигающихся карточек отдаёт mid-flight
+    (transformed) позиции; cursorCardAnchor строит всю геометрию территорий
+    по этим live-rects (tiling строки, midpoint-разбиение, touch-rect) —
+    середины зазоров уезжают на полклетки, событие mid-FLIP коммитит
+    WRONG-owner, freeze (pdLastTouchCard/pdLastTouchAnchor) защёлкивает
+    чужой anchor, и заглушка в конце стоит не там, где требует settled-
+    геометрия конечной позиции курсора.
+
+    Фикстура: 1 пространство sp1, группа gA, 9 вкладок C1..C9, viewport
+    1280x800 -> 5 колонок: row1 C1..C5, row2 C6..C9. ЗАХВАТ C2 РЕАЛЬНОЙ
+    МЫШЬЮ (pointer-путь: FLIP активен; синтетический HTML5-путь не FLIP-ит
+    и баг на нём не воспроизводится). После захвата заглушка в домашнем
+    слоте C2: [C1, ghost, C3, C4, C5]. Осцилляция между центрами
+    колонок 1 и 3 (сеточные колонки фиксированы, координаты не зависят от
+    состояния):
+      * курсор в центре col1 -> settled-состояние B: [ghost, C1, C3, C4, C5]
+        (touch C1, заглушка после C1 -> 'before' C1): ghost prev null next C1;
+      * курсор в центре col3 -> settled-состояние A: [C1, C3, ghost, C4, C5]
+        (touch C3, заглушка до C3 -> 'after' C3): ghost prev C3 next C4.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self._errors = []
+        page.on("pageerror", self._on_err)
+        yield
+        assert not self._errors, self._errors
+        page.remove_listener("pageerror", self._on_err)
+
+    def _on_err(self, err):
+        self._errors.append(str(err))
+
+    SP = [{"id": "sp1", "name": "Main"}]
+    GROUPS = [{"id": "gA", "name": "A", "spaceId": "sp1", "collapsed": False}]
+
+    def _tabs(self, n=9):
+        return [{"name": "C%d" % i, "url": "https://c%d.com" % i,
+                 "spaceId": "sp1", "groupId": "gA"} for i in range(1, n + 1)]
+
+    def _load(self):
+        load_view(self.page, spaces=self.SP, groups=self.GROUPS,
+                  tabs=self._tabs(9), last_space="sp1")
+        css = load_file("theme.css")
+        html = load_file("view.html")
+        style_block = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate("""(css) => {
+          const s = document.createElement('style');
+          s.textContent = css;
+          document.head.appendChild(s);
+        }""", css + style_block)
+        self.page.set_viewport_size({"width": 1280, "height": 800})
+        self.page.mouse.move(0, 0)
+        self.page.wait_for_timeout(200)
+        self._maps()
+
+    def _maps(self):
+        self.page.evaluate("""(() => {
+          window.__cards = {};
+          document.querySelectorAll('#tabs-list .tab-card').forEach(c => {
+            const n = c.querySelector('.tab-name').textContent.trim();
+            window.__cards[n] = c;
+          });
+        })()""")
+
+    def _card_rect(self, name):
+        return self.page.evaluate("""(name) => {
+          const r = window.__cards[name].getBoundingClientRect();
+          return {left: r.left, right: r.right, top: r.top, bottom: r.bottom,
+                  width: r.width, centerY: r.top + r.height / 2};
+        }""", name)
+
+    def _ghost(self):
+        return json.loads(self.page.evaluate("""(() => {
+          const slot = document.querySelector('.tab-ghost-slot');
+          const nm = el => el && el.querySelector && el.querySelector('.tab-name')
+            ? el.querySelector('.tab-name').textContent.trim() : null;
+          return JSON.stringify({
+            exists: !!slot,
+            hidden: slot ? getComputedStyle(slot).display === 'none' : false,
+            prevName: slot ? nm(slot.previousElementSibling) : null,
+            nextName: slot ? nm(slot.nextElementSibling) : null
+          });
+        })()"""))
+
+    # --- real pointer drag (FLIP-active path) ---
+
+    def _grab(self, name):
+        """Real mouse grab + arm; ends with the pointer in C2's old center+14."""
+        r = self._card_rect(name)
+        x, y = r["left"] + r["width"] / 2, r["centerY"]
+        self.page.mouse.move(x, y)
+        self.page.mouse.down()
+        self.page.mouse.move(x + 14, y)  # arm (>8px)
+        self.page.wait_for_timeout(150)
+        self._mx, self._my = x + 14, y
+
+    def _settle(self):
+        """Wait out the FLIP slide (slideMs + margin)."""
+        ms = self.page.evaluate("() => window.blatamFx.slideMs")
+        self.page.wait_for_timeout(ms + 150)
+
+    def _walk_to(self, x, y, wait_ms=30):
+        """Stepped pointer walk to (x, y); final event lands exactly on (x, y)."""
+        sx = self._mx
+        dx = x - sx
+        n = max(1, int(abs(dx) / 12))
+        for i in range(1, n + 1):
+            self.page.mouse.move(sx + dx * i / n, y)
+            self.page.wait_for_timeout(wait_ms)
+        self._mx, self._my = x, y
+
+    def _col_centers(self):
+        """Grid-column centers col1/col3 from the settled post-grab layout:
+        [C1, ghost, C3, ...] -> C1 is col1, C3 is col3; pitch = (c3-c1)/2."""
+        return self.page.evaluate("""(() => {
+          const c1 = window.__cards['C1'].getBoundingClientRect();
+          const c3 = window.__cards['C3'].getBoundingClientRect();
+          const pitch = (c3.left - c1.left) / 2;
+          const x1 = c1.left + c1.width / 2;
+          return {x1: x1, x3: x1 + 2 * pitch, y: c1.top + c1.height / 2};
+        })()""")
+
+    def _cancel_mouse(self):
+        c = self.page.evaluate("(() => { const r = document.querySelector('.center').getBoundingClientRect(); return {x: (r.left + r.right) / 2, y: r.top + 39}; })()")
+        self.page.mouse.move(c["x"], c["y"])
+        self.page.mouse.up()
+        self.page.wait_for_timeout(300)
+
+    # 1. REPRO (deterministic): a mid-FLIP event commits to the WRONG owner.
+    #    State A (ghost after C3), cursor at col3 center (ghost cell, sticky).
+    #    Yank the cursor to col1 center: touch C1 -> reflow to B, the FLIP
+    #    slide starts (C1/C3 slide RIGHT, ~200ms). IMMEDIATELY move the
+    #    cursor to the col2 center (one CDP round-trip later, the slide is
+    #    mid-flight):
+    #      old code: C3's MID-FLIGHT rect (sliding right, covering col2
+    #        center) is resolved first -> touch C3 -> the ghost (before C3
+    #        in the DOM) is committed AFTER it -> state A (WRONG owner);
+    #      fixed code: layout (settled) geometry -> col2 center is C1's
+    #        rect in state B -> the cursor never left C1's card -> the
+    #        freeze holds {C1,'before'} -> state B.
+    #    The settle after the burst only waits out the animation; no further
+    #    events re-evaluate the anchor, so the wrong commit persists.
+    def test_midflip_event_commits_wrong_owner(self):
+        self._load()
+        self._grab("C2")
+        self._settle()
+        cc = self._col_centers()
+        x1, x3, y = cc["x1"], cc["x3"], cc["y"]
+        xhome = (x1 + x3) / 2  # col2 center (the ghost's home cell)
+        # Establish state A (ghost after C3) with a calm walk.
+        self._walk_to(x3, y)
+        self._settle()
+        d = self._ghost()
+        assert d["exists"] is True and d["hidden"] is False, d
+        assert d["prevName"] == "C3" and d["nextName"] == "C4", d
+        # Yank to col1 center (touch C1 -> B, FLIP slide starts). NO settle.
+        self.page.mouse.move(x1, y)
+        # Immediately to the col2 center — one event, mid-FLIP.
+        self.page.mouse.move(xhome, y)
+        self._settle()
+        d = self._ghost()
+        assert d["exists"] is True and d["hidden"] is False, d
+        # Settled-geometry answer for the final cursor position (col2 center
+        # in state B = C1's rect, the cursor never left C1's card, freeze):
+        # the ghost stays BEFORE C1 (state B).
+        assert d["prevName"] is None and d["nextName"] == "C1", d
+        self._cancel_mouse()
+
+    # 2. REPRO (user scenario): continuous back-and-forth oscillation between
+    #    the two visible neighbors of the grabbed tab, dense real-mouse
+    #    events with NO settle waits (the mouse never rests mid-drag). After
+    #    the oscillation ends at col3 center the ghost must be in the
+    #    settled-geometry position for that point (state A: ghost after C3).
+    def test_oscillation_continuous_final_ghost_matches_settled_geometry(self):
+        self._load()
+        self._grab("C2")
+        self._settle()
+        cc = self._col_centers()
+        x1, x3, y = cc["x1"], cc["x3"], cc["y"]
+        # Establish state A with a calm walk.
+        self._walk_to(x3, y)
+        self._settle()
+        d = self._ghost()
+        assert d["exists"] is True and d["hidden"] is False, d
+        assert d["prevName"] == "C3" and d["nextName"] == "C4", d
+        # Continuous oscillation: 3 full round trips, 10 small moves per leg,
+        # no waits — events stream while the FLIP slides are in flight.
+        for _ in range(3):
+            for i in range(1, 11):
+                self.page.mouse.move(x3 + (x1 - x3) * i / 10, y)
+            for i in range(1, 11):
+                self.page.mouse.move(x1 + (x3 - x1) * i / 10, y)
+        self._settle()
+        d = self._ghost()
+        assert d["exists"] is True and d["hidden"] is False, d
+        # Final cursor at col3 center -> ghost AFTER C3 (state A).
+        assert d["prevName"] == "C3" and d["nextName"] == "C4", d
+        self._cancel_mouse()
+
+    # 3. Sanity guard: the SAME crossings with a full settle between every
+    #    one. Settled geometry is animation-independent -> must be green both
+    #    BEFORE and AFTER the fix (guards the territory/touch/sticky
+    #    semantics the other 666 tests encode).
+    def test_settled_crossings_exact_positions(self):
+        self._load()
+        self._grab("C2")
+        self._settle()
+        cc = self._col_centers()
+        x1, x3, y = cc["x1"], cc["x3"], cc["y"]
+        seq = [
+            (x3, "C3", "C4"),  # touch C3 (col3, home layout) -> ghost after C3
+            (x1, None, "C1"),  # touch C1 (col1) -> ghost before C1
+            (x3, "C3", "C4"),  # col3 = C3 (state B) -> ghost after C3
+            (x1, None, "C1"),  # col1 = C1 (state A) -> ghost before C1
+            (x3, "C3", "C4"),
+            (x1, None, "C1"),
+        ]
+        for i, (x, prev, nxt) in enumerate(seq):
+            self._walk_to(x, y)
+            self._settle()
+            d = self._ghost()
+            assert d["exists"] is True and d["hidden"] is False, (i, d)
+            assert d["prevName"] == prev and d["nextName"] == nxt, (i, d)
+        self._cancel_mouse()
+
+
 class TestNoMansLandTerritory:
     """Территории вкладок — нет ничейных полос между вкладками и шапками.
     Территория карточки = её rect + половина зазора до каждого соседа
@@ -16913,3 +17146,645 @@ class TestNoMansLandTerritory:
         self.page.wait_for_timeout(300)
         assert self._storage_order() == ["A1", "A2", "A3", "A4", "A5", "A6", "A7",
                                          "B1", "B2", "L1", "L2"]
+
+# ==========================================
+#  VIEW.JS: «row-full» ГРУППА + ВЕРТИКАЛЬНАЯ ПРОВОДКА ЧЕРЕЗ НЕЁ
+#  (отчёт пользователя: «все сохраненные вкладки под этой группой
+#  дергаются вниз» при проносе курсора сверху вниз мимо группы,
+#  у которой вкладки ровно на одну полную строку)
+# ==========================================
+
+class TestFullRowGroupSweep:
+    """«row-full» группа G (5 вкладок = ОДНА полная строка при 5 колонках)
+    стоит между секцией A (6 вкладок = 2 строки; 6 ≡ 1 mod 5 — исходная
+    секция, потерявшая заглушку, схлопывается на строку) и группой H
+    (2 вкладки, 1 строка). СХВАТЫВАЕМ вкладку из A и ВЕРТИКАЛЬНО ВОДИМ
+    курсором сверху вниз мимо G (pointer-путь: РЕАЛЬНАЯ мышь, FLIP активен).
+
+    Баг (нашёл фикстура): когда заглушка УЕЗЖАЕТ из исходной секции A и A
+    теряет строку, невидимый row-холдер (syncSourceRowKeeper) вставляется
+    ПОСЛЕ post-снимка FLIP (trackCardDragAt: applyFlipFrom раньше sync).
+    Post-геометрия FLIP вычислена по схлопнутой раскладке → старт-трансформ
+    = (старая − схлопнутая) = +высота строки: ВСЕ карточки ниже A (группа G
+    и всё под ней) на кадр уезжают ВНИЗ на строку и 200ms-слайдом
+    возвращаются — видимое «дерганье вниз» сохранённых вкладок. Фикс: холдер
+    пересчитывается ДО post-снимка FLIP (тот же тик, после moveGhostSlot).
+
+    Инварианты (pointer-путь, FLIP активен):
+      * во время слайда (сэмпли 30/60/120ms после события увода заглушки)
+        layout-топ (rect минус transform) карточек G и шапки H в пределах
+        ~8px от базового — вниз на строку не уезжает НИКОГДА;
+      * после settle: G = 1 строка (крайняя карточка временно скрыта, пока
+        заглушка внутри), шапки G/H и первая строка G на месте (±2.5px);
+      * медленный пронос по зонам (с settle) и быстрый («пронеслись»,
+        плотные mousemove без settle) — тот же инвариант после settle.
+    Варианты: 1 — источник сверху (A), 2 — источник ИЗ G (G не схлопывается:
+    5 ≡ 0 mod 5 — guard), 3 — ниже G негрупповые вкладки (loose).
+    Замер layout-top'ов с вычитанием transform (как layoutRect): hover-эффект
+    .tab-card:hover {transform: translateY(-1px)} не контаминит замер."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self._errors = []
+        page.on("pageerror", self._on_err)
+        yield
+        assert not self._errors, self._errors
+        page.remove_listener("pageerror", self._on_err)
+
+    def _on_err(self, err):
+        self._errors.append(str(err))
+
+    SP = [{"id": "sp1", "name": "Main"}]
+    GROUPS = [
+        {"id": "gA", "name": "A", "spaceId": "sp1", "collapsed": False},
+        {"id": "gG", "name": "G", "spaceId": "sp1", "collapsed": False},
+        {"id": "gH", "name": "H", "spaceId": "sp1", "collapsed": False},
+    ]
+
+    # layout-top элемента: getBoundingClientRect МИНус in-flight FLIP-transform
+    # (и hover-translateY) — та же идея, что layoutRect в view.js
+    LAYOUT_TOP = """(name) => {
+      const c = window.__cards[name];
+      const r = c.getBoundingClientRect();
+      const cs = getComputedStyle(c).transform;
+      let ty = 0;
+      if (cs && cs !== 'none') {
+        const m = cs.match(/matrix\\(([^)]+)\\)/);
+        if (m) ty = parseFloat(m[1].split(',')[5]) || 0;
+      }
+      return Math.round((r.top - ty) * 10) / 10;
+    }"""
+
+    # ВИЗУАЛЬНЫЙ top (rect С transform — то, что видит пользователь): для
+    # mid-slide замеров — FLIP-баг это именно висящий transform, layout-top
+    # его не показывает
+    RAW_TOP = """(name) => {
+      const r = window.__cards[name].getBoundingClientRect();
+      return Math.round(r.top * 10) / 10;
+    }"""
+
+    def _tabs(self, below_loose=False):
+        tabs = [{"name": "A%d" % i, "url": "https://a%d.com" % i,
+                 "spaceId": "sp1", "groupId": "gA"} for i in range(1, 7)]
+        tabs += [{"name": "T%d" % i, "url": "https://t%d.com" % i,
+                  "spaceId": "sp1", "groupId": "gG"} for i in range(1, 6)]
+        if below_loose:
+            tabs += [{"name": "L%d" % i, "url": "https://l%d.com" % i,
+                      "spaceId": "sp1"} for i in range(1, 3)]
+        else:
+            tabs += [{"name": "H%d" % i, "url": "https://h%d.com" % i,
+                      "spaceId": "sp1", "groupId": "gH"} for i in range(1, 3)]
+        return tabs
+
+    def _load(self, below_loose=False):
+        groups = self.GROUPS if not below_loose else self.GROUPS[:2]
+        load_view(self.page, spaces=self.SP, groups=groups,
+                  tabs=self._tabs(below_loose), last_space="sp1")
+        css = load_file("theme.css")
+        html = load_file("view.html")
+        style_block = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate("""(css) => {
+          const s = document.createElement('style');
+          s.textContent = css;
+          document.head.appendChild(s);
+        }""", css + style_block)
+        self.page.set_viewport_size({"width": 1280, "height": 900})
+        self.page.mouse.move(0, 0)
+        self.page.wait_for_timeout(200)
+        self.page.evaluate("""(() => {
+          window.__cards = {};
+          document.querySelectorAll('#tabs-list .tab-card').forEach(c => {
+            const n = c.querySelector('.tab-name').textContent.trim();
+            window.__cards[n] = c;
+          });
+        })()""")
+
+    def _gbar_top(self, gid="gG"):
+        return self.page.evaluate("""(gid) => {
+          const r = document.querySelector('.gbar[data-group-id="' + gid + '"]')
+            .getBoundingClientRect();
+          return Math.round(r.top * 10) / 10;
+        }""", gid)
+
+    # --- замер геометрии: layout-top'ы + число строк G + секция заглушки ---
+
+    def _measure(self, first_g_card="T1", below_el="gbarH"):
+        return json.loads(self.page.evaluate("""(args) => {
+          const layTop = (el) => {
+            const r = el.getBoundingClientRect();
+            const cs = getComputedStyle(el).transform;
+            let ty = 0;
+            if (cs && cs !== 'none') {
+              const m = cs.match(/matrix\\(([^)]+)\\)/);
+              if (m) ty = parseFloat(m[1].split(',')[5]) || 0;
+            }
+            return Math.round((r.top - ty) * 10) / 10;
+          };
+          const card = n => window.__cards[n];
+          const name = el => el && el.querySelector
+            ? (el.querySelector('.tab-name') ? el.querySelector('.tab-name').textContent.trim() : null)
+            : (el ? (el.className || el.tagName) : null);
+          const gbarG = document.querySelector('.gbar[data-group-id="gG"]');
+          const gbarH = document.querySelector('.gbar[data-group-id="gH"]');
+          const l1 = card('L1');
+          const ghost = document.querySelector('.tab-ghost-slot');
+          const gVis = ghost && ghost.style.display !== 'none';
+          // секция заглушки: идём назад до шапки/карточки
+          let gSec = null;
+          if (gVis) {
+            for (let p = ghost.previousElementSibling; p; p = p.previousElementSibling) {
+              if (p.classList.contains('gbar')) { gSec = p.dataset.groupId; break; }
+              if (p.classList.contains('loose-label')) { gSec = 'loose'; break; }
+              if (p.classList.contains('tab-card')) { gSec = p.__tab ? (p.__tab.groupId || 'loose') : null; break; }
+            }
+            if (!gSec) gSec = 'loose';
+          }
+          // строки G: distinct layout-top видимых карточек G + заглушки (если в G)
+          const tops = [...document.querySelectorAll('#tabs-list .tab-card')]
+            .filter(c => c.style.display !== 'none' && c.__tab && c.__tab.groupId === 'gG')
+            .map(layTop);
+          if (gVis && gSec === 'gG') tops.push(layTop(ghost));
+          const rows = [...new Set(tops)].sort((a, b) => a - b);
+          const below = args[1] === 'gbarH'
+            ? (gbarH ? Math.round(gbarH.getBoundingClientRect().top * 10) / 10 : null)
+            : (l1 ? Math.round(l1.getBoundingClientRect().top * 10) / 10 : null);
+          return JSON.stringify({
+            gbarG: Math.round(gbarG.getBoundingClientRect().top * 10) / 10,
+            gRow1: layTop(card(args[0])),
+            below,
+            gRows: rows,
+            ghost: {vis: !!gVis, sec: gSec,
+                    prev: gVis ? name(ghost.previousElementSibling) : null,
+                    next: gVis ? name(ghost.nextElementSibling) : null},
+            t5disp: card('T5').style.display,
+            aKeepers: document.querySelectorAll('.tab-row-keeper').length
+          });
+        }""", [first_g_card, below_el]))
+
+    def _assert_stable(self, m, base, where, tol=2.5):
+        for k in ("gbarG", "gRow1", "below"):
+            assert m[k] is not None and base[k] is not None, (where, k, m, base)
+            assert abs(m[k] - base[k]) <= tol, (
+                "%s: %s сдвинулся: %s -> %s %s" % (where, k, base[k], m[k], m))
+        assert len(m["gRows"]) == 1, (
+            "%s: у G %d строк (ожидается 1): %s" % (where, len(m["gRows"]), m))
+
+    # --- pointer-драг: реальный захват мыши ---
+
+    def _grab(self, name):
+        r = self.page.evaluate("""(name) => {
+          const r = window.__cards[name].getBoundingClientRect();
+          return {x: r.left + r.width / 2, y: r.top + r.height / 2};
+        }""", name)
+        self.page.mouse.move(r["x"], r["y"])
+        self.page.mouse.down()
+        self.page.mouse.move(r["x"] + 14, r["y"])
+        self.page.wait_for_timeout(150)
+
+    def _settle(self):
+        ms = self.page.evaluate("() => window.blatamFx.slideMs")
+        self.page.wait_for_timeout(ms + 150)
+
+    def _release_home(self):
+        # Отпускание на домашней позиции — драг-без-дропа (отмена)
+        self.page.mouse.up()
+        self.page.wait_for_timeout(400)
+
+    def _col2_x(self):
+        return self.page.evaluate("""(() => {
+          const r = window.__cards['T2'].getBoundingClientRect();
+          return r.left + r.width / 2;
+        })()""")
+
+    def _wp(self):
+        """Waypoints медленного проноса (из settled-геометрии после захвата)."""
+        return json.loads(self.page.evaluate("""(() => {
+          const c = n => window.__cards[n].getBoundingClientRect();
+          const gbG = document.querySelector('.gbar[data-group-id="gG"]').getBoundingClientRect();
+          const gbH = document.querySelector('.gbar[data-group-id="gH"]');
+          const a6 = c('A6');
+          const t1 = c('T1');
+          const below = gbH ? gbH.getBoundingClientRect() : c('L1');
+          return JSON.stringify({
+            aRow2: {x: a6.left + a6.width / 2, y: a6.top + a6.height / 2},
+            gbarG: {x: gbG.left + 200, y: gbG.top + gbG.height / 2},
+            between1: {x: t1.left + t1.width / 2, y: (gbG.bottom + t1.top) / 2},
+            gRow: {x: c('T2').left + c('T2').width / 2, y: t1.top + t1.height / 2},
+            between2: {x: c('T2').left + c('T2').width / 2,
+                       y: (t1.bottom + below.top) / 2},
+            gbarH: gbH ? {x: below.left + 200, y: below.top + below.height / 2}
+                       : {x: c('L1').left + c('L1').width / 2, y: c('L1').top - 20},
+            belowRow: {x: below.left + below.width / 2, y: below.top + below.height / 2}
+          });
+        })()"""))
+
+    def _sweep_slow(self, below_loose=False):
+        """По зонам с settle после каждой; возвращает список замеров."""
+        wp = self._wp()
+        x = self._col2_x()
+        seq = [wp["aRow2"], wp["gbarG"], wp["between1"], wp["gRow"],
+               wp["between2"]]
+        if not below_loose:
+            seq.append(wp["gbarH"])
+        seq.append(wp["belowRow"])
+        out = []
+        for i, p in enumerate(seq):
+            self.page.mouse.move(x, p["y"])
+            self._settle()
+            m = self._measure(below_el="gbarH" if not below_loose else "looseL")
+            out.append(m)
+        return out
+
+    def _mid_slide_dev(self, names, base):
+        """Макс. |ВИЗУАЛЬНЫЙ top − база| по карточкам (во время слайда)."""
+        tops = {n: self.page.evaluate(self.RAW_TOP, n) for n in names}
+        return max(abs(tops[n] - base[n]) for n in names)
+
+    # 1. КОРНЕВОЙ REPRO (детерминированный): заглушка уезжает из A (6 ≡ 1 mod
+    #    5: A схлопывается на строку, холдер её держит) в G — ОДНО событие.
+    #    Во время FLIP-слайда (30/60/120ms) layout-top карточек G и шапки H
+    #    НЕ УЕЗЖАЕТ ВНИЗ на строку (баг: старт-трансформ +высота строки —
+    #    карточки на кадр ниже финальной позиции, ~70px). После settle —
+    #    settled-инварианты: G 1 строка, низ на месте.
+    def test_ghost_leaving_source_no_downward_jerk_mid_flip(self):
+        self._load()
+        base = {n: self.page.evaluate(self.LAYOUT_TOP, n) for n in ("T1", "T3", "T4")}
+        base_h = self._gbar_top("gH")
+        self._grab("A1")
+        self._settle()
+        wp = self._wp()
+        x = self._col2_x()
+        # Одно событие: заглушка из A (домашний слот) в G (ниже M) — T5 скрывается
+        self.page.mouse.move(x, wp["between1"]["y"])
+        last = 0
+        for dt in (30, 60, 120):
+            self.page.wait_for_timeout(dt - last)
+            last = dt
+            dev = self._mid_slide_dev(("T1", "T3", "T4"), base)
+            assert dev < 8, (
+                "%dms: карточки G уехали на %spx от базы (вниз на строку = баг)"
+                % (dt, dev))
+            devh = abs(self._gbar_top("gH") - base_h)
+            assert devh <= 2.5, ("%dms: шапка H сдвинулась на %spx" % (dt, devh))
+        self._settle()
+        m = self._measure()
+        assert len(m["gRows"]) == 1, m  # G — одна строка (T5 временно скрыта)
+        assert abs(m["gbarG"] - self._gbar_top("gG")) < 0.1
+        assert m["t5disp"] == "none", "крайняя карточка G скрыта, пока заглушка внутри"
+        assert m["ghost"]["sec"] == "gG" and m["ghost"]["vis"], m
+        self._release_home()
+
+    # 1b. То же, но БЫСТРЫЙ пронос («пронеслись»): плотные mousemove сверху
+    #     вниз без settle; сэмпли mid-slide в середине проноса + settled-замер.
+    def test_fast_sweep_no_downward_jerk(self):
+        self._load()
+        base_m = self._measure()
+        base = {n: self.page.evaluate(self.LAYOUT_TOP, n) for n in ("T1", "T3", "T4")}
+        base_h = self._gbar_top("gH")
+        self._grab("A1")
+        self._settle()
+        wp = self._wp()
+        x = self._col2_x()
+        y0, y1 = wp["aRow2"]["y"], wp["belowRow"]["y"]
+        n = 45
+        # первые шаги: заглушка уезжает из A; сэмплируем ВО ВРЕМЕНИ слайда
+        for i in range(1, 8):
+            self.page.mouse.move(x, y0 + (y1 - y0) * i / n)
+        dev = self._mid_slide_dev(("T1", "T3", "T4"), base)
+        assert dev < 8, "быстрый пронос: карточки G уехали на %spx от базы" % dev
+        for i in range(8, n + 1):
+            self.page.mouse.move(x, y0 + (y1 - y0) * i / n)
+        self._settle()
+        self._assert_stable(self._measure(), base_m, "fast-final")
+        self._release_home()
+
+    # 2. МЕДЛЕННЫЙ пронос по зонам (источник сверху): settled-инварианты
+    #    после каждой зоны (G 1 строка, низ на месте).
+    def test_slow_sweep_source_above_settled_invariants(self):
+        self._load()
+        base = self._measure()
+        self._grab("A1")
+        self._settle()
+        for i, m in enumerate(self._sweep_slow()):
+            self._assert_stable(m, base, "slow-step%d" % i)
+        self._release_home()
+
+    # 3. Источник ИЗ G (5 ≡ 0 mod 5 — G не схлопывается, холдер не нужен):
+    #    settled-инварианты при проносе вниз из G в H.
+    def test_sweep_source_from_group_settled_invariants(self):
+        self._load()
+        base = self._measure(first_g_card="T2")
+        self._grab("T1")
+        self._settle()
+        for i, m in enumerate(self._sweep_slow()):
+            m = self._measure(first_g_card="T2", below_el="gbarH")
+            self._assert_stable(m, base, "fromG-step%d" % i)
+        self._release_home()
+
+    # 4. Ниже G — негрупповые вкладки (loose): тот же settled-инвариант.
+    def test_sweep_below_is_loose_settled_invariants(self):
+        self._load(below_loose=True)
+        base = self._measure(below_el="looseL")
+        self._grab("A1")
+        self._settle()
+        for i, m in enumerate(self._sweep_slow(below_loose=True)):
+            self._assert_stable(m, base, "loose-step%d" % i)
+        self._release_home()
+
+
+# === G<->H GAP JERK (user trigger: cursor touches the space between G's last
+# tab and H's .gbar, G = exactly one full row) ===
+
+
+class TestFullRowGapJerk:
+    """Группа G — ровно ОДНА полная строка (5 вкладок / 5 колонок); сразу
+    под ней — группа H. Баг (отчёт пользователя): при перетаскивании
+    сохранённой вкладки ВСЕ вкладки под G (шапка H и строка H) на мгновение
+    дёргаются ВНИЗ (уезжают на ~высоту строки, слайдом возвращаются) — в
+    момент, когда курсор с захваченной вкладкой КАСАЕТСЯ ПРОСТРАНСТВА МЕЖДУ
+    ПОСЛЕДНЕЙ вкладкой G и ХЕДЕРОМ группы H.
+
+    Жест (pointer-путь, РЕАЛЬНАЯ мышь, FLIP активен, плотные mousemove БЕЗ
+    settle — пользователь «пронёсся» мимо G сверху вниз): старт выше шапки
+    G -> по шапке G -> по строке G (chase вправо) -> В ЗАЗОР между последней
+    вкладкой G и шапкой H (там DWELL: несколько событий в одной точке) ->
+    дальше в H. Замер — ВИЗУАЛЬНЫЕ (RAW, с transform) топы: то, что видит
+    пользователь; сэмпли 30/60/120ms после фаз (внутренний FLIP-слайд 200ms).
+    Инварианты: G — 1 строка во ВСЕ моменты; шапка H и карточки H/G не
+    уезжают от базовых топов (±2.5px — hover translateY(-1px) учтён).
+    Варианты: источник ИЗ G (захват T1) и сверху (A1); H=2 и H=5 (full row);
+    путь: вертикальный (фикс. x — «мимо сверху вниз») и chase вправо."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self._errors = []
+        page.on("pageerror", self._on_err)
+        yield
+        assert not self._errors, self._errors
+        page.remove_listener("pageerror", self._on_err)
+
+    def _on_err(self, err):
+        self._errors.append(str(err))
+
+    SP = [{"id": "sp1", "name": "Main"}]
+
+    def _groups(self):
+        return [
+            {"id": "gA", "name": "A", "spaceId": "sp1", "collapsed": False},
+            {"id": "gG", "name": "G", "spaceId": "sp1", "collapsed": False},
+            {"id": "gH", "name": "H", "spaceId": "sp1", "collapsed": False},
+        ]
+
+    def _tabs(self, h_full):
+        tabs = [{"name": "A%d" % i, "url": "https://a%d.com" % i,
+                 "spaceId": "sp1", "groupId": "gA"} for i in range(1, 7)]
+        tabs += [{"name": "T%d" % i, "url": "https://t%d.com" % i,
+                  "spaceId": "sp1", "groupId": "gG"} for i in range(1, 6)]
+        nh = 5 if h_full else 2
+        tabs += [{"name": "H%d" % i, "url": "https://h%d.com" % i,
+                  "spaceId": "sp1", "groupId": "gH"} for i in range(1, nh + 1)]
+        return tabs
+
+    def _load(self, h_full):
+        load_view(self.page, spaces=self.SP, groups=self._groups(),
+                  tabs=self._tabs(h_full), last_space="sp1")
+        css = load_file("theme.css")
+        html = load_file("view.html")
+        style_block = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate("""(css) => {
+          const s = document.createElement('style');
+          s.textContent = css;
+          document.head.appendChild(s);
+        }""", css + style_block)
+        self.page.set_viewport_size({"width": 1280, "height": 900})
+        self.page.mouse.move(0, 0)
+        self.page.wait_for_timeout(200)
+        self.page.evaluate("""(() => {
+          window.__cards = {};
+          document.querySelectorAll('#tabs-list .tab-card').forEach(c => {
+            const n = c.querySelector('.tab-name').textContent.trim();
+            window.__cards[n] = c;
+          });
+        })()""")
+        self.h_names = ["H%d" % i for i in range(1, (5 if h_full else 2) + 1)]
+        self.g_names = ["T%d" % i for i in range(1, 6)]
+
+    # --- RAW (transform-INCLUSIVE) геометрия — то, что видит пользователь ---
+
+    def _gap_probe(self):
+        return json.loads(self.page.evaluate("""(args) => {
+          const gNames = args[0], hNames = args[1];
+          const card = n => window.__cards[n];
+          const raw = el => Math.round(el.getBoundingClientRect().top * 10) / 10;
+          const gbarH = document.querySelector('.gbar[data-group-id="gH"]');
+          const gbarG = document.querySelector('.gbar[data-group-id="gG"]');
+          const ghost = document.querySelector('.tab-ghost-slot');
+          const gVis = !!(ghost && ghost.style.display !== 'none');
+          let gSec = null;
+          if (gVis) {
+            for (let p = ghost.previousElementSibling; p; p = p.previousElementSibling) {
+              if (p.classList.contains('gbar')) { gSec = p.dataset.groupId; break; }
+              if (p.classList.contains('loose-label')) { gSec = 'loose'; break; }
+              if (p.classList.contains('tab-card')) {
+                gSec = p.__tab ? (p.__tab.groupId || 'loose') : null; break; }
+            }
+            if (!gSec) gSec = 'loose';
+          }
+          // строки G: только карточки G (+ заглушка, если в G); кластеризация
+          // с допуском 2px (subpixel + hover translateY(-1px) не дробят строку)
+          const tops = [];
+          for (const n of gNames) {
+            const c = card(n);
+            if (c && c.style.display !== 'none') tops.push(raw(c));
+          }
+          if (gVis && gSec === 'gG') tops.push(raw(ghost));
+          tops.sort((a, b) => a - b);
+          const rows = [];
+          for (const t of tops) {
+            if (!rows.length || t - rows[rows.length - 1] > 2) rows.push(t);
+          }
+          const out = {gbarG: raw(gbarG), gbarH: raw(gbarH), gRows: rows,
+                       ghost: {vis: gVis, sec: gSec},
+                       t5disp: card('T5').style.display,
+                       keepers: document.querySelectorAll('.tab-row-keeper').length};
+          for (const n of gNames.concat(hNames)) out[n] =
+            card(n) && card(n).style.display !== 'none' ? raw(card(n)) : null;
+          return JSON.stringify(out);
+        }""", [self.g_names, self.h_names]))
+
+    def _sample_mid_slide(self, base, phase, tol=2.5):
+        """Сэмпли RAW-топов через 30/60/120ms после последнего события
+        (FLIP-слайд 200ms ещё идёт). Возвращает (worst, where)."""
+        last = 0
+        worst = 0
+        worst_at = None
+        for dt in (30, 60, 120):
+            self.page.wait_for_timeout(dt - last)
+            last = dt
+            p = self._gap_probe()
+            assert len(p["gRows"]) == 1, (
+                "%s: G рендерится в %d строки mid-slide (обязана 1): %s"
+                % (phase, len(p["gRows"]), p))
+            for n in self.g_names + self.h_names:
+                if p[n] is None or base[n] is None:
+                    continue
+                d = abs(p[n] - base[n])
+                if d > worst:
+                    worst, worst_at = d, (n, "%dms" % dt, base[n], p[n])
+            for k in ("gbarH", "gbarG"):
+                d = abs(p[k] - base[k])
+                if d > worst:
+                    worst, worst_at = d, (k, "%dms" % dt, base[k], p[k])
+        assert worst <= tol, (
+            "%s: дёргание на %s px от базового (mid-slide): %s — RAW-топ "
+            "уезжает от базового: вкладки под G «дергаются вниз»"
+            % (phase, worst, worst_at))
+        return worst, worst_at
+
+    # --- pointer-драг ---
+
+    def _grab(self, name):
+        r = self.page.evaluate("""(name) => {
+          const r = window.__cards[name].getBoundingClientRect();
+          return {x: r.left + r.width / 2, y: r.top + r.height / 2};
+        }""", name)
+        self.page.mouse.move(r["x"], r["y"])
+        self.page.mouse.down()
+        self.page.mouse.move(r["x"] + 14, r["y"])
+        self.page.wait_for_timeout(150)
+
+    def _settle(self):
+        ms = self.page.evaluate("() => window.blatamFx.slideMs")
+        self.page.wait_for_timeout(ms + 150)
+
+    def _release_home(self):
+        self.page.mouse.up()
+        self.page.wait_for_timeout(400)
+
+    def _wp(self):
+        return json.loads(self.page.evaluate("""(() => {
+          const c = n => window.__cards[n].getBoundingClientRect();
+          const gbG = document.querySelector('.gbar[data-group-id="gG"]')
+            .getBoundingClientRect();
+          const gbH = document.querySelector('.gbar[data-group-id="gH"]')
+            .getBoundingClientRect();
+          const t1 = c('T1'), t3 = c('T3'), t5 = c('T5');
+          const h1 = c('H1');
+          return JSON.stringify({
+            aboveG: {x: t3.left + t3.width / 2, y: gbG.top - 24},
+            gbarG: {x: t3.left + t3.width / 2, y: gbG.top + gbG.height / 2},
+            rowY: t1.top + t1.height / 2,
+            rowX1: t1.left + t1.width / 2,
+            rowX5: t5.left + t5.width / 2,
+            colX: t3.left + t3.width / 2,
+            gap: {x: t3.left + t3.width / 2, y: (t1.bottom + gbH.top) / 2},
+            gapRight: {x: t5.left + t5.width / 2, y: (t1.bottom + gbH.top) / 2},
+            gbarH: {x: t3.left + t3.width / 2, y: gbH.top + gbH.height / 2},
+            hRow: {x: h1.left + h1.width / 2, y: h1.top + h1.height / 2},
+            belowH: {x: t3.left + t3.width / 2, y: h1.bottom + 16}
+          });
+        })()"""))
+
+    def _sweep_vertical(self, src):
+        """Вертикальный пронос «мимо G сверху вниз» (фикс. x = центр строки),
+        плотные mousemove БЕЗ settle; DWELL в зазоре G<->H (точка между
+        нижней кромкой строки G и верхней кромкой шапки H)."""
+        wp = self._wp()
+        base = self._gap_probe()
+        self._grab(src)
+        self._settle()
+        base = self._gap_probe()
+        x = wp["colX"]
+        y0 = wp["aboveG"]["y"]
+        y1 = wp["belowH"]["y"]
+        n = 46
+        gap_y = wp["gap"]["y"]
+        # плотный вертикальный пронос сверху вниз; в точке зазора — DWELL
+        for i in range(1, n + 1):
+            y = y0 + (y1 - y0) * i / n
+            self.page.mouse.move(x, y)
+            if abs(y - gap_y) < (y1 - y0) / n / 2:
+                for _ in range(5):
+                    self.page.mouse.move(x, gap_y)
+        self._sample_mid_slide(base, "vertical-mid")
+        self._settle()
+        m = self._gap_probe()
+        for n2 in self.g_names + self.h_names:
+            if m[n2] is None or base[n2] is None:
+                continue
+            assert abs(m[n2] - base[n2]) <= 2.5, (
+                "settled: %s сдвинулся %s -> %s: %s"
+                % (n2, base[n2], m[n2], m))
+        assert abs(m["gbarH"] - base["gbarH"]) <= 2.5, (
+            "settled: шапка H сдвинулась %s -> %s: %s"
+            % (base["gbarH"], m["gbarH"], m))
+        assert len(m["gRows"]) == 1, ("settled: у G %d строк" % len(m["gRows"]), m)
+        self._release_home()
+
+    def _sweep_chase(self, src):
+        """Chase-вариант: старт выше шапки G -> по шапке -> по строке G
+        (chase вправо, плотные шаги) -> В ЗАЗОР (dwell) -> в H."""
+        wp = self._wp()
+        base = self._gap_probe()
+        self._grab(src)
+        self._settle()
+        base = self._gap_probe()
+        for p in (wp["aboveG"], wp["gbarG"]):
+            self.page.mouse.move(p["x"], p["y"])
+        n = 10
+        for i in range(1, n + 1):
+            x = wp["rowX1"] + (wp["rowX5"] - wp["rowX1"]) * i / n
+            self.page.mouse.move(x, wp["rowY"])
+        self._sample_mid_slide(base, "chase-row")
+        g = wp["gapRight"]
+        self.page.mouse.move(g["x"], g["y"])
+        for _ in range(5):
+            self.page.mouse.move(g["x"], g["y"])
+        self._sample_mid_slide(base, "chase-gap-dwell")
+        for p in (wp["gbarH"], wp["hRow"], wp["belowH"]):
+            self.page.mouse.move(p["x"], p["y"])
+        self._sample_mid_slide(base, "chase-into-H")
+        self._settle()
+        m = self._gap_probe()
+        for n2 in self.g_names + self.h_names:
+            if m[n2] is None or base[n2] is None:
+                continue
+            assert abs(m[n2] - base[n2]) <= 2.5, (
+                "settled: %s сдвинулся %s -> %s: %s"
+                % (n2, base[n2], m[n2], m))
+        assert abs(m["gbarH"] - base["gbarH"]) <= 2.5, (
+            "settled: шапка H сдвинулась %s -> %s: %s"
+            % (base["gbarH"], m["gbarH"], m))
+        assert len(m["gRows"]) == 1, ("settled: у G %d строк" % len(m["gRows"]), m)
+        self._release_home()
+
+    # --- тесты ---
+
+    def test_gap_vertical_source_from_g(self):
+        """Источник ИЗ G (T1), вертикальный пронос, H=2. Точка дёргания:
+        зазор между строкой G и шапкой H."""
+        self._load(h_full=False)
+        self._sweep_vertical("T1")
+
+    def test_gap_vertical_source_from_a(self):
+        """Источник сверху (A1), вертикальный пронос, H=2."""
+        self._load(h_full=False)
+        self._sweep_vertical("A1")
+
+    def test_gap_vertical_source_from_a_h5_full(self):
+        """Источник сверху (A1), вертикальный пронос, H=5 (тоже полная
+        строка — wrap-hidden H5 должен держать 1 строку)."""
+        self._load(h_full=True)
+        self._sweep_vertical("A1")
+
+    def test_gap_chase_source_from_g(self):
+        """Chase-вариант: по строке G вправо, затем зазор (dwell), H=2."""
+        self._load(h_full=False)
+        self._sweep_chase("T1")
+
+    def test_gap_chase_source_from_a(self):
+        """Chase-вариант, источник сверху (A1), H=2."""
+        self._load(h_full=False)
+        self._sweep_chase("A1")
