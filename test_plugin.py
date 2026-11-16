@@ -3702,7 +3702,7 @@ class TestTabGhostSlot:
         assert ".tab-ghost {" not in html
         # Тёплые акцентные токены + токен имени карточки — ровно по одному разу
         # в светлой И в тёмной секциях, значения — hex
-        for tok in ("--ghost-bg", "--ghost-ring", "--card-name"):
+        for tok in ("--ghost-bg", "--ghost-ring", "--card-name", "--scroll-thumb", "--scroll-thumb-hover"):
             assert light_part.count(f"{tok}:") == 1, tok
             assert dark_part.count(f"{tok}:") == 1, tok
             assert re.search(rf"{tok}:\s*#[0-9a-fA-F]{{3,8}};", light_part), tok
@@ -3731,6 +3731,11 @@ class TestTabGhostSlot:
         tname = tname[:tname.index("}")]
         assert "var(--card-name)" in tname
         assert re.search(r"#[0-9a-fA-F]{3,8}", tname) is None
+        # Скроллбары: правило view.html использует токен --scroll-thumb, без hex
+        sb = html[html.index(".center::-webkit-scrollbar"):]  # noqa — anchor
+        sb = sb[:sb.index("#browser-tabs-list::-webkit-scrollbar-thumb:hover")]
+        assert "var(--scroll-thumb)" in sb
+        assert re.search(r"#[0-9a-fA-F]{3,8}", sb) is None
 
 
 class TestDragSlotWarmNoClone:
@@ -11453,6 +11458,7 @@ class TestRailLayout:
             importInRail: inRail('import-btn'), settingsExists: !!document.getElementById('settings-btn'),
             searchInRail: inRail('search'),
             searchFirst: rail.firstElementChild ? rail.firstElementChild.contains(document.getElementById('search')) : false,
+            brandFirst: rail.firstElementChild && rail.firstElementChild.className === 'rail-brand',
             importInDom: !!inp, importDisplay: cs ? cs.display : null,
             inputAfterWorkspace: !!document.querySelector('.workspace').nextElementSibling
               && document.querySelector('.workspace').nextElementSibling.id === 'import-input'
@@ -11461,7 +11467,7 @@ class TestRailLayout:
         assert d["items"] == 4, d
         assert d["titles"] == ["Тема", "Экспорт", "Импорт", "Настройки"], d
         assert d["themeInRail"] and d["exportInRail"] and d["importInRail"], d
-        assert d["searchInRail"] and d["searchFirst"], d
+        assert d["searchInRail"] and d["brandFirst"], d
         assert d["settingsExists"], d
         assert d["importInDom"], d
         assert d["importDisplay"] == "none", d
@@ -11500,19 +11506,22 @@ class TestRailLayout:
         assert d["centerFrac"] >= 0.75, d
 
     def test_center_header_clean(self):
-        # In-column header: wordmark ONLY (поиск переехал в левую рейку),
-        # НОЛЬ кнопок в .head; #select-btn удалён — мета-строка держит
+        # Header убран: .head удалён, wordmark «BlatTabs» — в левой рейке
+        # (.rail-brand) над поиском; #select-btn удалён — мета-строка держит
         # #meta-label + #meta-count
         load_view(self.page, tabs=self.TABS)
         self._inject_real_styles()
         self.page.wait_for_timeout(120)
         d = json.loads(self.page.evaluate("""(() => {
-          const head = document.querySelector('#center-pane .head');
+          const brand = document.querySelector('#rail-left .rail-brand');
+          const search = document.getElementById('search');
           return JSON.stringify({
-            hasWordmark: !!head.querySelector('.wordmark'),
-            headChildren: [...head.children].map(c => c.className || c.tagName),
-            hasSearch: !!head.querySelector('#search'),
-            buttonsInHead: head.querySelectorAll('button').length,
+            head: !!document.querySelector('#center-pane .head'),
+            brand: !!brand,
+            brandText: brand ? brand.textContent : null,
+            brandBeforeSearch: brand && search
+              ? (brand.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+              : false,
             selectBtn: !!document.getElementById('select-btn'),
             metarowHas: !!(document.getElementById('meta-label') && document.getElementById('meta-count')),
             empty: !!document.getElementById('empty-state'),
@@ -11520,9 +11529,10 @@ class TestRailLayout:
             resetBtn: !!document.getElementById('btn-reset-filters'),
           });
         })()"""))
-        assert d["hasWordmark"] and d["headChildren"] == ["wordmark"], d
-        assert not d["hasSearch"], d
-        assert d["buttonsInHead"] == 0, d
+        assert d["head"] is False, d
+        assert d["brand"] is True, d
+        assert d["brandText"] == "BlatTabs", d
+        assert d["brandBeforeSearch"] is True, d
         assert d["selectBtn"] is False, d
         assert d["metarowHas"] and d["empty"] and d["noResults"] and d["resetBtn"], d
 
@@ -11662,14 +11672,13 @@ class TestLeftRailSearchAndCleanup:
 
     def test_search_moved_into_left_rail(self):
         # #search — наверху левой рейки (до первой .rail-item), полная
-        # ширина рейки; .head — только wordmark; фильтрация работает
+        # ширина рейки; фильтрация работает
         load_view(self.page, tabs=self.TABS)
         self._inject_real_styles()
         self.page.wait_for_timeout(120)
         d = json.loads(self.page.evaluate("""(() => {
           const rail = document.getElementById('rail-left');
           const search = document.getElementById('search');
-          const head = document.querySelector('#center-pane .head');
           const firstItem = document.querySelector('#rail-left .rail-item');
           const sr = search.getBoundingClientRect();
           const rr = rail.getBoundingClientRect();
@@ -11678,8 +11687,6 @@ class TestLeftRailSearchAndCleanup:
             - parseFloat(rcs.paddingLeft) - parseFloat(rcs.paddingRight);
           return JSON.stringify({
             inRail: rail.contains(search),
-            inHead: head.contains(search),
-            headChildren: [...head.children].map(c => c.className || c.tagName),
             beforeFirstItem: firstItem
               ? (search.compareDocumentPosition(firstItem) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
               : false,
@@ -11687,8 +11694,7 @@ class TestLeftRailSearchAndCleanup:
             srW: sr.width, contentW: content
           });
         })()"""))
-        assert d["inRail"] and not d["inHead"], d
-        assert d["headChildren"] == ["wordmark"], d
+        assert d["inRail"], d
         assert d["beforeFirstItem"], d
         assert d["fullWidth"], d
         # поиск всё так же фильтрует карточки
@@ -13800,7 +13806,7 @@ class TestTobyReflowFeel:
 
     def _cancel_release(self):
         c = self._center()
-        self.page.mouse.move((c["left"] + c["right"]) / 2, c["top"] + 39)  # .head — мимо целей дропа
+        self.page.mouse.move((c["left"] + c["right"]) / 2, c["bottom"] - 20)  # низ центра — мимо целей дропа (release = cancel)
         self.page.mouse.up()
         self.page.wait_for_timeout(400)
 
@@ -17788,3 +17794,174 @@ class TestFullRowGapJerk:
         """Chase-вариант, источник сверху (A1), H=2."""
         self._load(h_full=False)
         self._sweep_chase("A1")
+class TestWordmarkLeftRail:
+    """Wordmark «BlatTabs» — в левой рейке над поиском (.rail-brand);
+    центральный .head удалён — чипы пространств и список вкладок сверху;
+    ≤760px — brand скрыт вместе с поиском."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self.TABS = [
+            {"name": "GitHub", "url": "https://github.com"},
+            {"name": "Docs", "url": "https://docs.python.org"},
+        ]
+
+    def _inject_real_styles(self):
+        theme = load_file("theme.css")
+        html = load_file("view.html")
+        style = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate(
+            "(styles) => { var st = document.createElement('style'); st.textContent = styles; document.head.appendChild(st); }",
+            [theme + "\n" + style])
+
+    def test_wordmark_in_left_rail_above_search(self):
+        # brand — ПЕРВЫЙ child #rail-left, над поиском; видим; текст «BlatTabs»
+        load_view(self.page, tabs=self.TABS)
+        self._inject_real_styles()
+        self.page.wait_for_timeout(120)
+        d = json.loads(self.page.evaluate("""(() => {
+          const rail = document.getElementById('rail-left');
+          const brandEl = document.querySelector('#rail-left .rail-brand');
+          const searchEl = document.getElementById('search');
+          return JSON.stringify({
+            brand: !!brandEl,
+            text: brandEl ? brandEl.textContent : null,
+            first: rail.firstElementChild === brandEl,
+            before: brandEl && searchEl
+              ? (brandEl.compareDocumentPosition(searchEl) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+              : false,
+            visH: brandEl ? brandEl.offsetHeight : -1
+          });
+        })()"""))
+        assert d["brand"] is True, d
+        assert d["text"] == "BlatTabs", d
+        assert d["first"] is True, d
+        assert d["before"] is True, d
+        assert d["visH"] > 0, d
+
+    def test_center_head_removed_content_at_top(self):
+        # В центре нет .head и wordmark; #spaces-bar — у самого верха центра
+        load_view(self.page, tabs=self.TABS)
+        self._inject_real_styles()
+        self.page.wait_for_timeout(120)
+        d = json.loads(self.page.evaluate("""(() => {
+          const bar = document.getElementById('spaces-bar').getBoundingClientRect();
+          const c = document.getElementById('center-pane').getBoundingClientRect();
+          return JSON.stringify({
+            head: !!document.querySelector('#center-pane .head'),
+            noWmCenter: !document.querySelector('#center-pane .wordmark, #center-pane .rail-brand'),
+            topDelta: bar.top - c.top
+          });
+        })()"""))
+        assert d["head"] is False, d
+        assert d["noWmCenter"] is True, d
+        assert 0 <= d["topDelta"] < 30, d
+
+    def test_wordmark_hidden_at_600px(self):
+        # ≤760px: brand и поиск скрыты (display none у .rail-brand и .searchbox)
+        self.page.set_viewport_size({"width": 600, "height": 900})
+        load_view(self.page, tabs=self.TABS)
+        self._inject_real_styles()
+        self.page.wait_for_timeout(120)
+        d = json.loads(self.page.evaluate("""(() => {
+          const brand = document.querySelector('#rail-left .rail-brand');
+          const box = document.querySelector('#rail-left .searchbox');
+          return JSON.stringify({
+            brandDisplay: brand ? getComputedStyle(brand).display : null,
+            searchDisplay: box ? getComputedStyle(box).display : null,
+            searchW: document.getElementById('search').getBoundingClientRect().width
+          });
+        })()"""))
+        assert d["brandDisplay"] == "none", d
+        assert d["searchDisplay"] == "none", d
+        assert d["searchW"] == 0, d
+
+    def test_wordmark_typography_both_themes(self):
+        # Типографика brand — 17px/700 в светлой и тёмной темах
+        for theme in ("light", "dark"):
+            load_view(self.page, theme=theme, tabs=self.TABS)
+            self._inject_real_styles()
+            self.page.wait_for_timeout(120)
+            d = json.loads(self.page.evaluate("""(() => {
+              const cs = getComputedStyle(document.querySelector('#rail-left .rail-brand'));
+              return JSON.stringify({fs: cs.fontSize, fw: cs.fontWeight});
+            })()"""))
+            assert d["fs"] == "17px", (theme, d)
+            assert d["fw"] == "700", (theme, d)
+
+
+class TestScrollTuning:
+    """Скроллбары центра и правой рейки: тонкие скруглённые,
+    тон из токенов --scroll-thumb / --scroll-thumb-hover в обеих темах"""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        # модульная page общая: TestWordmarkLeftRail выше оставляет viewport 600px —
+        # восстанавливаем дефолтный Playwright (1280x720), чтобы правая рейка была видимая
+        self.page.set_viewport_size({"width": 1280, "height": 720})
+        # виртуальная мышь может остаться над .center (драг-тесты выше) —
+        # уводим в нейтральный угол, чтобы не срабатывал ::-webkit-scrollbar-thumb:hover
+        self.page.mouse.move(0, 0)
+        self.page.wait_for_timeout(50)
+
+    def _inject_real_styles(self):
+        theme = load_file("theme.css")
+        html = load_file("view.html")
+        style = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate(
+            "(styles) => { var st = document.createElement('style'); st.textContent = styles; document.head.appendChild(st); }",
+            [theme + "\n" + style])
+
+    def _hex_to_rgb(self, s):
+        # hex вида "#d6d6d6" (3 или 6 цифр) -> строка rgb(...), как её
+        # сериализует getComputedStyle
+        s = s.lstrip("#")
+        if len(s) == 3:
+            s = "".join(ch * 2 for ch in s)
+        r, g, b = int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16)
+        return "rgb(" + str(r) + ", " + str(g) + ", " + str(b) + ")"
+
+    def test_center_scrollbar_themes(self):
+        for theme in ("light", "dark"):
+            tabs80 = [{"name": "T" + str(i), "url": "https://t" + str(i) + ".com"} for i in range(80)]
+            load_view(self.page, theme=theme, tabs=tabs80)
+            self._inject_real_styles()
+            self.page.wait_for_timeout(150)
+            d = json.loads(self.page.evaluate("""(() => {
+              const c = document.getElementById('center-pane');
+              return JSON.stringify({
+                over: c.scrollHeight > c.clientHeight,
+                thumb: getComputedStyle(c, '::-webkit-scrollbar-thumb').backgroundColor,
+                track: getComputedStyle(c, '::-webkit-scrollbar-track').backgroundColor,
+                tok: getComputedStyle(document.documentElement).getPropertyValue('--scroll-thumb').trim()
+              });
+            })()"""))
+            assert d["over"] is True, d
+            assert d["thumb"] == self._hex_to_rgb(d["tok"]), d
+            assert d["track"] == "rgba(0, 0, 0, 0)", d
+
+    def test_rail_scrollbar_themes(self):
+        for theme in ("light", "dark"):
+            items = [
+                {"id": "bt" + str(i), "title": "Tab " + str(i),
+                 "url": "https://tab" + str(i) + ".example",
+                 "favIconUrl": "https://fav.example/" + str(i) + ".ico",
+                 "windowId": 1, "index": i}
+                for i in range(40)]
+            load_view(self.page, theme=theme, browser_tabs=items)
+            self._inject_real_styles()
+            self.page.wait_for_timeout(150)
+            d = json.loads(self.page.evaluate("""(() => {
+              const l = document.getElementById('browser-tabs-list');
+              return JSON.stringify({
+                over: l.scrollHeight > l.clientHeight,
+                items: l.querySelectorAll('.bt-tab').length,
+                thumb: getComputedStyle(l, '::-webkit-scrollbar-thumb').backgroundColor,
+                tok: getComputedStyle(document.documentElement).getPropertyValue('--scroll-thumb').trim()
+              });
+            })()"""))
+            assert d["over"] is True, d
+            assert d["items"] == 40, d
+            assert d["thumb"] == self._hex_to_rgb(d["tok"]), d
