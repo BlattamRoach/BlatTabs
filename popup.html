@@ -69,28 +69,29 @@
   </style>
 </head>
 <body>
-  <button class="save-btn" id="save-current-tab">Сохранить вкладку</button>
+  <button class="save-btn" id="save-current-tab" data-i18n="save_tab">Сохранить вкладку</button>
 
-  <label for="space-select">Пространство:</label>
+  <label for="space-select" data-i18n="space_colon">Пространство:</label>
   <select id="space-select">
   </select>
 
-  <button class="add-space-btn" id="popup-add-space">+ Новое пространство</button>
+  <button class="add-space-btn" id="popup-add-space" data-i18n="popup_new_space">+ Новое пространство</button>
 
-  <div class="saved-msg" id="saved-msg">✓ Вкладка сохранена!</div>
+  <div class="saved-msg" id="saved-msg" data-i18n="saved_msg">✓ Вкладка сохранена!</div>
 
   <!-- Модалка: создать пространство -->
   <div class="modal-overlay" id="space-modal">
     <div class="modal">
-      <h3>Новое пространство</h3>
-      <input type="text" id="space-name-input" placeholder="Название..." autocomplete="off">
+      <h3 data-i18n="new_space">Новое пространство</h3>
+      <input type="text" id="space-name-input" data-i18n-ph="name_ph" placeholder="Название..." autocomplete="off">
       <div class="modal-actions">
-        <button class="modal-btn" id="modal-cancel">Отмена</button>
-        <button class="modal-btn primary" id="modal-confirm">OK</button>
+        <button class="modal-btn" id="modal-cancel" data-i18n="cancel">Отмена</button>
+        <button class="modal-btn primary" id="modal-confirm" data-i18n="ok">OK</button>
       </div>
     </div>
   </div>
 
+  <script src="i18n.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

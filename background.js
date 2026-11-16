@@ -11,7 +11,15 @@ const GROUPS_KEY = 'blattam-groups';
 const LAST_SPACE_KEY = 'blattam-last-space';
 const FOLDERS_KEY = 'blattam-folders'; // legacy: только миграция папки → пространства
 
-const DEFAULT_SPACE_NAME = 'Мои вкладки';
+// === i18n: имена по умолчанию зависят от blattam-lang (Настройки → Язык) ===
+async function currentLang() {
+  const r = await chrome.storage.local.get('blattam-lang');
+  return r['blattam-lang'] === 'en' ? 'en' : 'ru';
+}
+function defaultSpaceName(lang) { return (lang === 'en') ? 'My Tabs' : 'Мои вкладки'; }
+function spaceDefaultName(n, lang) { return (lang === 'en') ? ('Space ' + n) : ('Пространство ' + n); }
+function groupDefaultName(n, lang) { return (lang === 'en') ? ('Group ' + n) : ('Группа ' + n); }
+function untitledName(lang) { return (lang === 'en') ? 'Untitled' : 'Без имени'; }
 
 // === Хелперы ===
 
@@ -77,7 +85,7 @@ function genId(prefix) {
 // Каждой папке (любой вложенности) — отдельное плоское пространство с тем же
 // именем; вкладки переезжают folderId → spaceId; без папки (null/неизвестная)
 // → «Мои вкладки». Группы не создаются.
-function migrateFoldersToSpaces(tabs, spaces, folders) {
+function migrateFoldersToSpaces(tabs, spaces, folders, lang) {
   const folderToSpaceId = {};
   (folders || []).forEach(f => {
     if (!f || !f.id) return;
@@ -92,7 +100,7 @@ function migrateFoldersToSpaces(tabs, spaces, folders) {
       t.spaceId = folderToSpaceId[t.folderId];
     } else {
       if (!defaultSpace) {
-        defaultSpace = { id: genId('sp'), name: DEFAULT_SPACE_NAME };
+        defaultSpace = { id: genId('sp'), name: defaultSpaceName(lang) };
         spaces.push(defaultSpace);
       }
       t.spaceId = defaultSpace.id;
@@ -107,6 +115,7 @@ function migrateFoldersToSpaces(tabs, spaces, folders) {
 // Гарантирует существование пространств: миграция legacy (если нужна) +
 // по умолчанию «Мои вкладки». Возвращает актуальный массив.
 async function ensureSpaces() {
+  const lang = await currentLang();
   await migrateTabsToLocalStorage(); // вкладки — в local (ДО чтения/записи)
   const data = await chrome.storage.sync.get([SPACES_KEY, FOLDERS_KEY]);
   const localData = await chrome.storage.local.get(STORAGE_KEY);
@@ -118,14 +127,14 @@ async function ensureSpaces() {
     spaces = [];
     // Legacy: нет blattam-spaces, но есть blattam-folders или вкладки с folderId
     if (folders !== undefined || tabs.some(t => t && t.folderId != null)) {
-      migrateFoldersToSpaces(tabs, spaces, folders);
+      migrateFoldersToSpaces(tabs, spaces, folders, lang);
       await chrome.storage.local.set({ [STORAGE_KEY]: tabs });
       await chrome.storage.sync.set({ [SPACES_KEY]: spaces });
       if (folders !== undefined) await chrome.storage.sync.remove(FOLDERS_KEY);
     }
   }
   if (spaces.length === 0) {
-    spaces.push({ id: genId('sp'), name: DEFAULT_SPACE_NAME });
+    spaces.push({ id: genId('sp'), name: defaultSpaceName(lang) });
     await saveSpaces(spaces);
   }
   return spaces;
@@ -142,14 +151,15 @@ async function resolveDefaultSpaceId() {
 }
 
 async function createSpace(name) {
+  const lang = await currentLang();
   const spaces = await ensureSpaces();
   let trimmed = (name || '').trim();
   if (!trimmed) {
     // Пустое имя — авто-«Пространство N» (первый свободный номер)
     let n = spaces.length + 1;
-    trimmed = `Пространство ${n}`;
+    trimmed = spaceDefaultName(n, lang);
     const exists = nm => spaces.some(s => s.name.toLowerCase() === nm.toLowerCase());
-    while (exists(trimmed)) { n++; trimmed = `Пространство ${n}`; }
+    while (exists(trimmed)) { n++; trimmed = spaceDefaultName(n, lang); }
   }
   // Дубль по имени (без учёта регистра) — пропускаем
   if (spaces.some(s => s.name.toLowerCase() === trimmed.toLowerCase())) return null;
@@ -160,6 +170,7 @@ async function createSpace(name) {
 }
 
 async function deleteSpace(spaceId) {
+  const lang = await currentLang();
   const spaces = await loadSpaces();
   if (!spaces.some(s => s.id === spaceId)) return;
 
@@ -167,7 +178,7 @@ async function deleteSpace(spaceId) {
   let remaining = spaces.filter(s => s.id !== spaceId);
   let target = remaining[0] || null;
   if (!target) {
-    target = { id: genId('sp'), name: DEFAULT_SPACE_NAME };
+    target = { id: genId('sp'), name: defaultSpaceName(lang) };
     remaining = [target];
   }
   const tabs = await loadTabs();
@@ -200,6 +211,7 @@ async function renameSpace(spaceId, newName) {
 // === Группы (внутри пространств) ===
 
 async function createGroup(spaceId, name) {
+  const lang = await currentLang();
   const spaces = await ensureSpaces();
   if (!spaces.some(s => s.id === spaceId)) return null;
   const groups = await loadGroups();
@@ -207,9 +219,9 @@ async function createGroup(spaceId, name) {
   if (!trimmed) {
     // Пустое имя — авто-«Группа N» (первый свободный номер)
     let n = groups.length + 1;
-    trimmed = `Группа ${n}`;
+    trimmed = groupDefaultName(n, lang);
     const exists = nm => groups.some(g => g.name.toLowerCase() === nm.toLowerCase());
-    while (exists(trimmed)) { n++; trimmed = `Группа ${n}`; }
+    while (exists(trimmed)) { n++; trimmed = groupDefaultName(n, lang); }
   }
   const g = { id: genId('g'), name: trimmed, spaceId, collapsed: false };
   groups.push(g);
@@ -234,6 +246,7 @@ async function deleteGroup(groupId) {
 // === Вкладки ===
 
 async function saveCurrentTab(name, spaceId) {
+  const lang = await currentLang();
   const current = await new Promise(resolve => {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => resolve(tabs[0]));
   });
@@ -250,7 +263,7 @@ async function saveCurrentTab(name, spaceId) {
   const favIconUrl = (current.favIconUrl || '').trim();
 
   tabs.push({
-    name: name || 'Без имени',
+    name: name || untitledName(lang),
     url: current.url,
     title: current.title,
     ...(favIconUrl ? { favIconUrl } : {}),
@@ -260,10 +273,11 @@ async function saveCurrentTab(name, spaceId) {
 }
 
 async function addTab(name, url, spaceId) {
+  const lang = await currentLang();
   const sid = spaceId != null ? spaceId : await resolveDefaultSpaceId();
   const tabs = await loadTabs();
   if (tabs.some(t => t.url === url && t.spaceId === sid)) return;
-  tabs.push({ name: name || 'Без имени', url: url || '', title: '', spaceId: sid });
+  tabs.push({ name: name || untitledName(lang), url: url || '', title: '', spaceId: sid });
   await saveTabs(tabs);
 }
 

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>BlatTabs — вкладки</title>
+  <title data-i18n="page_title">BlatTabs — вкладки</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -430,6 +430,8 @@
     /* ---------- states ---------- */
     .empty-state { padding: 60px 0; text-align: center; color: var(--text-muted); font-size: 14px; }
     .empty-state span { display: block; margin-top: 6px; font-size: 12.5px; color: var(--text-faint); }
+    /* i18n: заголовок empty/no-results — не в стиле sub-строки */
+    .empty-state .empty-main, .no-results .empty-main { margin-top: 0; font-size: 14px; color: inherit; }
     .no-results { display: none; padding: 60px 0; text-align: center; color: var(--text-muted); font-size: 14px; }
     .no-results span { display: block; margin-top: 6px; font-size: 12.5px; color: var(--text-faint); }
     .no-results button, .empty-state button {
@@ -513,6 +515,9 @@
       font-size: 11px; font-weight: 600; letter-spacing: .4px; text-transform: uppercase;
       color: var(--text-muted); margin: 0 0 12px;
     }    #settings-modal .bg-row { display: flex; gap: 8px; }
+    /* i18n: переключатель языка в настройках */
+    #settings-modal .lang-row { display: flex; gap: 8px; }
+    #settings-modal .lang-row .btn.active { background: var(--ink); color: var(--on-ink); box-shadow: none; }
     #settings-modal .tab-color-row { display: flex; align-items: center; gap: 8px; }
     #settings-modal #tab-color-input {
       width: 34px; height: 28px; padding: 2px; border: 0; border-radius: 6px;
@@ -553,46 +558,46 @@
 <body>
   <div class="workspace">
     <!-- ЛЕВАЯ РЕЙКА — меню/настройки (тема, экспорт/импорт, настройки) + аккаунт внизу -->
-    <aside class="rail-left" id="rail-left" aria-label="Меню и настройки">
+    <aside class="rail-left" id="rail-left" aria-label="Меню и настройки" data-i18n-aria="rail_menu_aria">
       <div class="rail-brand">BlatTabs</div>
       <div class="searchbox">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-        <input type="text" class="search-box" placeholder="Поиск во вкладках…" id="search" autocomplete="off" spellcheck="false">
+        <input type="text" class="search-box" data-i18n-ph="search_ph" placeholder="Поиск во вкладках…" id="search" autocomplete="off" spellcheck="false">
         <kbd>/</kbd>
       </div>
       <div class="rail-controls" id="rail-controls">
-        <button class="rail-item" id="theme-btn" title="Переключить тёмную/светлую тему">
+        <button class="rail-item" id="theme-btn" data-i18n-title="theme_title" title="Переключить тёмную/светлую тему">
           <span class="ico"><span class="glyph">🌙</span></span>
-          <span class="lbl"><span class="t">Тема</span><span class="s">Светлая · тёмная</span></span>
+          <span class="lbl"><span class="t" data-i18n="theme_label">Тема</span><span class="s" data-i18n="theme_sub">Светлая · тёмная</span></span>
           <span class="go">→</span>
         </button>
-        <button class="rail-item" id="export-btn" title="Экспортировать JSON">
+        <button class="rail-item" id="export-btn" data-i18n-title="export_title" title="Экспортировать JSON">
           <span class="ico"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 11 5 5 5-5"/><path d="M5 21h14"/></svg></span>
-          <span class="lbl"><span class="t">Экспорт</span><span class="s">Скачать JSON</span></span>
+          <span class="lbl"><span class="t" data-i18n="export_label">Экспорт</span><span class="s" data-i18n="export_sub">Скачать JSON</span></span>
           <span class="go">→</span>
         </button>
-        <button class="rail-item" id="import-btn" title="Импортировать JSON">
+        <button class="rail-item" id="import-btn" data-i18n-title="import_title" title="Импортировать JSON">
           <span class="ico"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21V9"/><path d="m7 13 5-5 5 5"/><path d="M5 3h14"/></svg></span>
-          <span class="lbl"><span class="t">Импорт</span><span class="s">Загрузить JSON</span></span>
+          <span class="lbl"><span class="t" data-i18n="import_label">Импорт</span><span class="s" data-i18n="import_sub">Загрузить JSON</span></span>
           <span class="go">→</span>
         </button>
-        <button class="rail-item" id="settings-btn" title="Настройки">
+        <button class="rail-item" id="settings-btn" data-i18n-title="settings_title" title="Настройки">
           <span class="ico"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>
-          <span class="lbl"><span class="t">Настройки</span><span class="s">Параметры</span></span>
+          <span class="lbl"><span class="t" data-i18n="settings_title">Настройки</span><span class="s" data-i18n="settings_sub">Параметры</span></span>
           <span class="go">→</span>
         </button>
       </div>
 
       <div class="rail-accounts">
-        <div class="slot" title="Скоро — вход и синхронизация вкладок">
+        <div class="slot" data-i18n-title="account_title" title="Скоро — вход и синхронизация вкладок">
           <span class="avatar" aria-hidden="true">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
           </span>
           <span class="a-txt">
-            <span class="a-t">Аккаунт</span>
-            <span class="a-s">Скоро · синхронизация</span>
+            <span class="a-t" data-i18n="account_label">Аккаунт</span>
+            <span class="a-s" data-i18n="account_sub">Скоро · синхронизация</span>
           </span>
-          <span class="tag">скоро</span>
+          <span class="tag" data-i18n="account_tag">скоро</span>
         </div>
       </div>
     </aside>
@@ -603,23 +608,23 @@
         <!-- Пространства -->
         <nav class="chip-row" id="spaces-bar">
           <span id="space-chips" style="display:contents"></span>
-          <button class="chip-add" id="add-space-btn" title="Новое пространство">+ Пространство</button>
+          <button class="chip-add" id="add-space-btn" data-i18n-title="new_space" data-i18n="add_space" title="Новое пространство">+ Пространство</button>
         </nav>
 
         <!-- Meta -->
         <div class="metarow">
-          <div class="metatitle"><span id="meta-label">Мои вкладки</span><span class="n" id="meta-count">0</span></div>
+          <div class="metatitle"><span id="meta-label" data-i18n="meta_label">Мои вкладки</span><span class="n" id="meta-count">0</span></div>
         </div>
 
         <!-- States -->
         <div id="empty-state" class="empty-state" style="display:none;">
-          Пока пусто
-          <span>Вкладки, сохранённые в это пространство, появятся здесь</span>
+          <span class="empty-main" data-i18n="empty_title">Пока пусто</span>
+          <span data-i18n="empty_sub">Вкладки, сохранённые в это пространство, появятся здесь</span>
         </div>
         <div id="no-results" class="no-results">
-          Ничего не найдено
-          <span>Попробуйте изменить запрос или сбросить фильтры</span>
-          <button id="btn-reset-filters">Сбросить фильтры</button>
+          <span class="empty-main" data-i18n="no_results_title">Ничего не найдено</span>
+          <span data-i18n="no_results_sub">Попробуйте изменить запрос или сбросить фильтры</span>
+          <button id="btn-reset-filters" data-i18n="reset_filters">Сбросить фильтры</button>
         </div>
 
         <!-- Cards -->
@@ -628,7 +633,7 @@
     </main>
 
     <!-- ПРАВАЯ РЕЙКА — живое зеркало открытых вкладок браузера (верхняя полоса) -->
-    <aside class="rail-right" id="rail-right" aria-label="Вкладки браузера">
+    <aside class="rail-right" id="rail-right" aria-label="Вкладки браузера" data-i18n-aria="rail_tabs_aria">
       <div id="browser-tabs-list" class="browser-tabs-list"></div>
     </aside>
   </div>
@@ -638,21 +643,21 @@
 
   <!-- Selection bar -->
   <div id="selection-bar" class="selection-bar hidden">
-    <span id="selection-count" class="selection-count">0 выбрано</span>
+    <span id="selection-count" class="selection-count" data-i18n="selected_zero">0 выбрано</span>
     <i class="seldiv"></i>
-    <button id="open-selected-btn" class="btn btn-ink">Открыть</button>
-    <button id="clear-selection-btn" class="btn btn-ghost">Сбросить</button>
-    <button id="delete-selected-btn" class="btn btn-ghost" title="Удалить выбранные вкладки">✕ Удалить</button>
+    <button id="open-selected-btn" class="btn btn-ink" data-i18n="sel_open">Открыть</button>
+    <button id="clear-selection-btn" class="btn btn-ghost" data-i18n="sel_clear">Сбросить</button>
+    <button id="delete-selected-btn" class="btn btn-ghost" data-i18n-title="sel_delete_title" data-i18n="sel_delete" title="Удалить выбранные вкладки">✕ Удалить</button>
   </div>
 
   <!-- Modal: create/rename space, create group -->
   <div class="modal-overlay" id="space-modal">
     <div class="modal">
-      <h3 id="modal-title">Новое пространство</h3>
-      <input type="text" id="space-name-input" placeholder="Название..." autocomplete="off">
+      <h3 id="modal-title" data-i18n="new_space">Новое пространство</h3>
+      <input type="text" id="space-name-input" data-i18n-ph="name_ph" placeholder="Название..." autocomplete="off">
       <div class="modal-actions">
-        <button class="modal-btn ghost" id="modal-cancel">Отмена</button>
-        <button class="modal-btn primary" id="modal-confirm">OK</button>
+        <button class="modal-btn ghost" id="modal-cancel" data-i18n="cancel">Отмена</button>
+        <button class="modal-btn primary" id="modal-confirm" data-i18n="ok">OK</button>
       </div>
     </div>
   </div>
@@ -660,13 +665,13 @@
   <!-- Modal: редактирование сохранённой вкладки (имя / адрес / комментарий) -->
   <div class="modal-overlay" id="edit-tab-modal">
     <div class="modal">
-      <h3>Редактировать вкладку</h3>
-      <input type="text" id="edit-name-input" placeholder="Название..." autocomplete="off">
+      <h3 data-i18n="edit_tab_title">Редактировать вкладку</h3>
+      <input type="text" id="edit-name-input" data-i18n-ph="name_ph" placeholder="Название..." autocomplete="off">
       <input type="text" id="edit-url-input" placeholder="https://..." autocomplete="off" spellcheck="false">
-      <input type="text" id="edit-comment-input" placeholder="Комментарий — будет виден внизу карточки" autocomplete="off">
+      <input type="text" id="edit-comment-input" data-i18n-ph="edit_comment_ph" placeholder="Комментарий — будет виден внизу карточки" autocomplete="off">
       <div class="modal-actions">
-        <button class="modal-btn ghost" id="edit-cancel">Отмена</button>
-        <button class="modal-btn primary" id="edit-confirm">Сохранить</button>
+        <button class="modal-btn ghost" id="edit-cancel" data-i18n="cancel">Отмена</button>
+        <button class="modal-btn primary" id="edit-confirm" data-i18n="save">Сохранить</button>
       </div>
     </div>
   </div>
@@ -674,32 +679,39 @@
   <!-- Modal: настройки (FAQ) -->
   <div class="modal-overlay" id="settings-modal">
     <div class="modal">
-      <button class="modal-close" id="settings-close" title="Закрыть" aria-label="Закрыть">✕</button>
-      <h3>Настройки</h3>
+      <button class="modal-close" id="settings-close" data-i18n-title="settings_close_title" data-i18n-aria="settings_close_title" title="Закрыть" aria-label="Закрыть">✕</button>
+      <h3 data-i18n="settings_h3">Настройки</h3>
       <!-- Две панели: слева навигация разделов, справа — контент активного раздела -->
       <div class="settings-grid">
-        <nav class="settings-nav" aria-label="Разделы настроек">
-          <button class="settings-nav-item active" data-section="customization">Кастомизация</button>
-          <button class="settings-nav-item" data-section="faq">FAQ</button>
-          <button class="settings-nav-item" data-section="about">О программе</button>
+        <nav class="settings-nav" aria-label="Разделы настроек" data-i18n-aria="settings_nav_aria">
+          <button class="settings-nav-item active" data-section="customization" data-i18n="nav_customization">Кастомизация</button>
+          <button class="settings-nav-item" data-section="faq" data-i18n="nav_faq">FAQ</button>
+          <button class="settings-nav-item" data-section="about" data-i18n="nav_about">О программе</button>
         </nav>
         <div class="settings-main">
           <div class="settings-pane" id="settings-pane-customization">
       <!-- Фон — custom background image (blattam-bg-image, data URL, local) -->
       <section class="settings-section" id="bg-section">
-        <h4 class="settings-section-title">Фон</h4>
+        <h4 class="settings-section-title" data-i18n="bg_title">Фон</h4>
         <div class="bg-row">
-          <button class="btn btn-ghost" id="bg-file-btn" title="Выбрать картинку для фона">Выбрать картинку</button>
-          <button class="btn btn-ghost" id="bg-clear-btn" style="display:none;">Убрать</button>
+          <button class="btn btn-ghost" id="bg-file-btn" data-i18n-title="bg_pick_title" data-i18n="bg_pick" title="Выбрать картинку для фона">Выбрать картинку</button>
+          <button class="btn btn-ghost" id="bg-clear-btn" data-i18n="bg_clear" style="display:none;">Убрать</button>
         </div>
-        <img id="bg-preview" style="display:none;" alt="Превью фона">
+        <img id="bg-preview" data-i18n-alt="bg_preview_alt" style="display:none;" alt="Превью фона">
       </section>
       <!-- Цвет вкладок — кастомный фон карточек (blattam-tab-color, hex, local) -->
       <section class="settings-section" id="tab-color-section">
-        <h4 class="settings-section-title">Цвет вкладок</h4>
+        <h4 class="settings-section-title" data-i18n="tab_color_title">Цвет вкладок</h4>
         <div class="tab-color-row">
-          <input type="color" id="tab-color-input" title="Цвет карточек сохранённых вкладок">
-          <button class="btn btn-ghost" id="tab-color-reset" style="display:none;">Сбросить</button>
+          <input type="color" id="tab-color-input" data-i18n-title="tab_color_input_title" title="Цвет карточек сохранённых вкладок">
+          <button class="btn btn-ghost" id="tab-color-reset" data-i18n="tab_color_reset" style="display:none;">Сбросить</button>
+        </div>
+      </section>
+      <section class="settings-section" id="lang-section">
+        <h4 class="settings-section-title" data-i18n="lang_title">Язык</h4>
+        <div class="lang-row">
+          <button class="btn btn-ghost" id="lang-btn-ru" data-i18n="lang_ru">Русский</button>
+          <button class="btn btn-ghost" id="lang-btn-en" data-i18n="lang_en">English</button>
         </div>
       </section>
           </div>
@@ -749,6 +761,7 @@
     </div>
   </div>
 
+  <script src="i18n.js"></script>
   <script src="view.js"></script>
 </body>
 </html>
