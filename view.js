@@ -192,7 +192,6 @@ let pendingBtClickAfterDrag = false; // one-shot: ложный post-drop-кли�
 let pendingCardClickAfterDrag = false; // one-shot: ложный post-drop-клик по центральной карточке (открыл бы вкладку) — вооружается на dragstart карточки и вкладки рейки
 //  // тёплая заглушка рейки (.bt-ghost-slot) на слоте схваченной вкладки
 
-const DEFAULT_SPACE_NAME = 'Мои вкладки';
 
 function genId(prefix) {
   return (prefix || 'x') + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -222,19 +221,19 @@ function migrateFoldersToSpaces(tabs, spaces, folders) {
     folderToSpaceId[f.id] = sp.id;
   });
   let defaultSpace = null;
-  (tabs || []).forEach(t => {
-    if (!t) return;
-    if (t.folderId != null && folderToSpaceId[t.folderId]) {
-      t.spaceId = folderToSpaceId[t.folderId];
+  (tabs || []).forEach(tb => {
+    if (!tb) return;
+    if (tb.folderId != null && folderToSpaceId[tb.folderId]) {
+      tb.spaceId = folderToSpaceId[tb.folderId];
     } else {
       if (!defaultSpace) {
-        defaultSpace = { id: genId('sp'), name: DEFAULT_SPACE_NAME };
+        defaultSpace = { id: genId('sp'), name: t('default_space') };
         spaces.push(defaultSpace);
       }
-      t.spaceId = defaultSpace.id;
+      tb.spaceId = defaultSpace.id;
     }
-    t.groupId = null;
-    delete t.folderId;
+    tb.groupId = null;
+    delete tb.folderId;
   });
 }
 
@@ -286,7 +285,7 @@ function loadData() {
 
     // Свежее состояние — всегда есть хотя бы одно пространство
     if (spaces.length === 0) {
-      spaces.push({ id: genId('sp'), name: DEFAULT_SPACE_NAME });
+      spaces.push({ id: genId('sp'), name: t('default_space') });
       updates['blattam-spaces'] = spaces;
     }
 
@@ -323,7 +322,7 @@ function loadData() {
 
 function spaceLabel() {
   const s = allSpaces.find(x => x.id === activeSpaceId);
-  return s ? s.name : DEFAULT_SPACE_NAME;
+  return s ? s.name : t('default_space');
 }
 
 function renderSpaces() {
@@ -348,7 +347,7 @@ function renderSpaces() {
     const renameBtn = document.createElement('button');
     renameBtn.className = 'chip-icon-btn';
     renameBtn.textContent = '\u270E';
-    renameBtn.title = 'Переименовать';
+    renameBtn.title = t('rename');
     renameBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       openRenameSpaceModal(sp.id, sp.name);
@@ -357,12 +356,12 @@ function renderSpaces() {
     const deleteBtn = document.createElement('button');
     deleteBtn.className = 'chip-icon-btn';
     deleteBtn.textContent = '\u2715';
-    deleteBtn.title = 'Удалить пространство';
+    deleteBtn.title = t('delete_space');
     deleteBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       const remaining = allSpaces.filter(s => s.id !== sp.id);
-      const targetName = remaining.length ? remaining[0].name : DEFAULT_SPACE_NAME;
-      if (confirm(`Удалить пространство "${sp.name}"? Вкладки переместятся в "${targetName}".`)) {
+      const targetName = remaining.length ? remaining[0].name : t('default_space');
+      if (confirm(t('delete_space_confirm', { name: sp.name, target: targetName }))) {
         chrome.runtime.sendMessage({ action: 'delete-space', id: sp.id });
       }
     });
@@ -454,7 +453,7 @@ function switchSpace(id) {
 
 // "+ Пространство" — создать пространство (пустое имя → «Пространство N»)
 addSpaceBtn.addEventListener('click', () => {
-  modalTitle.textContent = 'Новое пространство';
+  modalTitle.textContent = t('new_space');
   spaceNameInput.value = '';
   showSpaceModal(true, (name) => {
     chrome.runtime.sendMessage({ action: 'create-space', name }, (result) => {
@@ -471,7 +470,7 @@ addSpaceBtn.addEventListener('click', () => {
 
 // Модалка: переименовать пространство
 function openRenameSpaceModal(spaceId, currentName) {
-  modalTitle.textContent = 'Переименовать пространство';
+  modalTitle.textContent = t('rename_space');
   spaceNameInput.value = currentName;
   showSpaceModal(false, (name) => {
     if (name && name !== currentName) {
@@ -629,7 +628,7 @@ bgFileInput.addEventListener('change', (e) => {
   reader.onload = (event) => {
     const dataUrl = String(event.target.result || '');
     if (dataUrl.length > 4000000) {
-      alert('Картинка слишком большая (максимум ~4 МБ)');
+      alert(t('bg_too_big'));
       return;
     }
     chrome.storage.local.set({ 'blattam-bg-image': dataUrl });
@@ -676,15 +675,15 @@ if (checkUpdateBtn && updateStatus) {
   const finishUpdateCheck = (res) => {
     let text, cls = 'about-status';
     if (res === 'update_available') {
-      text = 'Доступно обновление'; cls += ' available';
+      text = t('update_available'); cls += ' available';
     } else if (res === 'update_downloading') {
-      text = 'Скачивание обновления…';
+      text = t('update_downloading');
     } else if (res === 'update_ready') {
-      text = 'Обновление готово — перезапустите браузер';
+      text = t('update_ready');
     } else if (res === 'no_update') {
-      text = 'Актуальная версия'; cls += ' ok';
+      text = t('update_current'); cls += ' ok';
     } else {
-      text = 'Не удалось проверить обновления';
+      text = t('update_error');
     }
     updateStatus.className = cls;
     updateStatus.textContent = text;
@@ -693,7 +692,7 @@ if (checkUpdateBtn && updateStatus) {
   checkUpdateBtn.addEventListener('click', () => {
     checkUpdateBtn.disabled = true;
     updateStatus.className = 'about-status';
-    updateStatus.textContent = 'Проверка…';
+    updateStatus.textContent = t('update_checking');
     try {
       if (typeof chrome.runtime.requestUpdateCheck === 'function') {
         chrome.runtime.requestUpdateCheck(finishUpdateCheck);
@@ -765,28 +764,30 @@ function appendFavicon(nameEl, tab) {
 // === Группы (сворачиваемые секции внутри пространства) ===
 
 function pluralGroups(n) {
+  if (I18N_LANG === 'en') return (n === 1) ? t('plural_group') : t('plural_groups_many');
   const a = Math.abs(n) % 100, d = a % 10;
-  if (a > 10 && a < 20) return 'групп';
-  if (d > 1 && d < 5) return 'группы';
-  if (d === 1) return 'группа';
-  return 'групп';
+  if (a > 10 && a < 20) return t('plural_groups_many');
+  if (d > 1 && d < 5) return t('plural_groups_few');
+  if (d === 1) return t('plural_group');
+  return t('plural_groups_many');
 }
 
 function pluralVkladok(n) {
+  if (I18N_LANG === 'en') return (n === 1) ? t('plural_tab') : t('plural_tabs_many');
   const a = Math.abs(n) % 100, d = a % 10;
-  if (a > 10 && a < 20) return 'вкладок';
-  if (d > 1 && d < 5) return 'вкладки';
-  if (d === 1) return 'вкладка';
-  return 'вкладок';
+  if (a > 10 && a < 20) return t('plural_tabs_many');
+  if (d > 1 && d < 5) return t('plural_tabs_few');
+  if (d === 1) return t('plural_tab');
+  return t('plural_tabs_many');
 }
 
-// Винительный падеж для «Удалить N …?»: 1 — «вкладку», 2–4 — «вкладки»,
-// 5+ и 11–14 — «вкладок»
+// Винительный падеж для «Удалить N …?» (в английском падежей нет)
 function pluralVkladki(n) {
+  if (I18N_LANG === 'en') return (n === 1) ? t('plural_tab_acc') : t('plural_tabs_acc_many');
   const a = Math.abs(n) % 100, d = a % 10;
-  if (d === 1 && a !== 11) return 'вкладку';
-  if (d > 1 && d < 5 && (a < 11 || a > 14)) return 'вкладки';
-  return 'вкладок';
+  if (d === 1 && a !== 11) return t('plural_tab_acc');
+  if (d > 1 && d < 5 && (a < 11 || a > 14)) return t('plural_tabs_acc_few');
+  return t('plural_tabs_acc_many');
 }
 
 // Защита hover-кнопок от drag, «проглотившего» клик: на draggable-родителе
@@ -840,10 +841,10 @@ function appendGroupBar(g, memberCount) {
   const del = document.createElement('button');
   del.className = 'gdel';
   del.textContent = '\u2715';
-  del.title = 'Удалить группу';
+  del.title = t('delete_group');
   del.addEventListener('click', (e) => {
     e.stopPropagation();
-    if (confirm(`Удалить группу "${g.name}"? Вкладки останутся в пространстве.`)) {
+    if (confirm(t('delete_group_confirm', { name: g.name }))) {
       chrome.runtime.sendMessage({ action: 'delete-group', id: g.id });
     }
   });
@@ -855,7 +856,7 @@ function appendGroupBar(g, memberCount) {
   const gselect = document.createElement('button');
   gselect.className = 'gselect';
   gselect.textContent = '\u2611';
-  gselect.title = 'Выбрать все вкладки группы';
+  gselect.title = t('select_group_tabs');
   if (gUrls.length > 0 && gUrls.every(u => selectedUrls.has(u))) gselect.classList.add('on');
   gselect.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -866,7 +867,7 @@ function appendGroupBar(g, memberCount) {
   const grename = document.createElement('button');
   grename.className = 'grename';
   grename.textContent = '\u270E';
-  grename.title = 'Переименовать группу';
+  grename.title = t('rename_group');
   grename.addEventListener('click', (e) => {
     e.stopPropagation();
     startGroupRename(g, name);
@@ -880,7 +881,7 @@ function appendGroupBar(g, memberCount) {
   const gopenall = document.createElement('button');
   gopenall.className = 'gopenall';
   gopenall.textContent = '\u29C9';
-  gopenall.title = 'Открыть все вкладки группы';
+  gopenall.title = t('open_group_tabs');
   gopenall.addEventListener('click', (e) => {
     e.stopPropagation();
     allTabs.filter(t => t.spaceId === g.spaceId && t.groupId === g.id).forEach(t => openUrl(t.url));
@@ -1007,7 +1008,7 @@ function appendEmptyGroupSlot(g) {
   const slot = document.createElement('div');
   slot.className = 'group-empty-slot';
   slot.dataset.groupId = g.id;
-  slot.textContent = 'Перетащите вкладку сюда';
+  slot.textContent = t('drop_here');
   slot.draggable = false;
   // DnD: слот принимает карточку (перетаскиваемая шапка группы — no-op)
   slot.addEventListener('dragover', (e) => {
@@ -1172,7 +1173,7 @@ function reorderSpaces(fromId, toId, side) {
 // пространство; работает и с пустым пространством).
 // Пустое имя → «Группа N». Группа создаётся в активном пространстве.
 function createGroupInActiveSpace() {
-  modalTitle.textContent = 'Новая группа';
+  modalTitle.textContent = t('new_group');
   spaceNameInput.value = '';
   showSpaceModal(true, (name) => {
     chrome.runtime.sendMessage({ action: 'create-group', spaceId: activeSpaceId, name }, (group) => {
@@ -1186,8 +1187,8 @@ function appendAddGroupBtn() {
   const btn = document.createElement('button');
   btn.className = 'add-group-row';
   btn.id = 'add-group-btn';
-  btn.title = 'Новая группа';
-  btn.textContent = '+ Группа';
+  btn.title = t('new_group');
+  btn.textContent = t('add_group');
   btn.addEventListener('click', createGroupInActiveSpace);
   tabsList.appendChild(btn);
 }
@@ -1218,7 +1219,7 @@ function appendCard(tab) {
   selectCb.type = 'checkbox';
   selectCb.className = 'tab-select';
   selectCb.checked = selectedUrls.has(tab.url);
-  selectCb.title = 'Выбрать для массового открытия';
+  selectCb.title = t('select_bulk');
   selectCb.addEventListener('click', (e) => {
     e.stopPropagation();
     if (selectCb.checked) selectedUrls.add(tab.url);
@@ -1230,11 +1231,11 @@ function appendCard(tab) {
   // Кнопка удаления (hover-контрол, сверху-справа)
   const deleteBtn = document.createElement('button');
   deleteBtn.className = 'icon-btn tab-remove delete';
-  deleteBtn.title = 'Удалить';
+  deleteBtn.title = t('delete');
   deleteBtn.textContent = '\u2715';
   deleteBtn.addEventListener('click', (e) => {
     e.stopPropagation();
-    if (confirm(`Удалить вкладку "${tab.name}"?`)) {
+    if (confirm(t('delete_tab_confirm', { name: tab.name }))) {
       allTabs.splice(allTabs.indexOf(tab), 1);
       chrome.storage.local.set({ 'blattam-tabs': allTabs });
       renderTabs(searchInput.value);
@@ -1245,7 +1246,7 @@ function appendCard(tab) {
   // модалку редактирования (промежуточное меню «Изменить» убрано).
   const editBtn = document.createElement('button');
   editBtn.className = 'tab-edit';
-  editBtn.title = 'Редактировать вкладку';
+  editBtn.title = t('edit_tab_title');
   editBtn.textContent = '\u270E';
   editBtn.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -1266,7 +1267,7 @@ function appendCard(tab) {
   const nameText = document.createElement('span');
   nameText.className = 'tab-name';
   nameText.textContent = tab.name;
-  nameText.title = 'Двойной клик — переименовать';
+  nameText.title = t('dblclick_rename');
   nameEl.appendChild(nameText);
 
   // Фавикон (или буквенный fallback) — перед именем
@@ -1440,7 +1441,7 @@ function renderTabs(filter = '') {
 
     const lname = document.createElement('span');
     lname.className = 'loose-name';
-    lname.textContent = 'Без группы';
+    lname.textContent = t('ungrouped');
     lbl.appendChild(lname);
 
     // ☑ — выбрать/снять выбор ВСЕХ негрупповых вкладок пространства
@@ -1449,7 +1450,7 @@ function renderTabs(filter = '') {
     const lselect = document.createElement('button');
     lselect.className = 'loose-select';
     lselect.textContent = '\u2611';
-    lselect.title = 'Выбрать все вкладки без группы';
+    lselect.title = t('select_ungrouped');
     if (looseAllUrls.length > 0 && looseAllUrls.every(u => selectedUrls.has(u))) lselect.classList.add('on');
     lselect.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -3231,7 +3232,7 @@ function startRename(tab, nameEl, body) {
 function updateSelectionBar() {
   const n = selectedUrls.size;
   selectionBar.classList.toggle('hidden', n === 0);
-  selectionCount.textContent = `${n} выбрано`;
+  selectionCount.textContent = t('selected_n', { n: n });
 }
 
 
@@ -3252,7 +3253,7 @@ clearSelectionBtn.addEventListener('click', () => {
 deleteSelectedBtn.addEventListener('click', () => {
   if (selectedUrls.size === 0) return;
   const n = selectedUrls.size;
-  if (!confirm(`Удалить ${n} ${pluralVkladki(n)}?`)) return;
+  if (!confirm(t('delete_tabs_confirm', { n: n, plural: pluralVkladki(n) }))) return;
   allTabs = allTabs.filter(t => !selectedUrls.has(t.url));
   chrome.storage.local.set({ 'blattam-tabs': allTabs });
   selectedUrls.clear();
@@ -3304,10 +3305,10 @@ function openActiveTab() {
 
 function deleteActiveTab() {
   const f = visibleTabs(searchInput.value);
-  const t = f.find(t => t.url === activeUrl);
-  if (!t) return;
-  if (!confirm(`Удалить вкладку "${t.name}"?`)) return;
-  allTabs.splice(allTabs.indexOf(t), 1);
+  const tab = f.find(t => t.url === activeUrl);
+  if (!tab) return;
+  if (!confirm(t('delete_tab_confirm', { name: tab.name }))) return;
+  allTabs.splice(allTabs.indexOf(tab), 1);
   chrome.storage.local.set({ 'blattam-tabs': allTabs });
   renderTabs(searchInput.value); // onChanged-обработчик обнулит activeUrl, если карточки не осталось
 }
@@ -3465,7 +3466,7 @@ document.getElementById('import-input').addEventListener('change', (e) => {
       const data = JSON.parse(event.target.result);
 
       if (!data.tabs || !Array.isArray(data.tabs)) {
-        alert('Неверный формат файла: отсутствует массив tabs');
+        alert(t('import_bad_format'));
         return;
       }
 
@@ -3522,9 +3523,11 @@ document.getElementById('import-input').addEventListener('change', (e) => {
       const newCount = importedTabs.length - duplicates;
 
       if (!confirm(
-        `В файле: пространств — ${(fileSpaces || []).length} (+${newSpaces} новых), ` +
-        `групп — ${(fileGroups || []).length} (+${newGroups} новых), ` +
-        `вкладок — ${importedTabs.length} (новых: ${newCount}, дубликатов: ${duplicates})\n\nИмпортировать?`
+        t('import_summary', {
+          spaces: (fileSpaces || []).length, new_spaces: newSpaces,
+          groups: (fileGroups || []).length, new_groups: newGroups,
+          tabs: importedTabs.length, new_tabs: newCount, dups: duplicates
+        })
       )) {
         return;
       }
@@ -3543,7 +3546,7 @@ document.getElementById('import-input').addEventListener('change', (e) => {
         'blattam-groups': allGroups
       });
     } catch (err) {
-      alert('Ошибка чтения файла: невалидный JSON');
+      alert(t('import_bad_json'));
     }
   };
   reader.readAsText(file);
@@ -3842,7 +3845,7 @@ function commitBtRailMove(src) {
 // (+ groupId секции)
 function makeSavedTabFromBrowser(src, section) {
   const tab = {
-    name: ((src.title || '').trim() || src.url) || 'Без имени',
+    name: ((src.title || '').trim() || src.url) || t('untitled'),
     url: src.url,
     title: src.title || '',
     spaceId: activeSpaceId,
@@ -4265,6 +4268,34 @@ function btlBindItem(item, t) {
   });
 }
 
+// === i18n: переключатель языка (Настройки → Кастомизация) ===
+function updateLangButtons() {
+  const ru = document.getElementById('lang-btn-ru');
+  const en = document.getElementById('lang-btn-en');
+  if (ru) ru.classList.toggle('active', I18N_LANG === 'ru');
+  if (en) en.classList.toggle('active', I18N_LANG === 'en');
+}
+
+function switchLanguage(lang) {
+  if (lang === I18N_LANG) return;
+  setLang(lang);
+  applyI18n();
+  updateLangButtons();
+  renderSpaces();
+  renderTabs(searchInput.value);
+  updateSelectionBar();
+}
+
+(function () {
+  const ru = document.getElementById('lang-btn-ru');
+  const en = document.getElementById('lang-btn-en');
+  if (ru) ru.addEventListener('click', function () { switchLanguage('ru'); });
+  if (en) en.addEventListener('click', function () { switchLanguage('en'); });
+})();
+
 // === Start ===
-loadData();
-loadBrowserTabs();
+loadLang().then(function () {
+  updateLangButtons();
+  loadData();
+  loadBrowserTabs();
+});

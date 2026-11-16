@@ -125,4 +125,4 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 });
 
 // Старт
-loadSpaces();
+loadLang().then(function () { loadSpaces(); });

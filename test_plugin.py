@@ -491,7 +491,7 @@ def body_dom(html_name):
     start = html.index("<body>") + len("<body>")
     end = html.rindex("</body>")
     body = html[start:end]
-    for script in ('<script src="view.js"></script>', '<script src="popup.js"></script>'):
+    for script in ('<script src="view.js"></script>', '<script src="popup.js"></script>', '<script src="i18n.js"></script>'):
         body = body.replace(script, "")
     return body
 
@@ -502,7 +502,7 @@ POPUP_DOM = body_dom("popup.html")
 
 def load_view(pg, tabs=None, spaces=None, groups=None, folders=None,
               last_space=None, theme=None, confirm=False, browser_tabs=None,
-              bg=None, tab_color=None):
+              bg=None, tab_color=None, lang=None):
     """about:blank + mock + данные + DOM view.html + view.js.
 
     browser_tabs — список открытых вкладок браузера (chrome.tabs._tabs):
@@ -526,30 +526,36 @@ def load_view(pg, tabs=None, spaces=None, groups=None, folders=None,
         init.append("chrome.storage.local._data['blattam-bg-image'] = " + json.dumps(bg) + ";")
     if tab_color is not None:
         init.append("chrome.storage.local._data['blattam-tab-color'] = " + json.dumps(tab_color) + ";")
+    if lang is not None:
+        init.append("chrome.storage.local._data['blattam-lang'] = " + json.dumps(lang) + ";")
     if confirm:
         init.append("window.confirm = () => true;")
     pg.goto("about:blank")
     pg.evaluate(MOCK_CHROME + "\n".join(init))
     pg.evaluate("document.body.innerHTML = " + json.dumps(VIEW_DOM))
     try:
+        pg.evaluate(load_file("i18n.js") + "; 'i18n'")
         pg.evaluate(load_file("view.js") + "; 'loaded'")
     except Exception as e:
         pytest.fail(f"View.js error: {e}")
 
 
-def load_popup(pg, spaces=None, last_space=None, confirm=False):
+def load_popup(pg, spaces=None, last_space=None, confirm=False, lang=None):
     """about:blank + mock + данные + DOM popup.html + popup.js."""
     init = []
     if spaces is not None:
         init.append("chrome.storage._data['blattam-spaces'] = " + json.dumps(spaces, ensure_ascii=False) + ";")
     if last_space is not None:
         init.append("chrome.storage._data['blattam-last-space'] = " + json.dumps(last_space) + ";")
+    if lang is not None:
+        init.append("chrome.storage.local._data['blattam-lang'] = " + json.dumps(lang) + ";")
     if confirm:
         init.append("window.confirm = () => true;")
     pg.goto("about:blank")
     pg.evaluate(MOCK_CHROME + "\n".join(init))
     pg.evaluate("document.body.innerHTML = " + json.dumps(POPUP_DOM))
     try:
+        pg.evaluate(load_file("i18n.js") + "; 'i18n'")
         pg.evaluate(load_file("popup.js") + "; 'loaded'")
     except Exception as e:
         pytest.fail(f"Popup.js error: {e}")
@@ -1224,6 +1230,7 @@ class TestViewTabsLocalMigration:
             "chrome.storage._data['blattam-tabs'] = " + json.dumps(tabs, ensure_ascii=False) + ";"
             "chrome.storage._data['blattam-spaces'] = " + json.dumps(spaces, ensure_ascii=False) + ";")
         pg.evaluate("document.body.innerHTML = " + json.dumps(VIEW_DOM))
+        pg.evaluate(load_file("i18n.js") + "; 'i18n'")
         pg.evaluate(load_file("view.js") + "; 'loaded'")
         pg.wait_for_timeout(40)
 
@@ -7088,7 +7095,7 @@ class TestHotkey:
         m = json.load(open(f"{EXT_PATH}/manifest.json"))
         cmd = m["commands"]["save-tab"]
         assert cmd["suggested_key"]["default"] == "Ctrl+Shift+S"
-        assert cmd["description"] == "Сохранить текущую вкладку"
+        assert cmd["description"] == "__MSG_cmdSaveTab__"
 
     @pytest.fixture(autouse=True)
     def _setup(self, page):
@@ -12802,7 +12809,7 @@ class TestSettingsBackground:
             titles = json.loads(self.page.evaluate(
                 "JSON.stringify([...document.querySelectorAll('#settings-modal .settings-section-title')]"
                 ".map(el => el.textContent.trim()))"))
-            assert titles == ["Фон", "Цвет вкладок", "Частые вопросы", "О программе"]
+            assert titles == ["Фон", "Цвет вкладок", "Язык", "Частые вопросы", "О программе"]
             assert self.page.evaluate("document.getElementById('bg-file-btn').textContent.trim()") == "Выбрать картинку"
             assert self.page.evaluate("document.getElementById('bg-clear-btn').textContent.trim()") == "Убрать"
             # скрытый input-файла рядом с #import-input
@@ -12969,7 +12976,7 @@ class TestSettingsTabColor:
             titles = json.loads(self.page.evaluate(
                 "JSON.stringify([...document.querySelectorAll('#settings-modal .settings-section-title')]"
                 ".map(el => el.textContent.trim()))"))
-            assert titles == ["Фон", "Цвет вкладок", "Частые вопросы", "О программе"]
+            assert titles == ["Фон", "Цвет вкладок", "Язык", "Частые вопросы", "О программе"]
             assert self.page.evaluate("document.getElementById('tab-color-input').type") == "color"
             assert self.page.evaluate(
                 "document.getElementById('tab-color-reset').textContent.trim()") == "Сбросить"
@@ -17965,3 +17972,335 @@ class TestScrollTuning:
             assert d["over"] is True, d
             assert d["items"] == 40, d
             assert d["thumb"] == self._hex_to_rgb(d["tok"]), d
+
+# ==========================================
+#  I18N: RU/EN (wave 1 — статические строки + переключатель языка)
+# ==========================================
+
+class TestI18n:
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    def test_default_ru_static(self):
+        load_view(self.page)
+        self.page.wait_for_timeout(150)
+        d = json.loads(self.page.evaluate("""(() => {
+          const t = document.querySelector('#theme-btn .t');
+          return JSON.stringify({
+            theme_label: t ? t.textContent : null,
+            search_ph: document.getElementById('search').placeholder,
+            doc_lang: document.documentElement.lang,
+            lang_key_present: ('blattam-lang' in chrome.storage.local._data),
+            ru_active: document.getElementById('lang-btn-ru').classList.contains('active'),
+            en_active: document.getElementById('lang-btn-en').classList.contains('active')
+          });
+        })()"""))
+        assert d["theme_label"] == "Тема", d
+        assert d["search_ph"] == "Поиск во вкладках…", d
+        assert d["doc_lang"] == "ru", d
+        assert d["lang_key_present"] is False, d
+        assert d["ru_active"] is True, d
+        assert d["en_active"] is False, d
+
+    def test_en_from_storage(self):
+        load_view(self.page, lang="en")
+        self.page.wait_for_timeout(150)
+        d = json.loads(self.page.evaluate("""(() => {
+          const t = document.querySelector('#theme-btn .t');
+          return JSON.stringify({
+            theme_label: t ? t.textContent : null,
+            search_ph: document.getElementById('search').placeholder,
+            doc_title: document.title,
+            doc_lang: document.documentElement.lang,
+            ru_active: document.getElementById('lang-btn-ru').classList.contains('active'),
+            en_active: document.getElementById('lang-btn-en').classList.contains('active')
+          });
+        })()"""))
+        assert d["theme_label"] == "Theme", d
+        assert d["search_ph"] == "Search tabs…", d
+        assert d["doc_title"] == "BlatTabs — tabs", d
+        assert d["doc_lang"] == "en", d
+        assert d["ru_active"] is False, d
+        assert d["en_active"] is True, d
+
+    def test_lang_section_in_settings(self):
+        load_view(self.page)
+        self.page.wait_for_timeout(150)
+        self.page.click("#settings-btn")
+        self.page.wait_for_timeout(150)
+        d = self.page.evaluate("""(() => {
+          const sec = document.querySelector('#settings-pane-customization #lang-section');
+          if (!sec) return 'missing';
+          return JSON.stringify({
+            h4: sec.querySelector('h4').textContent,
+            ru: document.getElementById('lang-btn-ru').textContent,
+            en: document.getElementById('lang-btn-en').textContent
+          });
+        })()""")
+        if d == "missing":
+            pytest.fail("#lang-section not found inside #settings-pane-customization")
+        r = json.loads(d)
+        assert r["h4"] == "Язык", r
+        assert r["ru"] == "Русский", r
+        assert r["en"] == "English", r
+
+    def test_toggle_ru_to_en(self):
+        load_view(self.page)
+        self.page.wait_for_timeout(150)
+        self.page.click("#settings-btn")
+        self.page.wait_for_timeout(150)
+        self.page.click("#lang-btn-en")
+        self.page.wait_for_timeout(150)
+        d = json.loads(self.page.evaluate("""(() => {
+          const t = document.querySelector('#theme-btn .t');
+          const navs = [...document.querySelectorAll('#settings-modal .settings-nav-item')].map(b => b.textContent);
+          return JSON.stringify({
+            theme_label: t ? t.textContent : null,
+            stored: chrome.storage.local._data['blattam-lang'],
+            ru_active: document.getElementById('lang-btn-ru').classList.contains('active'),
+            en_active: document.getElementById('lang-btn-en').classList.contains('active'),
+            doc_lang: document.documentElement.lang,
+            navs: navs,
+            h4: document.querySelector('#lang-section h4').textContent
+          });
+        })()"""))
+        assert d["theme_label"] == "Theme", d
+        assert d["stored"] == "en", d
+        assert d["ru_active"] is False, d
+        assert d["en_active"] is True, d
+        assert d["doc_lang"] == "en", d
+        assert d["navs"] == ["Customization", "FAQ", "About"], d
+        assert d["h4"] == "Language", d
+
+    def test_toggle_back_to_ru(self):
+        # та же страница, что в test_toggle_ru_to_en (после переключения на EN)
+        self.page.click("#lang-btn-ru")
+        self.page.wait_for_timeout(150)
+        d = json.loads(self.page.evaluate("""(() => {
+          const t = document.querySelector('#theme-btn .t');
+          return JSON.stringify({
+            theme_label: t ? t.textContent : null,
+            stored: chrome.storage.local._data['blattam-lang'],
+            ru_active: document.getElementById('lang-btn-ru').classList.contains('active'),
+            en_active: document.getElementById('lang-btn-en').classList.contains('active')
+          });
+        })()"""))
+        assert d["theme_label"] == "Тема", d
+        assert d["stored"] == "ru", d
+        assert d["ru_active"] is True, d
+        assert d["en_active"] is False, d
+
+    def test_popup_ru_default(self):
+        load_popup(self.page)
+        self.page.wait_for_timeout(150)
+        d = json.loads(self.page.evaluate("""(() => JSON.stringify({
+          save_btn: document.getElementById('save-current-tab').textContent,
+          label: document.querySelector('label[for="space-select"]').textContent,
+          add_space: document.getElementById('popup-add-space').textContent,
+          saved: document.getElementById('saved-msg').textContent
+        }))()"""))
+        assert d["save_btn"] == "Сохранить вкладку", d
+        assert d["label"] == "Пространство:", d
+        assert d["add_space"] == "+ Новое пространство", d
+        assert d["saved"] == "✓ Вкладка сохранена!", d
+
+    def test_popup_en(self):
+        load_popup(self.page, lang="en")
+        self.page.wait_for_timeout(150)
+        d = json.loads(self.page.evaluate("""(() => JSON.stringify({
+          save_btn: document.getElementById('save-current-tab').textContent,
+          label: document.querySelector('label[for="space-select"]').textContent,
+          add_space: document.getElementById('popup-add-space').textContent,
+          saved: document.getElementById('saved-msg').textContent,
+          doc_lang: document.documentElement.lang
+        }))()"""))
+        assert d["save_btn"] == "Save tab", d
+        assert d["label"] == "Space:", d
+        assert d["add_space"] == "+ New space", d
+        assert d["saved"] == "✓ Tab saved!", d
+        assert d["doc_lang"] == "en", d
+
+    def test_manifest_locales(self):
+        m = json.load(open(f"{EXT_PATH}/manifest.json", encoding="utf-8"))
+        assert m["default_locale"] == "ru"
+        assert m["description"] == "__MSG_appDesc__"
+        assert m["commands"]["save-tab"]["description"] == "__MSG_cmdSaveTab__"
+        ru = json.load(open(f"{EXT_PATH}/_locales/ru/messages.json", encoding="utf-8"))
+        en = json.load(open(f"{EXT_PATH}/_locales/en/messages.json", encoding="utf-8"))
+        assert ru["appDesc"]["message"] == "BlatTabs — менеджер сохранённых вкладок"
+        assert en["cmdSaveTab"]["message"] == "Save current tab"
+
+    def test_i18n_api_basics(self):
+        load_view(self.page)
+        self.page.wait_for_timeout(150)
+        d = json.loads(self.page.evaluate("""(() => JSON.stringify({
+          unknown: t('zz_no_such_key'),
+          selected: t('selected_n', {n: 3}),
+          delete_confirm: t('delete_tab_confirm', {name: 'X'}),
+          keys_equal: Object.keys(I18N.ru).sort().join('|') === Object.keys(I18N.en).sort().join('|')
+        }))()"""))
+        assert d["unknown"] == "zz_no_such_key", d
+        assert d["selected"] == "3 выбрано", d
+        assert d["delete_confirm"] == 'Удалить вкладку "X"?', d
+        assert d["keys_equal"] is True, d
+
+
+class TestI18nDynamic:
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    def _bg(self, lang=None, spaces=None):
+        seed = ""
+        if lang is not None:
+            seed += "chrome.storage.local._data['blattam-lang'] = " + json.dumps(lang) + ";"
+        if spaces is not None:
+            seed += "chrome.storage._data['blattam-spaces'] = " + json.dumps(spaces) + ";"
+        self.page.goto("about:blank")
+        self.page.evaluate(MOCK_CHROME + seed)
+        self.page.evaluate(load_file("background.js") + "; 'loaded'")
+
+    def _seed_group_view(self, lang, n):
+        tabs = [{"name": "t%d" % i, "url": "http://t%d.example.com" % i,
+                 "spaceId": "sp1", "groupId": "g1"} for i in range(1, n + 1)]
+        kw = {"lang": lang} if lang else {}
+        load_view(self.page, spaces=[{"id": "sp1", "name": "S"}],
+                  groups=[{"id": "g1", "name": "G", "spaceId": "sp1", "collapsed": False}],
+                  tabs=tabs, **kw)
+        self.page.wait_for_timeout(120)
+        return self.page.evaluate("document.querySelector('.gcount') ? document.querySelector('.gcount').textContent : null")
+
+    def test_group_count_ru_forms(self):
+        for n, expected in ((2, "2 вкладки"), (21, "21 вкладка"),
+                            (22, "22 вкладки"), (25, "25 вкладок")):
+            d = self._seed_group_view(None, n)
+            assert d == expected, (n, d)
+
+    def test_group_count_en(self):
+        for n, expected in ((2, "2 tabs"), (21, "21 tabs")):
+            d = self._seed_group_view("en", n)
+            assert d == expected, (n, d)
+
+    def test_empty_state_en(self):
+        load_view(self.page, lang="en", spaces=[{"id": "sp1", "name": "S"}])
+        self.page.wait_for_timeout(120)
+        d = json.loads(self.page.evaluate("""(() => {
+          const es = document.getElementById('empty-state');
+          return JSON.stringify({
+            display: es.style.display,
+            main: es.querySelector('.empty-main').textContent,
+            sub: es.querySelectorAll('span')[1].textContent
+          });
+        })()"""))
+        assert d["display"] == "block", d
+        assert d["main"] == "Nothing yet", d
+        assert d["sub"] == "Tabs saved to this space will appear here", d
+
+    def test_selection_count_en(self):
+        tabs = [{"name": "A", "url": "http://a.example.com", "spaceId": "sp1"},
+                {"name": "B", "url": "http://b.example.com", "spaceId": "sp1"}]
+        load_view(self.page, lang="en", spaces=[{"id": "sp1", "name": "S"}], tabs=tabs)
+        self.page.wait_for_timeout(120)
+        self.page.evaluate("document.querySelectorAll('.tab-select').forEach(cb => cb.click()); 'ok'")
+        self.page.wait_for_timeout(100)
+        d = self.page.evaluate("document.getElementById('selection-count').textContent")
+        assert d == "2 selected", d
+
+    def test_selection_count_ru(self):
+        tabs = [{"name": "A", "url": "http://a.example.com", "spaceId": "sp1"},
+                {"name": "B", "url": "http://b.example.com", "spaceId": "sp1"}]
+        load_view(self.page, spaces=[{"id": "sp1", "name": "S"}], tabs=tabs)
+        self.page.wait_for_timeout(120)
+        self.page.evaluate("document.querySelectorAll('.tab-select').forEach(cb => cb.click()); 'ok'")
+        self.page.wait_for_timeout(100)
+        d = self.page.evaluate("document.getElementById('selection-count').textContent")
+        assert d == "2 выбрано", d
+
+    def test_ungrouped_addgroup_en(self):
+        tabs = [{"name": "T", "url": "http://t.example.com", "spaceId": "sp1", "groupId": "g1"},
+                {"name": "L", "url": "http://l.example.com", "spaceId": "sp1"}]
+        load_view(self.page, lang="en", spaces=[{"id": "sp1", "name": "S"}],
+                  groups=[{"id": "g1", "name": "G", "spaceId": "sp1", "collapsed": False}], tabs=tabs)
+        self.page.wait_for_timeout(120)
+        d = json.loads(self.page.evaluate("""(() => JSON.stringify({
+          loose: document.querySelector('.loose-name').textContent,
+          loose_title: document.querySelector('.loose-select').title,
+          add_text: document.getElementById('add-group-btn').textContent,
+          add_title: document.getElementById('add-group-btn').title
+        }))()"""))
+        assert d["loose"] == "Ungrouped", d
+        assert d["loose_title"] == "Select all ungrouped tabs", d
+        assert d["add_text"] == "+ Group", d
+        assert d["add_title"] == "New group", d
+
+    def test_drop_slot_en(self):
+        load_view(self.page, lang="en", spaces=[{"id": "sp1", "name": "S"}],
+                  groups=[{"id": "g1", "name": "G", "spaceId": "sp1", "collapsed": False}])
+        self.page.wait_for_timeout(120)
+        d = self.page.evaluate("document.querySelector('.group-empty-slot') ? document.querySelector('.group-empty-slot').textContent : null")
+        assert d == "Drag a tab here", d
+
+    def test_confirm_delete_tab_both_langs(self):
+        for lang, expected in (("en", 'Delete tab "MyTab"?'),
+                               (None, 'Удалить вкладку "MyTab"?')):
+            kw = {"lang": lang} if lang else {}
+            load_view(self.page, spaces=[{"id": "sp1", "name": "S"}],
+                      tabs=[{"name": "MyTab", "url": "http://mytab.example.com", "spaceId": "sp1"}], **kw)
+            self.page.wait_for_timeout(120)
+            self.page.evaluate("""(() => {
+              window.__confirmMsg = null;
+              window.confirm = (m) => { window.__confirmMsg = m; return false; };
+              document.querySelector('.tab-remove').click();
+              return 'clicked';
+            })()""")
+            self.page.wait_for_timeout(100)
+            d = json.loads(self.page.evaluate(
+                "JSON.stringify({ msg: window.__confirmMsg, cards: document.querySelectorAll('.tab-card').length })"))
+            assert d["msg"] == expected, d
+            assert d["cards"] == 1, d
+
+    def test_confirm_bulk_delete_both_langs(self):
+        for lang, expected in (("en", "Delete 3 tabs?"), (None, "Удалить 3 вкладки?")):
+            kw = {"lang": lang} if lang else {}
+            tabs = [{"name": "T%d" % i, "url": "http://x%d.example.com" % i, "spaceId": "sp1"}
+                    for i in range(1, 4)]
+            load_view(self.page, spaces=[{"id": "sp1", "name": "S"}], tabs=tabs, **kw)
+            self.page.wait_for_timeout(120)
+            self.page.evaluate("""(() => {
+              window.__confirmMsg = null;
+              window.confirm = (m) => { window.__confirmMsg = m; return false; };
+              document.querySelectorAll('.tab-select').forEach(cb => cb.click());
+              document.getElementById('delete-selected-btn').click();
+              return 'clicked';
+            })()""")
+            self.page.wait_for_timeout(100)
+            d = json.loads(self.page.evaluate(
+                "JSON.stringify({ msg: window.__confirmMsg, cards: document.querySelectorAll('.tab-card').length })"))
+            assert d["msg"] == expected, d
+            assert d["cards"] == 3, d
+
+    def test_bg_default_names_en(self):
+        self._bg(lang="en")
+        sp2 = call_msg(self.page, "create-space", name="")
+        assert sp2 and sp2["name"] == "Space 2", sp2
+        spa = call_msg(self.page, "create-space", name="Alpha")
+        assert spa and spa["name"] == "Alpha", spa
+        names = sorted(s["name"] for s in read_storage_raw(self.page, "blattam-spaces"))
+        assert names == ["Alpha", "My Tabs", "Space 2"], names
+
+    def test_bg_group_and_tab_defaults_en(self):
+        self._bg(lang="en", spaces=[{"id": "sp1", "name": "S"}])
+        g = call_msg(self.page, "create-group", spaceId="sp1", name="")
+        assert g and g["name"] == "Group 1", g
+        call_msg(self.page, "add-tab", name="", url="http://x.example.com", spaceId="sp1")
+        tabs = read_local(self.page, "blattam-tabs")
+        assert len(tabs) == 1, tabs
+        assert tabs[0]["name"] == "Untitled", tabs
+
+    def test_bg_ru_defaults_unchanged(self):
+        self._bg()
+        sp = call_msg(self.page, "create-space", name="")
+        assert sp and sp["name"] == "Пространство 2", sp
+        names = [s["name"] for s in read_storage_raw(self.page, "blattam-spaces")]
+        assert "Мои вкладки" in names and "Пространство 2" in names, names

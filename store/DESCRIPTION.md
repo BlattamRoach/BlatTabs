@@ -63,3 +63,5 @@ The design is minimal monochrome, Vercel-style: black/white/grey, Geist font, cr
 - **Hotkey** — Ctrl+Shift+S saves the current tab.
 - **Storage** — the tab list lives in `chrome.storage.local` (per device, up to ~10 MB — large collections fit); spaces and groups live in `chrome.storage.sync` (across devices).
 - **JSON export / import** — migrate your collection with folders.
+
+Язык интерфейса: русский (по умолчанию) и английский — переключатель в «Настройках → Кастомизация».
