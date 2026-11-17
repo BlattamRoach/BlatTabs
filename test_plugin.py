@@ -3720,6 +3720,9 @@ class TestTabGhostSlot:
         assert dark_part.count("--rail-bg:") == 1
         assert re.search(r"--rail-bg:\s*#[0-9a-fA-F]{3,8};", light_part)
         assert re.search(r"--rail-bg:\s*#[0-9a-fA-F]{3,8};", dark_part)
+        # --gbar-seam — токен seam-линии reorder групп (bordeaux, rgba, НЕ hex): ровно по одному разу в :root и в тёмной секции
+        assert light_part.count("--gbar-seam:") == 1
+        assert dark_part.count("--gbar-seam:") == 1
         # .gbar — «Штрих»: прозрачная строка БЕЗ border-top; 1px-линия сверху —
         # оверлей .gbar::before из токена --gbar-top-line (без hex)
         gbar = html[html.index(".gbar {"):]
@@ -6431,14 +6434,15 @@ class TestGroupReorderDnD:
           const topLine = dst.classList.contains('drop-before');
           const csTop = getComputedStyle(dst, '::before');
           const lineTop = csTop.height === '2px' && csTop.content !== 'none';
+          const seamGrad = csTop.backgroundImage.indexOf('linear-gradient') !== -1;
           dst.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true, clientY: r.top + Math.max(r.height * 0.75, 0.001)}));
           const bottomLine = dst.classList.contains('drop-after');
           const noOverBg = !dst.classList.contains('drop-over');
           src.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
           const cleared = !dst.classList.contains('drop-before') && !dst.classList.contains('drop-after');
-          return JSON.stringify({topLine, lineTop, bottomLine, noOverBg, cleared});
+          return JSON.stringify({topLine, lineTop, seamGrad, bottomLine, noOverBg, cleared});
         })()"""))
-        assert state == {"topLine": True, "lineTop": True, "bottomLine": True, "noOverBg": True, "cleared": True}, state
+        assert state == {"topLine": True, "lineTop": True, "seamGrad": True, "bottomLine": True, "noOverBg": True, "cleared": True}, state
 
 
 # ==========================================
@@ -8143,17 +8147,20 @@ class TestGroupControlsDragGuard:
         load_view(self.page, spaces=self.SP, groups=self.GROUPS, tabs=self.TABS)
         self._arm_drag_counter()
         src = self.page.evaluate("(() => { const r = document.querySelector('.gbar .gname').getBoundingClientRect(); return {x: r.x + r.width/2, y: r.y + r.height/2}; })()")
-        dst = self.page.evaluate("(() => { const r = document.querySelectorAll('.gbar')[1].getBoundingClientRect(); return {x: r.x + r.width/2, y: r.top + r.height * 0.75}; })()")
         self.page.mouse.move(src["x"], src["y"], steps=3)
         self.page.wait_for_timeout(60)
         self.page.mouse.down()
         self.page.wait_for_timeout(60)
-        self.page.mouse.move(dst["x"], dst["y"], steps=10)
+        self.page.mouse.move(src["x"], src["y"] + 24, steps=4)  # арм: движение >8px вниз
+        self.page.wait_for_timeout(250)  # FLIP-переход оседает (200ms) — геометрия цели обновлена
+        # ре-замер g2 ПОСЛЕ вырвания отделения g1 (рефлоу сдвинул её вверх; .gbar[1] — g2)
+        dst = self.page.evaluate("(() => { const r = document.querySelectorAll('.gbar')[1].getBoundingClientRect(); return {x: r.x + r.width/2, y: r.top + r.height * 0.75}; })()")
+        self.page.mouse.move(dst["x"], dst["y"], steps=5)
         self.page.wait_for_timeout(100)
         self.page.mouse.up()
         self.page.wait_for_timeout(300)
         assert self.page_errors == [], self.page_errors
-        assert self.page.evaluate("window.__dragStarts") == 1
+        assert self.page.evaluate("window.__dragStarts") == 0
         # g1 переехала ПОСЛЕ g2 — порядок в данных
         ids = [g["id"] for g in read_storage_raw(self.page, "blattam-groups")]
         assert ids == ["g2", "g1"], ids
@@ -10429,7 +10436,8 @@ class TestSpaceChipGhostSlot:
         assert re.search(r"#[0-9a-fA-F]{3,8}", rule) is None
         gbar = html[html.index(".gbar.drop-before::before, .gbar.drop-after::after"):]
         gbar = gbar[:gbar.index("}")]
-        assert "var(--ink)" in gbar
+        assert "var(--gbar-seam)" in gbar
+        assert re.search(r"#[0-9a-fA-F]{3,8}", gbar) is None
         self._end("Alpha")
 
     def test_spurious_postdrop_click_no_switch_real_click_switches(self):
@@ -18304,3 +18312,422 @@ class TestI18nDynamic:
         assert sp and sp["name"] == "Пространство 2", sp
         names = [s["name"] for s in read_storage_raw(self.page, "blattam-spaces")]
         assert "Мои вкладки" in names and "Пространство 2" in names, names
+
+
+# ==========================================
+#  VIEW.JS: POINTER-ДРАГ ШАПКИ ГРУППЫ (wave 2 «grab feel», реальный Chrome UX)
+#  Press по имени/чепрону шапки (не по hover-кнопкам) + движение >8 px —
+#  нативный HTML5-drag убивается (guard в dragstart: gbarPointerPress), ЦЕЛОЕ
+#  отделение группы (gbar + её .tab-card + .group-empty-slot) вырывается
+#  (display:none), всё ниже сдвигается ВВЕРХ одним FLIP-проходом (200ms ease),
+#  header-pill клон (.pd-clone) следует за курсором 1:1, живой seam-индикатор
+#  (волна 1) на целевой шапке. Релиз: на чужую шапку — reorderGroups (верхняя
+#  половина = before, нижняя = after); вне шапок / Escape — cancel (renderTabs
+#  восстанавливает раскладку, клон домой). Реальная Playwright-мышь;
+#  синтетическая HTML5-цепочка харнесса (test_bar_drag_from_name_still_
+#  reorders_groups) не тронута.
+# ==========================================
+
+class TestGbarPointerDrag:
+    """Pointer drag of GROUP HEADERS (real Chrome UX, wave 2 «grab feel»,
+    wave 3 gap-ghost): the group moves like a TAB CARD — the whole section is
+    yanked, a warm full-width .gbar-ghost-slot walks the GAPS between the other
+    groups (parting FLIP), commit happens at the slot's gap (between groups /
+    at the list edges). Real Playwright mouse. The synthetic HTML5 DragEvent
+    path (seam .drop-before/.drop-after) stays intact."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self.page_errors = []
+        page.on("pageerror", lambda err: self.page_errors.append(str(err)))
+        page.set_viewport_size({"width": 1280, "height": 900})
+        self._load()
+
+    SP = [{"id": "sp1", "name": "Main"}]
+    GROUPS = [
+        {"id": "g1", "name": "Dev", "spaceId": "sp1", "collapsed": False},
+        {"id": "g2", "name": "Read", "spaceId": "sp1", "collapsed": False},
+        {"id": "g3", "name": "Work", "spaceId": "sp1", "collapsed": False},
+    ]
+    TABS = [
+        {"name": "D1", "url": "https://d1.com", "spaceId": "sp1", "groupId": "g1"},
+        {"name": "D2", "url": "https://d2.com", "spaceId": "sp1", "groupId": "g1"},
+        {"name": "R1", "url": "https://r1.com", "spaceId": "sp1", "groupId": "g2"},
+        {"name": "W1", "url": "https://w1.com", "spaceId": "sp1", "groupId": "g3"},
+        {"name": "W2", "url": "https://w2.com", "spaceId": "sp1", "groupId": "g3"},
+    ]
+
+    # === helpers ===
+
+    def _load(self):
+        load_view(self.page, tabs=self.TABS, spaces=self.SP, groups=self.GROUPS)
+        # реальные стили — геометрия настоящая (карточки ~80px, не 41px)
+        theme = load_file("theme.css")
+        html = load_file("view.html")
+        style = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate("(st) => { const el = document.createElement('style'); el.textContent = st; document.head.appendChild(el); }", theme + "\n" + style)
+        self.page.wait_for_timeout(120)
+        self.page.mouse.move(0, 0)  # парковка указателя: :hover не дёргает геометрию
+        self.page.wait_for_timeout(40)
+
+    def _gname_box(self, gid):
+        return self.page.evaluate("""(gid) => {
+            const bar = document.querySelector('#tabs-list .gbar[data-group-id="' + gid + '"]');
+            const g = bar.querySelector('.gname');
+            const r = g.getBoundingClientRect();
+            return {x: r.x + r.width/2, y: r.y + r.height/2, left: r.left, top: r.top, width: r.width, height: r.height};
+        }""", gid)
+
+    def _gbar_box(self, gid):
+        return self.page.evaluate("""(gid) => {
+            const bar = document.querySelector('#tabs-list .gbar[data-group-id="' + gid + '"]');
+            const r = bar.getBoundingClientRect();
+            return {x: r.x + r.width/2, y: r.y + r.height/2, left: r.left, top: r.top,
+                    right: r.right, bottom: r.bottom, width: r.width, height: r.height};
+        }""", gid)
+
+    def _group_card_els(self, gid):
+        return self.page.evaluate("""(gid) => {
+            return [...document.querySelectorAll('#tabs-list .tab-card')]
+              .filter(c => c.__tab && c.__tab.groupId === gid)
+              .map(c => c.style.display);
+        }""", gid)
+
+    def _gbar_display(self, gid):
+        return self.page.evaluate("document.querySelector('#tabs-list .gbar[data-group-id=\"%s\"]').style.display" % gid)
+
+    def _all_visible(self):
+        return self.page.evaluate("""() => [...document.querySelectorAll('#tabs-list .gbar, #tabs-list .tab-card')]
+            .every(el => getComputedStyle(el).display !== 'none')""")
+
+    def _press_gbar(self, gid):
+        pt = self._gname_box(gid)
+        self.page.mouse.move(pt["x"], pt["y"], steps=3)
+        self.page.wait_for_timeout(60)
+        self.page.mouse.down()
+        self.page.wait_for_timeout(60)
+        return pt
+
+    def _gmove(self, from_pt, to_pt, steps=10):
+        for i in range(1, steps + 1):
+            self.page.mouse.move(from_pt["x"] + (to_pt["x"] - from_pt["x"]) * i / steps,
+                                 from_pt["y"] + (to_pt["y"] - from_pt["y"]) * i / steps)
+
+    def _clone_state(self):
+        return self.page.evaluate("""() => {
+            const c = document.querySelector('.pd-clone');
+            if (!c) return null;
+            const s = c.style.transform;
+            const a = s.indexOf('translate3d('), b = s.indexOf(')', a);
+            const parts = s.slice(a + 12, b).split(',');
+            return {inBody: c.parentElement === document.body,
+                    fixed: getComputedStyle(c).position === 'fixed',
+                    x: parseFloat(parts[0]), y: parseFloat(parts[1])};
+        }""")
+
+    def _group_order(self):
+        return [g["id"] for g in read_storage_raw(self.page, "blattam-groups")]
+
+    def _collapsed(self, gid):
+        return [g["collapsed"] for g in read_storage_raw(self.page, "blattam-groups") if g["id"] == gid][0]
+
+    def _leftovers(self):
+        return self.page.evaluate("""() => ({
+            clone: !!document.querySelector('.pd-clone'),
+            slot: !!document.querySelector('.gbar-ghost-slot'),
+            seam: document.querySelectorAll('.gbar.drop-before, .gbar.drop-after').length,
+            hidden: [...document.querySelectorAll('#tabs-list .gbar, #tabs-list .tab-card')]
+                    .filter(el => getComputedStyle(el).display === 'none').length,
+            cursor: document.body.style.cursor
+        })""")
+
+    def _group_write_count(self):
+        """Счётчик записей blattam-groups в mock storage (спай на sync.set)."""
+        self.page.evaluate("""(() => {
+            if (!window.__gWrites) {
+                window.__gWrites = 0;
+                const orig = chrome.storage.sync.set.bind(chrome.storage.sync);
+                chrome.storage.sync.set = function(data, cb) {
+                    if (data && data['blattam-groups']) window.__gWrites++;
+                    return orig(data, cb);
+                };
+            }
+        })()""")
+        return self.page.evaluate("window.__gWrites")
+
+    def _arm_down(self, gid, dy=40, settle=300):
+        """press + арм (движение >8px вниз). Pointer остаётся зажатым; после
+        оседания FLIP-слайда (200ms) геометрия стабильна — ре-замер целей."""
+        pt = self._press_gbar(gid)
+        self._gmove(pt, {"x": pt["x"], "y": pt["y"] + dy}, steps=6)
+        self.page.wait_for_timeout(settle)
+        return pt
+
+    def _slot_info(self):
+        """Позиция тёплой .gbar-ghost-slot в #tabs-list (соседи, размер, тон)."""
+        return self.page.evaluate("""() => {
+            const slot = document.querySelector('#tabs-list .gbar-ghost-slot');
+            if (!slot) return null;
+            const kids = [...document.getElementById('tabs-list').children];
+            const i = kids.indexOf(slot);
+            const prev = i > 0 ? kids[i - 1] : null;
+            const next = i + 1 < kids.length ? kids[i + 1] : null;
+            const gidOf = el => !el ? null : (el.__tab ? el.__tab.groupId
+                : (el.dataset && el.dataset.groupId ? el.dataset.groupId : null));
+            const r = slot.getBoundingClientRect();
+            return {idx: i, prevCls: prev ? prev.className : null, prevGid: gidOf(prev),
+                    nextCls: next ? next.className : null, nextGid: gidOf(next),
+                    width: r.width, height: r.height,
+                    warm: getComputedStyle(slot).borderStyle === 'dashed'};
+        }""")
+
+    def _section_box(self, gid):
+        """Layout-box групповой секции (верх gbar → низ последней карточки),
+        то же правило, что gpdGroupSections в view.js."""
+        return self.page.evaluate("""(gid) => {
+            const list = document.getElementById('tabs-list');
+            const isG = el => el.__tab ? el.__tab.groupId === gid
+                : (el.dataset && el.dataset.groupId === gid);
+            let top = null, bottom = null, x = null;
+            for (const el of list.children) {
+                if (el.classList.contains('gbar')) {
+                    if (el.dataset.groupId === gid) {
+                        const r = el.getBoundingClientRect();
+                        top = r.top; bottom = r.bottom; x = r.x + r.width / 2;
+                    } else if (top !== null) break;
+                    continue;
+                }
+                if (el.classList.contains('loose-label') || el.id === 'add-group-btn') {
+                    if (top !== null) break;
+                    continue;
+                }
+                if (top !== null && isG(el) && el.getBoundingClientRect().height > 0)
+                    bottom = el.getBoundingClientRect().bottom;
+            }
+            return {top, bottom, x};
+        }""", gid)
+
+    # === tests ===
+
+    def test_no_arm_under_8px(self):
+        pt = self._press_gbar("g1")
+        # движение <8px — драг не вооружается (проверяем, пока pointer зажат,
+        # до релиза: сам релиз — это обычный клик, свернуть группу — отдельно)
+        self.page.mouse.move(pt["x"] + 5, pt["y"])
+        self.page.wait_for_timeout(60)
+        assert self._clone_state() is None
+        assert self.page.evaluate("!!document.querySelector('.pd-clone')") is False
+        assert self.page.evaluate("!!document.querySelector('.gbar-ghost-slot')") is False
+        assert self.page.evaluate("document.querySelectorAll('#tabs-list .gbar').length") == 3
+        assert self._gbar_display("g1") != 'none'
+        assert all(d != 'none' for d in self._group_card_els("g1"))
+        self.page.mouse.up()
+        self.page.wait_for_timeout(120)
+
+    def test_plain_click_still_collapses(self):
+        before = self._collapsed("g1")
+        self._press_gbar("g1")
+        self.page.mouse.up()  # без движения — обычный клик по шапке
+        self.page.wait_for_timeout(150)
+        after = self._collapsed("g1")
+        assert after != before, (before, after)
+        assert self._clone_state() is None
+        assert self.page.evaluate("!!document.querySelector('.gbar-ghost-slot')") is False
+
+    def test_yank_out_and_part(self):
+        s2_before = self._section_box("g2")["top"]
+        self._arm_down("g1")  # арм: вниз, к g2
+        # целое отделение g1 вырвано: gbar + все её карточки display:none
+        assert self._gbar_display("g1") == 'none'
+        assert all(d == 'none' for d in self._group_card_els("g1"))
+        c = self._clone_state()
+        assert c is not None and c["inBody"] and c["fixed"]
+        # тёплая полноширинная заглушка ЕСТЬ: grid-column 1/-1 (ширина списка),
+        # пунктирный тёплый тон, высота вырванного отделения (не 2px-линия)
+        sl = self._slot_info()
+        assert sl is not None, "no .gbar-ghost-slot"
+        assert sl["warm"], sl
+        lw = self.page.evaluate("document.getElementById('tabs-list').getBoundingClientRect().width")
+        assert sl["width"] >= lw - 2, (sl["width"], lw)
+        assert sl["height"] > 50, sl
+        # группа НИЖЕ g1 поднялась (parting FLIP): layout top меньше, чем до арма
+        s2_after = self._section_box("g2")["top"]
+        assert s2_after < s2_before, (s2_before, s2_after)
+        self.page.mouse.up()  # релиз в зазоре (внутри списка) — коммит по зазору
+        self.page.wait_for_timeout(300)
+        assert self._group_order() == ["g2", "g1", "g3"], self._group_order()
+
+    def test_clone_follows_cursor(self):
+        pt = self._press_gbar("g1")
+        arm = {"x": pt["x"], "y": pt["y"] + 40}
+        self._gmove(pt, arm, steps=6)
+        self.page.wait_for_timeout(300)  # FLIP-слайд оседает — геометрия стабильна
+        p1 = self._clone_state()
+        assert p1 is not None
+        # сдвигаем КУРСОР на +40,+20 — клон следует за курсором 1:1
+        self.page.mouse.move(arm["x"] + 40, arm["y"] + 20)
+        self.page.wait_for_timeout(40)
+        p2 = self._clone_state()
+        assert abs((p2["x"] - p1["x"]) - 40) < 1.5, (p1, p2)
+        assert abs((p2["y"] - p1["y"]) - 20) < 1.5, (p1, p2)
+        self.page.mouse.up()
+        self.page.wait_for_timeout(200)
+
+    def test_ghost_slot_tracks_gap(self):
+        self._arm_down("g1")
+        assert self._slot_info() is not None
+        # hover в зазоре между g2 и g3 (выше геометрической середины зазора —
+        # его границы) — заглушка в ЭТОМ зазоре (между секциями, FLIP-переезд)
+        b2 = self._section_box("g2"); b3 = self._section_box("g3")
+        gy = b2["bottom"] + (b3["top"] - b2["bottom"]) * 0.25
+        self.page.mouse.move(b2["x"], gy, steps=4)
+        self.page.wait_for_timeout(300)
+        sl = self._slot_info()
+        assert sl is not None
+        assert sl["nextGid"] == "g3" and "gbar" in sl["nextCls"], sl  # сразу перед шапкой g3
+        assert sl["prevGid"] == "g2", sl  # и сразу после секции g2
+        # hover у ВЕРХНЕЙ кромки (выше первой группы) — заглушка ПЕРЕД первой
+        b2 = self._section_box("g2")  # ре-замер после FLIP
+        self.page.mouse.move(b2["x"], b2["top"] - 12, steps=4)
+        self.page.wait_for_timeout(300)
+        sl = self._slot_info()
+        assert sl is not None
+        assert sl["nextGid"] == "g2" and "gbar" in sl["nextCls"], sl
+        # релиз ВЫШЕ топ-зоны (60px над верхом списка > 24px-полоса) — cancel:
+        # порядок без изменений, следов нет
+        self.page.mouse.move(b2["x"], b2["top"] - 60, steps=3)
+        self.page.wait_for_timeout(150)
+        self.page.mouse.up()
+        self.page.wait_for_timeout(300)
+        assert self._group_order() == ["g1", "g2", "g3"], self._group_order()
+        lv = self._leftovers()
+        assert lv == {"clone": False, "slot": False, "seam": 0, "hidden": 0, "cursor": ""}, lv
+
+    def test_commit_between_groups(self):
+        # зазор между g2 и g3 — коммит: g1 встаёт МЕЖДУ ними
+        self._arm_down("g1")
+        b2 = self._section_box("g2"); b3 = self._section_box("g3")
+        gy = b2["bottom"] + (b3["top"] - b2["bottom"]) * 0.25  # зазор, выше середины
+        self.page.mouse.move(b2["x"], gy, steps=4)
+        self.page.wait_for_timeout(150)
+        self.page.mouse.up()
+        self.page.wait_for_timeout(300)
+        assert self._group_order() == ["g2", "g1", "g3"], self._group_order()
+
+    def test_commit_at_edge(self):
+        # НИЖНЯЯ кромка: ниже последней группы (внутри #tabs-list) — после последней
+        self._arm_down("g1")
+        b3 = self._section_box("g3")
+        self.page.mouse.move(b3["x"], b3["bottom"] + 30, steps=4)
+        self.page.wait_for_timeout(150)
+        self.page.mouse.up()
+        self.page.wait_for_timeout(300)
+        assert self._group_order() == ["g2", "g3", "g1"], self._group_order()
+        # ВЕРХНЯЯ кромка ВЫШЕ топ-зоны (60px над верхом списка > 24px-полоса)
+        # — cancel: порядок без изменений, следов нет (полоса 24px — отдельный
+        # тест test_commit_at_top_band)
+        self._load()
+        self._arm_down("g2")
+        b1 = self._section_box("g1")
+        self.page.mouse.move(b1["x"], b1["top"] - 60, steps=4)
+        self.page.wait_for_timeout(300)
+        self.page.mouse.up()
+        self.page.wait_for_timeout(300)
+        assert self._group_order() == ["g1", "g2", "g3"], self._group_order()
+        lv = self._leftovers()
+        assert lv == {"clone": False, "slot": False, "seam": 0, "hidden": 0, "cursor": ""}, lv
+
+    def test_commit_at_top_band(self):
+        # ТОП-ЗОНА: релиз в полосе 24px над верхом #tabs-list (в пределах ширины
+        # колонки) при заглушке перед первой группой — коммит «перед первой»
+        # (у списка нет top-padding — внутри списка зона недостижима)
+        self._arm_down("g2")
+        b1 = self._section_box("g1")
+        self.page.mouse.move(b1["x"], b1["top"] - 12, steps=4)
+        self.page.wait_for_timeout(300)
+        sl = self._slot_info()
+        assert sl is not None
+        assert sl["nextGid"] == "g1" and "gbar" in sl["nextCls"], sl
+        self.page.mouse.up()
+        self.page.wait_for_timeout(300)
+        assert self._group_order() == ["g2", "g1", "g3"], self._group_order()
+        lv = self._leftovers()
+        assert lv == {"clone": False, "slot": False, "seam": 0, "hidden": 0, "cursor": ""}, lv
+
+    def test_noop_drop_own_slot_restores_section(self):
+        # no-op-дроп: группа возвращена в собственный слот (зазор g1–g3 —
+        # её исходная позиция) — порядок не меняется, запись в storage нет
+        # (no-op-guard в reorderGroups). Регрессия реального Chrome: set
+        # равного значения НЕ шлёт onChanged (mock шлёт — баг в харнессе
+        # незаметен), поэтому при no-op-коммите раскладку обязан
+        # перерисовать сам pointer-путь — иначе вырванное отделение
+        # остаётся display:none до чужой записи (группа «пропадает»)
+        before = self._group_write_count()
+        self._arm_down("g2")
+        b1 = self._section_box("g1"); b3 = self._section_box("g3")
+        gy = b1["bottom"] + (b3["top"] - b1["bottom"]) * 0.25  # зазор g1–g3
+        self.page.mouse.move(b1["x"], gy, steps=4)
+        self.page.wait_for_timeout(300)
+        sl = self._slot_info()
+        assert sl is not None
+        # слот сразу ПЕРЕД шапкой g3 (prev — вырванное, но ещё в DOM
+        # отделение g2 — display:none)
+        assert sl["prevGid"] == "g2" and sl["nextGid"] == "g3" \
+            and "gbar" in sl["nextCls"], sl
+        self.page.mouse.up()
+        self.page.wait_for_timeout(300)
+        # отделение g2 ВИДНО (gbar + карточки не display:none)
+        assert self._gbar_display("g2") != 'none'
+        assert self.page.evaluate("""() => [...document.querySelectorAll('#tabs-list .tab-card')]
+            .filter(c => c.__tab && c.__tab.groupId === 'g2')
+            .every(c => getComputedStyle(c).display !== 'none')""") is True
+        assert self._group_order() == ["g1", "g2", "g3"], self._group_order()
+        # no-op-guard: запись blattam-groups не ушла
+        assert self._group_write_count() == before, self._group_write_count()
+        lv = self._leftovers()
+        assert lv == {"clone": False, "slot": False, "seam": 0, "hidden": 0, "cursor": ""}, lv
+
+    def test_cancel_outside(self):
+        before = self._group_order()
+        self._arm_down("g1")  # арм
+        self.page.mouse.move(110, 300)  # релиз ВНЕ #tabs-list (левая рейка)
+        self.page.wait_for_timeout(60)
+        self.page.mouse.up()
+        self.page.wait_for_timeout(300)
+        assert self._group_order() == before
+        lv = self._leftovers()
+        assert lv == {"clone": False, "slot": False, "seam": 0, "hidden": 0, "cursor": ""}, lv
+        assert self.page.evaluate("document.querySelectorAll('#tabs-list .gbar').length") == 3
+        assert self._all_visible()
+
+    def test_escape_cancels(self):
+        before = self._group_order()
+        self._arm_down("g1")  # арм
+        self.page.keyboard.press("Escape")
+        self.page.wait_for_timeout(300)
+        assert self._group_order() == before
+        lv = self._leftovers()
+        assert lv == {"clone": False, "slot": False, "seam": 0, "hidden": 0, "cursor": ""}, lv
+        assert self._all_visible()
+
+    def test_no_leftovers(self):
+        # после коммита (зазор между g2 и g3) — никаких следов
+        self._arm_down("g1")
+        b2 = self._section_box("g2"); b3 = self._section_box("g3")
+        gy = b2["bottom"] + (b3["top"] - b2["bottom"]) * 0.25
+        self.page.mouse.move(b2["x"], gy, steps=4)
+        self.page.wait_for_timeout(150)
+        self.page.mouse.up()
+        self.page.wait_for_timeout(400)
+        lv = self._leftovers()
+        assert lv == {"clone": False, "slot": False, "seam": 0, "hidden": 0, "cursor": ""}, lv
+        # после cancel (чистый порядок) — тоже без следов
+        self._load()
+        self._arm_down("g1")
+        self.page.mouse.move(110, 300)
+        self.page.wait_for_timeout(60)
+        self.page.mouse.up()
+        self.page.wait_for_timeout(400)
+        lv2 = self._leftovers()
+        assert lv2 == {"clone": False, "slot": False, "seam": 0, "hidden": 0, "cursor": ""}, lv2

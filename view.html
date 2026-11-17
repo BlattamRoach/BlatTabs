@@ -178,12 +178,17 @@
       content: ''; position: absolute; left: 0; right: 0; top: 0; height: 1px;
       background: var(--gbar-top-line); pointer-events: none; z-index: 1;
     }
-    /* Индикатор reorder групп: 2px линия на верхней/нижней кромке целевой шапки */
+    /* Seam reorder групп (Toby 2.0): 2px линия --gbar-seam (bordeaux) на верхней/нижней
+       кромке целевой шапки, с gradient-fade к краям (прозрачно 0% и 100%, сплошная 8–92%);
+       opacity-переход 90ms. Классы и селектор — без изменений */
     .gbar.drop-before::before, .gbar.drop-after::after {
-      content: ''; position: absolute; left: 0; right: 0; height: 2px; background: var(--ink); z-index: 2;
+      content: ''; position: absolute; left: 0; right: 0; height: 2px; z-index: 2;
+      background: linear-gradient(90deg, transparent 0%, var(--gbar-seam) 8%, var(--gbar-seam) 92%, transparent 100%);
+      transition: opacity 90ms;
     }
     .gbar.drop-before::before { top: 0; }
     .gbar.drop-after::after { bottom: 0; }
+    .gbar-ghost-slot { grid-column: 1 / -1; background: var(--ghost-bg); border: 1px dashed var(--ghost-ring); border-radius: 6px; pointer-events: none; }
     /* Армед-вид шапки пустой/свёрнутой группы (принимает карточку):
     // тёплый тон --ghost-bg / --ghost-ring, текст --text-soft */
     .gbar.drop-over {
