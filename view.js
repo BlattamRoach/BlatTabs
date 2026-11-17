@@ -919,6 +919,8 @@ function appendGroupBar(g, memberCount) {
     clearGroupReorderIndicators();
   });
 
+  gpdBindGbar(bar, g);
+
   // DnD: шапка принимает только другую шапку — reorder групп (2px-индикатор
   // до/после). Карточка, сброшенная на шапку, больше не уходит в группу
   // (свою семантику дропа карточки сохранил только чип пространства)
@@ -1123,17 +1125,31 @@ function startGroupRename(g, nameEl) {
 // до/после цели (side — по половине целевой шапки). Группы других
 // пространств сохраняют относительный порядок; collapsed/члены остаются
 // у группы. Drop on себя — no-op. Запись в blattam-groups → onChanged.
+// Возвращает true, если запись ушла (порядок изменился), false — no-op
+// (порядок не изменился — записи в storage нет; в реальном Chrome set
+// равного значения не шлёт onChanged, поэтому caller, который вырвал DOM
+// из потока (pointer-путь), обязан сам перерисовать раскладку).
 function reorderGroups(fromId, toId, side) {
   const from = allGroups.findIndex(x => x.id === fromId);
   const to = allGroups.findIndex(x => x.id === toId);
-  if (from === -1 || to === -1 || from === to) return;
+  if (from === -1 || to === -1 || from === to) return false;
   const src = allGroups[from];
-  if (src.spaceId !== activeSpaceId) return;
+  if (src.spaceId !== activeSpaceId) return false;
+  // no-op-guard (аналог reorderSpaces): результат сначала на КОПИИ id —
+  // если последовательность не изменилась (группа брошена в собственный
+  // слот), записи в storage не идёт
+  const ids = allGroups.map(x => x.id);
+  ids.splice(from, 1);
+  let insertAt = ids.indexOf(toId);
+  if (side === 'after') insertAt += 1;
+  ids.splice(insertAt, 0, fromId);
+  if (ids.every((id, i) => id === allGroups[i].id)) return false;
   allGroups.splice(from, 1);
-  let insertAt = allGroups.findIndex(x => x.id === toId);
+  insertAt = allGroups.findIndex(x => x.id === toId);
   if (side === 'after') insertAt += 1;
   allGroups.splice(insertAt, 0, src);
   chrome.storage.sync.set({ 'blattam-groups': allGroups });
+  return true;
 }
 
 // Снимаем индикаторы reorder со всех шапок групп
@@ -2831,6 +2847,7 @@ function commitCardDropAt(clientX, clientY) {
 let pd = null; // active press: {tab, card, rect, startX, startY, ox, oy, armed}
 let pdClone = null; // lift clone (copy of the card, position:fixed, in body)
 let pdLastAnchor = null; // last ghost-slot anchor (FLIP-pass dedup)
+let gpd = null; // group-header pointer press: {g, bar, homeRect, sectionEls, ghostSlot, ghostHeight, lastGap, startX, startY, ox, oy, armed}
 // Свой pointer-путь обрабатывает press на элементе (ставится на pointerdown
 // pointer-путём шапки группы / рейки — более поздние волны): guard в dragstart
 // убивает trusted нативный драг. Синтетическая цепочка харнесса (untrusted)
@@ -2841,7 +2858,7 @@ let railPointerPress = false;
 // состояние гbar добавится в его волне): пересекающий trusted dragstart
 // гасится, чтобы не украсть drag-source из-под идущего pointer-драга
 function pdForeignActive() {
-  return !!(pd && pd.armed) || !!(pcd && pcd.armed) || !!(btl && btl.armed);
+  return !!(pd && pd.armed) || !!(pcd && pcd.armed) || !!(btl && btl.armed) || !!(gpd && gpd.armed);
 }
 
 // Press target is a nested interactive element (button/checkbox/link/label) —
@@ -3005,6 +3022,281 @@ function pdBindCard(card, tab) {
     window.addEventListener('keydown', pdOnKey);
   });
 }
+// === Pointer drag of group headers (real Chrome UX) — wave 2 «grab feel», wave 3 «gap ghost» ===
+// Шапка группы (.gbar): press по имени/чепрону (не по hover-кнопкам) + движение
+// больше 8 px — нативный HTML5-drag убивается (guard в dragstart: gbarPointerPress),
+// ЦЕЛОЕ отделение группы (gbar + все её .tab-card + её .group-empty-slot) вырывается
+// из потока (display:none), всё ниже сдвигается FLIP-проходом (applyFlipFrom,
+// slideMs 200ms ease), под курсором компактный header-pill клон (.pd-clone в body,
+// position:fixed) 1:1. ЕДИНСТВЕННЫЙ индикатор вставки — тёплая полноширинная
+// .gbar-ghost-slot высотой вырванного отделения: ХОДИТ ПО ЗАЗОРАМ между групповыми
+// секциями (границы — layout-геометрия layoutRect: верх первой секции, середины
+// межсекционных зазоров, низ последней секции), остальные группы «разъезжаются»
+// FLIP-слайдом при смене зазора. Seam-индикаторы волны 1 (.drop-before/
+// .drop-after, --gbar-seam) в pointer-пути НЕ ставятся — они остались для
+// синтетической HTML5-цепочки харнесса.
+// Отпускание: внутри #tabs-list — reorderGroups по ТЕКУЩЕМУ зазору заглушки
+// (gpd.lastGap: before/after; запись в blattam-groups); вне списка / других
+// групп нет — cancel (renderTabs восстанавливает раскладку, клон «возвращается
+// домой» за settleMs). Escape — cancel. Обычный клик (без движения) по-прежнему
+// сворачивает/разворачивает группу (click-хендлер не тронут).
+// Своё состояние (gpd) + gpd.armed в pdForeignActive. pdCreateClone/pdCloneMove/
+// pdFinishClone/pdSettleMs/applyFlipFrom/pdAutoScrollAt/reorderGroups/layoutRect —
+// общие (pdClone-переменная — безопасно: драг один). Синтетическая HTML5-цепочка
+// (не-trusted DragEvents) идёт своим dragstart.
+// Всё отделение группы g в #tabs-list: gbar + её .tab-card (DOM-порядок) +
+// .group-empty-slot (если есть). Порядок: gbar → карточки → слот.
+function gpdSectionEls(g) {
+  const list = document.getElementById('tabs-list');
+  const out = [];
+  const bar = list && list.querySelector('.gbar[data-group-id="' + g.id + '"]');
+  if (bar) out.push(bar);
+  if (list) {
+    list.querySelectorAll('.tab-card').forEach(c => { if (c.__tab && c.__tab.groupId === g.id) out.push(c); });
+    const slot = list.querySelector('.group-empty-slot[data-group-id="' + g.id + '"]');
+    if (slot) out.push(slot);
+  }
+  return out;
+}
+
+// FLIP-снапшот ВСЕХ видимых section-level элементов #tabs-list, КРОМЕ группы
+// gpd.g.id (карточки, шапки, loose-метки, слоты). Геометрия — layoutRect (без
+// вполёте FLIP-трансформов: gap-правило детерминировано во время 200ms-слайда).
+// .gbar-ghost-slot не включается (селектор не ловит; сама заглушка FLIP-ом не
+// трансформируется).
+function gpdFlipSnapshot() {
+  const m = new Map();
+  document.querySelectorAll('#tabs-list .tab-card, #tabs-list .gbar, #tabs-list .loose-label, #tabs-list .group-empty-slot').forEach(el => {
+    if (getComputedStyle(el).display === 'none') return;
+    const id = el.__tab ? tabGroupOf(el.__tab) : (el.dataset.groupId || null);
+    if (id === gpd.g.id) return;
+    m.set(el, layoutRect(el));
+  });
+  return m;
+}
+
+// Тёплая полноширинная заглушка ВЫСОТОЙ вырванного отделения группы (height —
+// инлайн, box-sizing border-box) — единственный индикатор вставки pointer-драга
+// группы. grid-column 1/-1 даёт класс .gbar-ghost-slot (view.html); инлайн-токены
+// --ghost-bg/--ghost-ring — в тестах head-стили view.html не грузятся целиком.
+// pointer-events:none — курсор «видит сквозь» заглушку.
+function makeGroupGhostSlot(height) {
+  const slot = document.createElement('div');
+  slot.className = 'gbar-ghost-slot';
+  slot.draggable = false;
+  slot.style.cssText =
+    'box-sizing:border-box;pointer-events:none;background:var(--ghost-bg);' +
+    'border-width:1px;border-style:dashed;border-color:var(--ghost-ring);' +
+    'border-radius:6px;width:100%;' + 'height:' + height + 'px';
+  return slot;
+}
+
+// Групповые секции #tabs-list БЕЗ excludeGid (DOM-порядок). Секция начинается на
+// .gbar и включает следующих .tab-card/.group-empty-slot до следующей .gbar /
+// .loose-label / #add-group-btn. У каждой: gbar, gid, lastEl (последняя
+// .tab-card, иначе .group-empty-slot, иначе сама gbar), top/bottom — layoutRect.
+function gpdGroupSections(excludeGid) {
+  const list = document.getElementById('tabs-list');
+  const out = [];
+  if (!list) return out;
+  let cur = null;
+  for (const el of list.children) {
+    if (el.classList.contains('gbar')) {
+      cur = (el.dataset.groupId && el.dataset.groupId !== excludeGid)
+        ? { gbar: el, gid: el.dataset.groupId, lastEl: el } : null;
+      if (cur) out.push(cur);
+      continue;
+    }
+    if (el.classList.contains('loose-label') || el.id === 'add-group-btn') { cur = null; continue; }
+    if (cur && (el.classList.contains('tab-card') || el.classList.contains('group-empty-slot'))) cur.lastEl = el;
+  }
+  for (const s2 of out) {
+    s2.top = layoutRect(s2.gbar).top;
+    s2.bottom = layoutRect(s2.lastEl).bottom;
+  }
+  return out;
+}
+
+// Якорь вставки в ЗАЗОРЕ под курсором (null, если других групп нет). Границы —
+// layout-геометрия: верх первой секции, середины межсекционных зазоров, низ
+// последней; g = число границ <= clientY (0..M+1): g <= M-1 — перед секцией g,
+// иначе — после последней (нижняя кромка списка).
+function gpdGapAnchor(clientY) {
+  const secs = gpdGroupSections(gpd.g.id);
+  const M = secs.length;
+  if (M === 0) return null;
+  const edges = [secs[0].top];
+  for (let i = 0; i < M - 1; i++) edges.push((secs[i].bottom + secs[i + 1].top) / 2);
+  edges.push(secs[M - 1].bottom);
+  let g = 0;
+  while (g < edges.length && edges[g] <= clientY) g++;
+  if (g <= M - 1) return { el: secs[g].gbar, side: 'before', toId: secs[g].gid };
+  return { el: secs[M - 1].lastEl, side: 'after', toId: secs[M - 1].gid };
+}
+
+// Передвинуть уже вставленную тёплую заглушку к якорю (before/after элемента);
+// соседи сдвигаются естественным reflow сетки — FLIP-проход у вызывающего.
+function gpdMoveGhostSlot(anchor) {
+  if (!gpd || !gpd.ghostSlot || !gpd.ghostSlot.isConnected) return;
+  if (anchor.side === 'before') anchor.el.before(gpd.ghostSlot);
+  else anchor.el.after(gpd.ghostSlot);
+}
+// Вставить (первый раз — заглушка ещё не в DOM) / передвинуть тёплую заглушку
+// к якорю — без isConnected-guard (первая вставка создаёт подключение).
+function gpdMoveGhostSlotInsert(anchor) {
+  if (!gpd || !gpd.ghostSlot) return;
+  if (anchor.side === 'before') anchor.el.before(gpd.ghostSlot);
+  else anchor.el.after(gpd.ghostSlot);
+}
+
+// Снять тёплую заглушку (каждый выход: commit/cancel/teardown — следов нет).
+function removeGroupGhostSlot() {
+  if (gpd && gpd.ghostSlot && gpd.ghostSlot.isConnected) gpd.ghostSlot.remove();
+  if (gpd) gpd.ghostSlot = null;
+}
+
+function gpdTeardown() {
+  window.removeEventListener('pointermove', gpdOnMove);
+  window.removeEventListener('pointerup', gpdOnUp);
+  window.removeEventListener('pointercancel', gpdOnCancel);
+  window.removeEventListener('keydown', gpdOnKey);
+  document.body.style.cursor = '';
+  if (gpd) gpd.bar.draggable = true; // возвращаем флаг после pointer-взаимодействия
+  gbarPointerPress = false;
+  removeGroupGhostSlot(); // тёплая заглушка не переживает ни один выход
+}
+
+// Cancel: renderTabs восстанавливает раскладку (yank отменён), ложный клик по
+// шапке после отмены подавляется, клон «возвращается домой» за settleMs.
+function gpdCancelEnd() {
+  removeGroupGhostSlot();
+  renderTabs();
+  pendingGbarClickAfterDrag = true;
+  lastDragEndAt = Date.now();
+  pdFinishClone(gpd.homeRect, pdSettleMs());
+  gpd = null;
+}
+
+function gpdOnKey(e) {
+  if (!gpd || !gpd.armed || e.key !== 'Escape') return;
+  gpdTeardown();
+  gpdCancelEnd();
+}
+
+function gpdOnCancel(e) {
+  if (!gpd) return;
+  const armed = gpd.armed;
+  gpdTeardown();
+  if (armed) gpdCancelEnd();
+  else gpd = null;
+}
+
+// Release: внутри #tabs-list — reorderGroups по ТЕКУЩЕМУ зазору заглушки
+// (gpd.lastGap: before/after); вне списка / других групп нет — cancel
+// (renderTabs + клон домой). plain press — клик по шапке сворачивает/
+// разворачивает (подавляющих флагов НЕ ставим).
+function gpdOnUp(e) {
+  if (!gpd) return;
+  const armed = gpd.armed;
+  const homeRect = gpd.homeRect;
+  let destRect = homeRect;
+  let committed = false;
+  if (armed) {
+    // rect заглушки — до teardown (teardown её снимает)
+    const t = document.elementFromPoint(e.clientX, e.clientY);
+    const inList = t && (t === tabsList || tabsList.contains(t));
+    const anchor = gpd.lastGap;
+    // Топ-зона: у списка нет top-padding (только padding-bottom 110px), поэтому
+    // «перед первой группой» внутри списка недостижимо, когда первая секция —
+    // на еговерху. Полоса 24px над верхом списка в пределах ширины колонки +
+    // заглушка ПЕРЕД ПЕРВОЙ секцией — коммит «перед первой» (сама заглушка
+    // стоит вверху списка и сдвигает первую секцию вниз — сравнивать верха
+    // нельзя, только позицию якоря); выше полосы / вне ширины — cancel.
+    const lr = tabsList.getBoundingClientRect();
+    const gpdSecs = gpdGroupSections(gpd.g.id);
+    const inTopBand = !inList && anchor && anchor.side === 'before' &&
+      gpdSecs.length > 0 && anchor.el === gpdSecs[0].gbar &&
+      e.clientY >= lr.top - 24 && e.clientY < lr.top &&
+      e.clientX >= lr.left && e.clientX <= lr.right;
+    if ((inList || inTopBand) && anchor && anchor.toId && anchor.toId !== gpd.g.id) {
+      if (gpd.ghostSlot && gpd.ghostSlot.isConnected) destRect = gpd.ghostSlot.getBoundingClientRect();
+      committed = true;
+    }
+  }
+  gpdTeardown();
+  if (!armed) { gpd = null; return; }
+  if (committed) {
+    // no-op-коммит (дроп в собственный слот — порядок не изменился):
+    // reorderGroups не пишет, а в реальном Chrome set равного значения не
+    // шлёт onChanged → перерисовки не будет — вырванное отделение осталось
+    // бы display:none до чужой записи. renderTabs восстанавливает раскладку,
+    // клон возвращается домой (как cancel)
+    const wrote = reorderGroups(gpd.g.id, gpd.lastGap.toId, gpd.lastGap.side);
+    if (!wrote) { renderTabs(); destRect = homeRect; }
+    pendingGbarClickAfterDrag = true;
+    lastDragEndAt = Date.now();
+  } else {
+    renderTabs();
+    pendingGbarClickAfterDrag = true;
+    lastDragEndAt = Date.now();
+  }
+  removeGroupGhostSlot();
+  pdFinishClone(destRect, pdSettleMs());
+  gpd = null;
+}
+
+function gpdOnMove(e) {
+  if (!gpd) return;
+  if (!gpd.armed) {
+    const dx = e.clientX - gpd.startX, dy = e.clientY - gpd.startY;
+    if (dx * dx + dy * dy <= 64) return; // not a drag until over 8 px
+    gpd.armed = true;
+    // Высота вырванного отделения — до скрытия (gbar → последняя карточка/слот)
+    const srcSecs = gpdSectionEls(gpd.g);
+    gpd.ghostHeight = srcSecs.length === 0 ? 0
+      : (layoutRect(srcSecs[srcSecs.length - 1]).bottom - layoutRect(srcSecs[0]).top);
+    const firstRects = gpdFlipSnapshot();
+    for (const el of srcSecs) el.style.display = 'none'; // yank-out целого отделения
+    if (gpd.ghostHeight > 0) {
+      gpd.ghostSlot = makeGroupGhostSlot(gpd.ghostHeight);
+      const anchor = gpdGapAnchor(e.clientY);
+      if (anchor) { gpdMoveGhostSlotInsert(anchor); gpd.lastGap = anchor; }
+    }
+    applyFlipFrom(firstRects); // всё ниже сдвигается (slideMs ease)
+    pdClone = pdCreateClone(gpd.bar, gpd.homeRect, e.clientX - gpd.ox, e.clientY - gpd.oy);
+    document.body.style.cursor = 'grabbing';
+  }
+  e.preventDefault();
+  pdCloneMove(e.clientX - gpd.ox, e.clientY - gpd.oy);
+  pdAutoScrollAt(e.clientX, e.clientY, gpd.bar);
+  // Тёплая заглушка ходит по зазорам; parting-FLIP — только при смене зазора
+  const anchor = gpdGapAnchor(e.clientY);
+  if (anchor && gpd.ghostSlot && gpd.ghostSlot.isConnected &&
+      (!gpd.lastGap || gpd.lastGap.el !== anchor.el || gpd.lastGap.side !== anchor.side)) {
+    const firstRects = gpdFlipSnapshot();
+    gpdMoveGhostSlotInsert(anchor);
+    applyFlipFrom(firstRects);
+    gpd.lastGap = anchor;
+  }
+}
+
+function gpdBindGbar(bar, g) {
+  bar.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    if (bar.dataset.pressBtn || pdInteractiveTarget(e.target)) return; // hover-кнопки держат свой клик
+    const rect = bar.getBoundingClientRect();
+    gpd = { g, bar, homeRect: rect, sectionEls: null, ghostSlot: null, ghostHeight: 0, lastGap: null,
+            startX: e.clientX, startY: e.clientY,
+            ox: e.clientX - rect.left, oy: e.clientY - rect.top, armed: false };
+    gbarPointerPress = true;
+    bar.draggable = false; // pointer-путь владеет press — нативный drag не инициируется
+    window.addEventListener('pointermove', gpdOnMove);
+    window.addEventListener('pointerup', gpdOnUp);
+    window.addEventListener('pointercancel', gpdOnCancel);
+    window.addEventListener('keydown', gpdOnKey);
+  });
+}
+
 // === Pointer drag of space chips (real Chrome UX) ===
 // Chip-путь зеркалирует карточный: press по чипу + движение больше 8 px —
 // нативный drag-образ отменяется (dragstart чипа: preventDefault + e.isTrusted),
