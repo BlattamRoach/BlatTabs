@@ -297,7 +297,7 @@ var chrome = {
           response = newsp;
         }
       }
-      // delete-space: удаляем, вкладки → первое оставшееся (или новое «Мои вкладки»), группы — удаляем
+      // delete-space: удаляем; вкладки и группы удалённого пространства удаляются
       if (msg.action === 'delete-space') {
         var sps2 = chrome.storage._data['blattam-spaces'];
         if (Array.isArray(sps2) && sps2.some(function(s) { return s.id === msg.id; })) {
@@ -305,18 +305,18 @@ var chrome = {
           var target = remaining[0] || null;
           if (!target) { target = { id: 'spmock' + (++mockSeq), name: 'Мои вкладки' }; remaining = [target]; }
           var tabsD = chrome.storage.local._data['blattam-tabs'] || [];
-          tabsD.forEach(function(t) { if (t && t.spaceId === msg.id) t.spaceId = target.id; });
+          var tabsKept = tabsD.filter(function(t) { return !(t && t.spaceId === msg.id); });
           var gsD = chrome.storage._data['blattam-groups'] || [];
           var gsKept = gsD.filter(function(g) { return g.spaceId !== msg.id; });
           chrome.storage._data['blattam-spaces'] = remaining;
-          chrome.storage.local._data['blattam-tabs'] = tabsD;
+          chrome.storage.local._data['blattam-tabs'] = tabsKept;
           chrome.storage._data['blattam-groups'] = gsKept;
           chrome.storage._fire({
             'blattam-spaces': { newValue: remaining, oldValue: sps2 },
             'blattam-groups': { newValue: gsKept, oldValue: gsD }
           }, 'sync');
           chrome.storage._fire({
-            'blattam-tabs': { newValue: tabsD, oldValue: null }
+            'blattam-tabs': { newValue: tabsKept, oldValue: tabsD }
           }, 'local');
           response = true;
         }
@@ -350,20 +350,20 @@ var chrome = {
           response = ng;
         }
       }
-      // delete-group: удаляем группу; её вкладки остаются в пространстве (groupId → null)
+      // delete-group: удаляем группу; её вкладки удаляются
       if (msg.action === 'delete-group') {
         var gs3 = chrome.storage._data['blattam-groups'];
         if (Array.isArray(gs3) && gs3.some(function(g) { return g.id === msg.id; })) {
           var gsNew = gs3.filter(function(g) { return g.id !== msg.id; });
           var tabsG = chrome.storage.local._data['blattam-tabs'] || [];
-          tabsG.forEach(function(t) { if (t && t.groupId === msg.id) t.groupId = null; });
+          var tabsGKept = tabsG.filter(function(t) { return !(t && t.groupId === msg.id); });
           chrome.storage._data['blattam-groups'] = gsNew;
-          chrome.storage.local._data['blattam-tabs'] = tabsG;
+          chrome.storage.local._data['blattam-tabs'] = tabsGKept;
           chrome.storage._fire({
             'blattam-groups': { newValue: gsNew, oldValue: gs3 }
           }, 'sync');
           chrome.storage._fire({
-            'blattam-tabs': { newValue: tabsG, oldValue: null }
+            'blattam-tabs': { newValue: tabsGKept, oldValue: tabsG }
           }, 'local');
           response = true;
         }
@@ -788,10 +788,9 @@ class TestBackgroundSpaces:
         assert r2 is None
         assert len(self._spaces()) == 2
 
-    def test_delete_space_moves_tabs_to_first_remaining(self):
+    def test_delete_space_deletes_tabs(self):
         b = call_msg(self.page, "create-space", name="B")
         c = call_msg(self.page, "create-space", name="C")
-        default = self._spaces()[0]["id"]
         send_msg(self.page, "add-tab", name="InA", url="https://a.com")
         send_msg(self.page, "add-tab", name="InB1", url="https://b1.com", spaceId=b["id"])
         send_msg(self.page, "add-tab", name="InB2", url="https://b2.com", spaceId=b["id"])
@@ -801,11 +800,14 @@ class TestBackgroundSpaces:
         assert res is True
 
         tabs = read_storage_raw(self.page, "blattam-tabs")
-        assert len(tabs) == 4
-        in_b = [t for t in tabs if t["name"] in ("InB1", "InB2")]
-        assert all(t["spaceId"] == default for t in in_b)  # → первое оставшееся
+        names = [t["name"] for t in tabs]
+        # вкладки удалённого пространства удалены
+        assert "InB1" not in names and "InB2" not in names
+        # чужие пространства не тронуты
+        assert "InA" in names and "InC" in names
+        assert len(tabs) == 2
         in_c = [t for t in tabs if t["name"] == "InC"][0]
-        assert in_c["spaceId"] == c["id"]  # чужое пространство не тронуто
+        assert in_c["spaceId"] == c["id"]
         assert all(s["id"] != b["id"] for s in self._spaces())
 
     def test_delete_space_last_creates_default(self):
@@ -817,7 +819,27 @@ class TestBackgroundSpaces:
         assert sps[0]["name"] == "Мои вкладки"
         assert sps[0]["id"] != only["id"]
         tabs = read_storage_raw(self.page, "blattam-tabs")
-        assert len(tabs) == 1 and tabs[0]["spaceId"] == sps[0]["id"]
+        assert tabs == []  # вкладка удалённого (единственного) пространства удалена
+
+    def test_delete_space_deletes_grouped_tabs(self):
+        a = self._spaces()[0]
+        b = call_msg(self.page, "create-space", name="B")
+        gb = call_msg(self.page, "create-group", spaceId=b["id"], name="GB")
+        send_msg(self.page, "add-tab", name="BLoose", url="https://bl.com", spaceId=b["id"])
+        send_msg(self.page, "add-tab", name="BG1", url="https://bg1.com", spaceId=b["id"])
+        tabs = read_storage_raw(self.page, "blattam-tabs")
+        idx = [i for i, t in enumerate(tabs) if t["name"] == "BG1"][0]
+        send_msg(self.page, "move-tab", index=idx, groupId=gb["id"])
+        send_msg(self.page, "add-tab", name="InA", url="https://a.com", spaceId=a["id"])
+        call_msg(self.page, "delete-space", id=b["id"])
+        names = [t["name"] for t in read_storage_raw(self.page, "blattam-tabs")]
+        # обе вкладки удалённого пространства удалены (свободная и в группе)
+        assert "BLoose" not in names and "BG1" not in names
+        # группа пространства удалена
+        assert all(g["id"] != gb["id"] for g in read_storage_raw(self.page, "blattam-groups"))
+        # чужое пространство не тронуто
+        in_a = [t for t in read_storage_raw(self.page, "blattam-tabs") if t["name"] == "InA"][0]
+        assert in_a["spaceId"] == a["id"]
 
     def test_delete_space_removes_groups(self):
         a = self._spaces()[0]
@@ -918,18 +940,41 @@ class TestBackgroundGroups:
         assert g is None
         assert self._groups() == []
 
-    def test_delete_group_tabs_stay_in_space(self):
+    def test_delete_group_deletes_tabs(self):
         sp = self._spaces()[0]
         g = call_msg(self.page, "create-group", spaceId=sp["id"], name="Dev")
         send_msg(self.page, "add-tab", name="InG", url="https://ing.com", spaceId=sp["id"])
         idx = [i for i, t in enumerate(self._tabs()) if t["name"] == "InG"][0]
         send_msg(self.page, "move-tab", index=idx, groupId=g["id"])
+        send_msg(self.page, "add-tab", name="Loose", url="https://loose.com", spaceId=sp["id"])
         call_msg(self.page, "delete-group", id=g["id"])
         tabs = self._tabs()
-        assert len(tabs) == 1
-        assert tabs[0]["spaceId"] == sp["id"]
-        assert tabs[0]["groupId"] is None
+        names = [t["name"] for t in tabs]
+        # вкладка удалённой группы удалена
+        assert "InG" not in names
+        # чужая (вне группы) вкладка осталась
+        assert "Loose" in names
         assert self._groups() == []
+
+    def test_delete_group_only_deletes_that_groups_tabs(self):
+        sp = self._spaces()[0]
+        g1 = call_msg(self.page, "create-group", spaceId=sp["id"], name="G1")
+        g2 = call_msg(self.page, "create-group", spaceId=sp["id"], name="G2")
+        send_msg(self.page, "add-tab", name="T1", url="https://t1.com", spaceId=sp["id"])
+        send_msg(self.page, "add-tab", name="T2", url="https://t2.com", spaceId=sp["id"])
+        i1 = [i for i, t in enumerate(self._tabs()) if t["name"] == "T1"][0]
+        i2 = [i for i, t in enumerate(self._tabs()) if t["name"] == "T2"][0]
+        send_msg(self.page, "move-tab", index=i1, groupId=g1["id"])
+        send_msg(self.page, "move-tab", index=i2, groupId=g2["id"])
+        call_msg(self.page, "delete-group", id=g1["id"])
+        names = [t["name"] for t in self._tabs()]
+        # вкладка удалённой группы удалена
+        assert "T1" not in names
+        # вкладка другой группы не тронута
+        t2 = [t for t in self._tabs() if t["name"] == "T2"][0]
+        assert t2["groupId"] == g2["id"]
+        # g2 осталась
+        assert [g["id"] for g in self._groups()] == [g2["id"]]
 
     def test_move_tab_to_space_clears_group(self):
         sp1 = self._spaces()[0]
@@ -1504,8 +1549,8 @@ class TestViewSpaceModal:
         sps = read_storage_raw(self.page, "blattam-spaces")
         assert [s["id"] for s in sps] == ["sp2"]
         tabs = read_storage_raw(self.page, "blattam-tabs")
-        assert all(t["spaceId"] == "sp2" for t in tabs)  # вкладки переехали
-        assert read_storage_raw(self.page, "blattam-last-space") == "sp2"  # активное переключилось
+        assert [t["name"] for t in tabs] == ["W"]  # вкладка удалённого sp1 удалена
+        assert read_storage_raw(self.page, "blattam-last-space") == "sp2"
 
 
 # ==========================================
@@ -1601,9 +1646,9 @@ class TestViewGroups:
         assert msg["action"] == "delete-group" and msg["id"] == "g1"
         assert read_storage_raw(self.page, "blattam-groups") == []
         tabs = read_storage_raw(self.page, "blattam-tabs")
-        assert all(t["groupId"] is None and t["spaceId"] == "sp1" for t in tabs)
+        assert tabs == []  # вкладки удалённой группы удалены
         assert self.page.evaluate("document.querySelectorAll('.gbar').length") == 0
-        assert self.page.evaluate("document.querySelectorAll('.tab-card').length") == 2
+        assert self.page.evaluate("document.querySelectorAll('.tab-card').length") == 0
 
     def test_meta_groups_plural(self):
         load_view(self.page, spaces=self.SP, groups=[
@@ -1909,9 +1954,9 @@ class TestCollapsedGroupDropExpand:
         assert d["g1Cards"] == 1
         assert self.page.evaluate("chrome.tabs._tabs.map(t => t.id)") == ["bt3"]
 
-    def test_drop_on_expanded_empty_group_stays_expanded(self):
-        # Регрессия: пустая РАЗВЁРНУТАЯ группа — дроп работает как раньше,
-        # группа остаётся развёрнутой, слот-заглушка уходит (карточка в группе)
+    def test_drop_on_empty_group_bar_expands_with_tab(self):
+        # Пустая группа (свёрнутый вид, данных о раскрытии нет): дроп карточки
+        # на шапку — вкладка в группу, группа стала непустой и РАЗВЁРНУТА, слота нет
         load_view(self.page, spaces=self.SP, groups=[
             {"id": "g1", "name": "Dev", "spaceId": "sp1", "collapsed": False},
         ], tabs=[{"name": "T", "url": "https://t.com", "spaceId": "sp1"}])
@@ -2337,8 +2382,8 @@ class TestSelectedBatchDnD:
         assert by_url["https://b.com"]["spaceId"] == "sp1"
         self._drag_end(0)
 
-    def test_drop_on_empty_group_slot_moves_batch(self):
-        # Выделены A и B (без группы); дроп на слот пустой группы → place-tabs
+    def test_drop_on_empty_group_bar_moves_batch(self):
+        # Выделены A и B (без группы); дроп на шапку пустой группы → place-tabs
         # целиком в группу (anchorUrl null, в конец списка); счётчик «2 вкладки»
         load_view(self.page, spaces=self.SP, groups=[
             {"id": "g1", "name": "Dev", "spaceId": "sp1", "collapsed": False},
@@ -2350,7 +2395,7 @@ class TestSelectedBatchDnD:
         self._drag_start(0)
         self.page.wait_for_timeout(50)
         self.page.evaluate("""() => {
-          const slot = document.querySelector('.group-empty-slot');
+          const slot = document.querySelector('.gbar[data-group-id="g1"]');
           slot.dispatchEvent(new DragEvent('drop', {dataTransfer: window.__batchDt, bubbles: true, cancelable: true}));
         }""")
         self.page.wait_for_timeout(30)
@@ -6450,11 +6495,7 @@ class TestGroupReorderDnD:
 # ==========================================
 
 class TestEmptyGroupDrop:
-    """Шапка группы принимает карточку, когда у группы НЕТ ВИДИМЫХ карточек
-    (пустая 0 вкладок ИЛИ свёрнутая). Пустая развёрнутая группа рендерит
-    видимую пунктирную слот-заглушку «Перетащите вкладку сюда» под шапкой;
-    дроп на шапку/слот = place-tab с anchorIndex null (в конец списка) и
-    groupId группы. Группы с видимыми карточками — старый no-op."""
+    """Шапка группы принимает карточку, когда у группы НЕТ ВИДИМЫХ карточек (пустая 0 вкладок ИЛИ свёрнутая). Пустая группа ВСЕГДА рендерится свёрнутой (раскрытие пустых групп убрано — .group-empty-slot в DOM нет); дроп на шапку = place-tab с anchorIndex null (в конец списка) и groupId группы. Группы с видимыми карточками — старый no-op."""
 
     @pytest.fixture(autouse=True)
     def _setup(self, page):
@@ -6533,7 +6574,7 @@ class TestEmptyGroupDrop:
 
     # --- рендер слота ---
 
-    def test_slot_rendered_only_for_expanded_empty_group(self):
+    def test_no_slot_and_empty_group_collapsed(self):
         load_view(self.page, spaces=self.SP[:1], groups=[
             {"id": "g1", "name": "Empty", "spaceId": "sp1", "collapsed": False},
             {"id": "g2", "name": "Full", "spaceId": "sp1", "collapsed": False},
@@ -6542,95 +6583,34 @@ class TestEmptyGroupDrop:
             {"name": "X", "url": "https://x.com", "spaceId": "sp1", "groupId": "g2"},
             {"name": "Y", "url": "https://y.com", "spaceId": "sp1", "groupId": "g3"},
         ])
-        # Слот — только у пустой развёрнутой g1; сразу после её шапки
-        assert self._slots() == ["g1"]
-        d = json.loads(self.page.evaluate("""(() => {
-          const slot = document.querySelector('.group-empty-slot');
-          return JSON.stringify({
-            text: slot.textContent,
-            draggable: slot.draggable,
-            afterBar: slot.previousElementSibling.classList.contains('gbar')
-          });
+        assert self._slots() == []
+        bars = json.loads(self.page.evaluate("""(() => {
+          const gid = id => { const b = document.querySelector('.gbar[data-group-id="' + id + '"]');
+            return {collapsed: b.classList.contains('gbar-collapsed'), chev: b.querySelector('.chev').textContent}; };
+          return JSON.stringify({g1: gid('g1'), g2: gid('g2'), g3: gid('g3')});
         })()"""))
-        assert d == {"text": "Перетащите вкладку сюда", "draggable": False, "afterBar": True}, d
+        assert bars == {"g1": {"collapsed": True, "chev": "▸"},
+                        "g2": {"collapsed": False, "chev": "▾"},
+                        "g3": {"collapsed": True, "chev": "▸"}}, bars
 
-    def test_slot_in_space_without_tabs_with_groups(self):
-        # Ветка «пространство без вкладок, но с группами»: слот у развёрнутой,
-        # нет у свёрнутой
+    def test_no_slot_in_space_without_tabs(self):
+        # Ветка «пространство без вкладок, но с группами»: слотов нет, обе
+        # шапки свёрнуты (пустая группа — всегда свёрнутый вид)
         load_view(self.page, spaces=self.SP[:1], groups=[
             {"id": "g1", "name": "Empty", "spaceId": "sp1", "collapsed": False},
             {"id": "g2", "name": "Coll", "spaceId": "sp1", "collapsed": True},
         ], tabs=[])
-        assert self._slots() == ["g1"]
+        assert self._slots() == []
+        bars = json.loads(self.page.evaluate("""(() => {
+          const gid = id => { const b = document.querySelector('.gbar[data-group-id="' + id + '"]');
+            return {collapsed: b.classList.contains('gbar-collapsed'), chev: b.querySelector('.chev').textContent}; };
+          return JSON.stringify({g1: gid('g1'), g2: gid('g2')});
+        })()"""))
+        assert bars == {"g1": {"collapsed": True, "chev": "▸"},
+                        "g2": {"collapsed": True, "chev": "▸"}}, bars
         assert self.page.evaluate("document.getElementById('empty-state').style.display") == "none"
 
-    def test_slot_computed_style_tokens_both_themes(self):
-        parts = self._parts()
-        for theme in ("light", "dark"):
-            load_view(self.page, theme=theme, spaces=self.SP[:1], groups=[
-                {"id": "g1", "name": "Empty", "spaceId": "sp1", "collapsed": False},
-            ], tabs=[{"name": "A", "url": "https://a.com", "spaceId": "sp1"}])
-            self._inject_real_styles()
-            self.page.wait_for_timeout(150)  # transition .1s — computed после завершения
-            d = json.loads(self.page.evaluate("""(() => {
-              const slot = document.querySelector('.group-empty-slot');
-              const cs = getComputedStyle(slot);
-              const tl = document.getElementById('tabs-list').getBoundingClientRect();
-              const r = slot.getBoundingClientRect();
-              return JSON.stringify({
-                h: cs.height,
-                cardH: getComputedStyle(document.querySelector('.tab-card')).height,
-                borderStyle: cs.borderTopStyle,
-                borderColor: cs.borderTopColor,
-                radius: cs.borderRadius,
-                font: cs.fontFamily,
-                color: cs.color,
-                fullRow: Math.abs(r.width - tl.width) < 2
-              });
-            })()"""))
-            assert abs(float(d["h"][:-2]) - 80) < 0.6 and abs(float(d["cardH"][:-2]) - 80) < 0.6, (theme, d)
-            assert d["borderStyle"] == "dashed", (theme, d)
-            assert d["borderColor"] == self._token_color(parts[theme], "--dashed"), (theme, d)
-            assert d["radius"] == "8px", (theme, d)
-            assert "Geist Mono" in d["font"], (theme, d)
-            assert d["color"] == self._token_color(parts[theme], "--text-faint"), (theme, d)
-            assert d["fullRow"] is True, (theme, d)
-
     # --- армед-вид (drop-over) ---
-
-    def test_dragover_slot_arms_warm_and_dragleave_clears(self):
-        load_view(self.page, theme="light", spaces=self.SP[:1], groups=[
-            {"id": "g1", "name": "Empty", "spaceId": "sp1", "collapsed": False},
-        ], tabs=[{"name": "A", "url": "https://a.com", "spaceId": "sp1"}])
-        self._inject_real_styles()
-        self.page.evaluate("""(() => {
-          const card = document.querySelector('#tabs-list .tab-card');
-          const slot = document.querySelector('.group-empty-slot');
-          const dt = new DataTransfer();
-          card.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true}));
-          const r = slot.getBoundingClientRect();
-          slot.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true,
-            clientX: r.left + r.width / 2, clientY: r.top + r.height / 2}));
-          window.__dt = dt; window.__slot = slot; window.__card = card;
-        })()""")
-        self.page.wait_for_timeout(150)  # transition .1s — читать после завершения
-        armed = json.loads(self.page.evaluate("""(() => {
-          const s = {
-            over: window.__slot.classList.contains('drop-over'),
-            bg: getComputedStyle(window.__slot).backgroundColor,
-            borderColor: getComputedStyle(window.__slot).borderTopColor,
-            color: getComputedStyle(window.__slot).color
-          };
-          window.__slot.dispatchEvent(new DragEvent('dragleave', {bubbles: true}));
-          s.left = !window.__slot.classList.contains('drop-over');
-          window.__card.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
-          return JSON.stringify(s);
-        })()"""))
-        parts = self._parts()
-        assert armed["over"] is True and armed["left"] is True, armed
-        assert armed["bg"] == self._token_color(parts["light"], "--ghost-bg"), armed
-        assert armed["borderColor"] == self._token_color(parts["light"], "--ghost-ring"), armed
-        assert armed["color"] == self._token_color(parts["light"], "--text-soft"), armed
 
     def test_dragover_empty_bar_arms_warm(self):
         load_view(self.page, theme="light", spaces=self.SP[:1], groups=[
@@ -6664,24 +6644,12 @@ class TestEmptyGroupDrop:
 
     # --- дроп карточки ---
 
-    def test_drop_on_slot_moves_tab_into_group(self):
+    def test_bar_drop_sends_exactly_one_place_tab(self):
         load_view(self.page, spaces=self.SP[:1], groups=[
             {"id": "g1", "name": "Empty", "spaceId": "sp1", "collapsed": False},
         ], tabs=[{"name": "A", "url": "https://a.com", "spaceId": "sp1"}])
-        armed = self._drag_card_to(0, "document.querySelector('.group-empty-slot')")
-        assert armed is True
-        msg = self._last_message()
-        assert msg["action"] == "place-tab"
-        assert msg["anchorIndex"] is None and msg["side"] == "after"
-        assert msg["groupId"] == "g1" and msg["index"] == 0
-        assert self._group_of("A") == "g1"
-
-    def test_slot_drop_sends_exactly_one_place_tab(self):
-        load_view(self.page, spaces=self.SP[:1], groups=[
-            {"id": "g1", "name": "Empty", "spaceId": "sp1", "collapsed": False},
-        ], tabs=[{"name": "A", "url": "https://a.com", "spaceId": "sp1"}])
-        self._drag_card_to(0, "document.querySelector('.group-empty-slot')")
-        # Глобальный drop обязан bail'ить на слоте — ровно одно сообщение
+        self._drag_card_to(0, self._bar("Empty"))
+        # Глобальный drop обязан bail'ить на шапке — ровно одно сообщение
         assert self._place_tab_count() == 1, self.page.evaluate("JSON.stringify(chrome.runtime.messagesSent)")
         msg = self._last_message()
         assert msg["action"] == "place-tab" and msg["anchorIndex"] is None and msg["groupId"] == "g1"
@@ -6809,11 +6777,11 @@ class TestEmptyGroupDrop:
             {"id": "g2", "name": "Coll", "spaceId": "sp1", "collapsed": True},
         ], tabs=[])
         assert self.page.evaluate("document.getElementById('tabs-list').lastElementChild.id") == "add-group-btn"
-        assert self._slots() == ["g1"]
-        # Слот — внутри секции группы (между шапкой g1 и шапкой g2)
+        assert self._slots() == []
+        # Слоотов нет — обе шапки свёрнуты (пустая группа — всегда свёрнутый вид)
         assert json.loads(self.page.evaluate(
             "JSON.stringify([...document.getElementById('tabs-list').children].map(e => e.className))")) == \
-            ["gbar", "group-empty-slot", "gbar gbar-collapsed", "add-group-row"]
+            ["gbar gbar-collapsed", "gbar gbar-collapsed", "add-group-row"]
 
 
 # ==========================================
@@ -8962,9 +8930,9 @@ class TestDragSourceRowHold:
 class TestEmptyGroupAutoCollapse:
     """Автосворачивание: группа, потерявшая ПОСЛЕДНЮЮ вкладку (перенос в
     «Без группы» или удаление ✕), сворачивается сама — вместо шапки с
-    «Перетащите вкладку сюда» — свёрнутая шапка «0 вкладок». Пустая группа,
-    только что созданная или раскрытая вручную, остаётся развёрнутой
-    (слот = цель дропа)."""
+    «Перетащите вкладку сюда» — свёрнутая шапка «0 вкладок». Пустая группа
+    (свежесозданная или с collapsed:false в данных) рендерится в свёрнутом
+    виде — раскрытие пустых групп убрано."""
 
     @pytest.fixture(autouse=True)
     def _setup(self, page):
@@ -9019,15 +8987,15 @@ class TestEmptyGroupAutoCollapse:
         assert self._collapsed() is True
         assert read_storage_raw(self.page, "blattam-tabs") == []
 
-    def test_fresh_empty_group_stays_expanded(self):
-        # Пустая группа без членов (свежесозданная) остаётся развёрнутой:
-        # ▾ + слот-подсказка «Перетащите вкладку сюда» (цель дропа)
+    def test_fresh_empty_group_renders_collapsed(self):
+        # Пустая группа без членов (свежесозданная) — свёрнутый вид:
+        # ▸ + «0 вкладок», слота нет
         load_view(self.page, spaces=self.SP, groups=[dict(self.G1)], tabs=[])
-        assert self.page.evaluate("document.querySelector('.gbar .chev').textContent") == "▾"
-        slots = self.page.evaluate("""[...document.querySelectorAll(
-            '.group-empty-slot')].map(s => s.textContent)""")
-        assert slots == ["Перетащите вкладку сюда"]
-        assert self._collapsed() is False
+        assert self.page.evaluate("document.querySelector('.gbar .chev').textContent") == "▸"
+        assert self.page.evaluate("document.querySelector('.gbar').classList.contains('gbar-collapsed')") is True
+        assert self.page.evaluate("document.querySelectorAll('.group-empty-slot').length") == 0
+        assert self.page.evaluate("document.querySelector('.gbar .gcount').textContent") == "0 вкладок"
+        assert self._collapsed() is False  # данные не трогаем — вид производный
 
 
 
@@ -9268,11 +9236,11 @@ class TestGhostOverExpandedGbar:
         }))()"""))
         assert d["slots"] == 0 and d["keepers"] == 0 and d["srcDisplay"] == "" and d["srcConnected"], d
 
-    def test_ghost_hidden_over_empty_group_gbar_and_slot(self):
-        # (f) пустая развёрнутая группа (0 вкладок): над её шапкой И над слотом
-        # «Перетащите вкладку сюда» заглушка ПРЯЧЕТСЯ ЦЕЛИКОМ (display:none) —
-        # не «тёплая» заглушка на старом месте, не дырка; число строк секции
-        # держит видимая карточка; возврат к видимости — при попадании курсора в список
+    def test_ghost_hidden_over_empty_group_gbar(self):
+        # (f) пустая группа (0 вкладок): над её шапкой заглушка
+        # ПРЯЧЕТСЯ ЦЕЛИКОМ (display:none) — не «тёплая» заглушка на старом
+        # месте, не дырка; число строк секции держит видимая карточка;
+        # возврат к видимости — при попадании курсора в список
         tabs = [{"name": "A1", "url": "https://a1.com", "spaceId": "sp1", "groupId": "gA"},
                 {"name": "A2", "url": "https://a2.com", "spaceId": "sp1", "groupId": "gA"}]
         load_view(self.page, spaces=self.SP,
@@ -9320,10 +9288,6 @@ class TestGhostOverExpandedGbar:
 
         # над шапкой пустой gE — заглушка спрятана (не «домой»), строки держит карточка
         over("#tabs-list .gbar[data-group-id='gE']")
-        st = state()
-        assert st["exists"] is True and st["hidden"] is True and st["keepers"] == 0, st
-        # над слотом «Перетащите вкладку сюда» — тоже спрятана
-        over("#tabs-list .group-empty-slot")
         st = state()
         assert st["exists"] is True and st["hidden"] is True and st["keepers"] == 0, st
         # возврат в список — снова видна
@@ -13944,13 +13908,13 @@ class TestTobyReflowFeel:
         pg.mouse.up()
         assert self._center()["scrollTop"] == 0
 # ==========================================
-#  VIEW.HTML: КАРТОЧКА 80px (БЫЛО 74px, СЛОТ ПУСТОЙ ГРУППЫ СИНХРОНЕН)
+#  VIEW.HTML: КАРТОЧКА 80px (БЫЛО 74px)
 # ==========================================
 
 class TestTabCardHeightTaller:
     """Карточка сохранённой вкладки — 80px (было 74px): min-height 74px → 80px
-    (<style> view.html); .group-empty-slot синхронизирован (высота = карточка);
-    тёплая ghost-slot при драге снимает высоту с карточки на рантайме."""
+    (<style> view.html); тёплая ghost-slot при драге снимает высоту с карточки
+    на рантайме."""
 
     @pytest.fixture(autouse=True)
     def _setup(self, page):
@@ -13966,7 +13930,7 @@ class TestTabCardHeightTaller:
             "(styles) => { var st = document.createElement('style'); st.textContent = styles; document.head.appendChild(st); }",
             [theme + "\n" + style])
 
-    def test_card_and_empty_slot_height_80px_both_themes(self):
+    def test_card_height_80px_both_themes(self):
         for theme in ("light", "dark"):
             load_view(self.page, theme=theme, spaces=self.SP,
                       groups=[{"id": "g1", "name": "Empty", "spaceId": "sp1", "collapsed": False}],
@@ -13975,15 +13939,12 @@ class TestTabCardHeightTaller:
             self.page.wait_for_timeout(150)
             d = json.loads(self.page.evaluate("""(() => {
               const card = document.querySelector('.tab-card');
-              const slot = document.querySelector('.group-empty-slot');
               return JSON.stringify({
-                cardH: card ? card.getBoundingClientRect().height : null,
-                slotH: slot ? slot.getBoundingClientRect().height : null
+                cardH: card ? card.getBoundingClientRect().height : null
               });
             })()"""))
-            assert d["cardH"] is not None and d["slotH"] is not None, (theme, d)
+            assert d["cardH"] is not None, (theme, d)
             assert abs(d["cardH"] - 80) < 0.6, (theme, d)
-            assert abs(d["slotH"] - 80) < 0.6, (theme, d)
 
     def test_drag_ghost_slot_height_matches_taller_card(self):
         load_view(self.page, spaces=self.SP,
@@ -18242,13 +18203,6 @@ class TestI18nDynamic:
         assert d["add_text"] == "+ Group", d
         assert d["add_title"] == "New group", d
 
-    def test_drop_slot_en(self):
-        load_view(self.page, lang="en", spaces=[{"id": "sp1", "name": "S"}],
-                  groups=[{"id": "g1", "name": "G", "spaceId": "sp1", "collapsed": False}])
-        self.page.wait_for_timeout(120)
-        d = self.page.evaluate("document.querySelector('.group-empty-slot') ? document.querySelector('.group-empty-slot').textContent : null")
-        assert d == "Drag a tab here", d
-
     def test_confirm_delete_tab_both_langs(self):
         for lang, expected in (("en", 'Delete tab "MyTab"?'),
                                (None, 'Удалить вкладку "MyTab"?')):
@@ -18731,3 +18685,187 @@ class TestGbarPointerDrag:
         self.page.wait_for_timeout(400)
         lv2 = self._leftovers()
         assert lv2 == {"clone": False, "slot": False, "seam": 0, "hidden": 0, "cursor": ""}, lv2
+
+
+# ==========================================
+
+class TestEmptyGroupAlwaysCollapsed:
+    """Пустая группа НЕ РАСКРЫВАЕТСЯ (возможность раскрытия убрана): всегда
+    рендерится в свёрнутом виде (gbar-collapsed, «▸», «0 вкладок»), .group-empty-slot
+    в DOM нет вообще. Клик по шапке пустой группы — no-op (blattam-groups не пишется);
+    непустая группа сворачивается/раскрывается кликом, как раньше. Дроп карточки на
+    шапку пустой группы — вкладка в группу, группа стала непустой и разворачивается.
+    Pointer-драг шапки над другой пустой группой — заглушка в ЗАЗОРЕ (внутреннего
+    якоря нет — нет слота), коммит и порядок прежние, без следов."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self.page_errors = []
+        page.on("pageerror", lambda err: self.page_errors.append(str(err)))
+        page.set_viewport_size({"width": 1280, "height": 900})
+
+    SP = [{"id": "sp1", "name": "Main"}]
+
+    def _load(self, groups, tabs=None):
+        load_view(self.page, tabs=tabs or [], spaces=self.SP, groups=groups)
+        theme = load_file("theme.css")
+        html = load_file("view.html")
+        style = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate("(st) => { const el = document.createElement('style'); el.textContent = st; document.head.appendChild(el); }", theme + "\n" + style)
+        self.page.wait_for_timeout(120)
+        self.page.mouse.move(0, 0)  # парковка указателя: :hover не дёргает геометрию
+        self.page.wait_for_timeout(40)
+
+    def _empty_groups(self, ids):
+        return [{"id": i, "name": i.upper(), "spaceId": "sp1", "collapsed": False} for i in ids]
+
+    def _slots(self):
+        return self.page.evaluate("document.querySelectorAll('#tabs-list .group-empty-slot').length")
+
+    def _bar_state(self, gid):
+        return json.loads(self.page.evaluate("""(gid) => {
+            const bar = document.querySelector('#tabs-list .gbar[data-group-id="' + gid + '"]');
+            return JSON.stringify({
+                collapsed: bar.classList.contains('gbar-collapsed'),
+                chev: bar.querySelector('.chev').textContent,
+                count: bar.querySelector('.gcount').textContent
+            });
+        }""", gid))
+
+    def _group_of(self, name):
+        tabs = read_storage_raw(self.page, "blattam-tabs")
+        return next((t.get("groupId") for t in tabs if t["name"] == name), "MISSING")
+
+    def _group_order(self):
+        return [g["id"] for g in read_storage_raw(self.page, "blattam-groups")]
+
+    def _gname_pt(self, gid):
+        return self.page.evaluate("""(gid) => {
+            const el = document.querySelector('#tabs-list .gbar[data-group-id="' + gid + '"] .gname');
+            const r = el.getBoundingClientRect();
+            return {x: r.x + r.width / 2, y: r.y + r.height / 2};
+        }""", gid)
+
+    def _slot_info(self):
+        """Позиция тёплой .gbar-ghost-slot в #tabs-list (соседи)."""
+        return self.page.evaluate("""() => {
+            const slot = document.querySelector('#tabs-list .gbar-ghost-slot');
+            if (!slot) return null;
+            const kids = [...document.getElementById('tabs-list').children];
+            const i = kids.indexOf(slot);
+            const prev = i > 0 ? kids[i - 1] : null;
+            const next = i + 1 < kids.length ? kids[i + 1] : null;
+            const gidOf = el => !el ? null : (el.__tab ? el.__tab.groupId
+                : (el.dataset && el.dataset.groupId ? el.dataset.groupId : null));
+            return {idx: i, prevCls: prev ? prev.className : null, prevGid: gidOf(prev),
+                    nextCls: next ? next.className : null, nextGid: gidOf(next)};
+        }""")
+
+    def _leftovers(self):
+        return self.page.evaluate("""() => ({
+            clone: !!document.querySelector('.pd-clone'),
+            slot: !!document.querySelector('.gbar-ghost-slot'),
+            seam: document.querySelectorAll('.gbar.drop-before, .gbar.drop-after').length,
+            hidden: [...document.querySelectorAll('#tabs-list .gbar, #tabs-list .tab-card')]
+                    .filter(el => getComputedStyle(el).display === 'none').length,
+            cursor: document.body.style.cursor
+        })""")
+
+    # === tests ===
+
+    def test_click_empty_group_bar_is_noop(self):
+        # Клик по шапке пустой группы (данные collapsed=False): не раскрывает —
+        # вид свёрнутый, blattam-groups не пишется
+        self._load(self._empty_groups(["g1"]))
+        before = json.dumps(read_storage_raw(self.page, "blattam-groups"), sort_keys=True)
+        self.page.evaluate("document.querySelector('#tabs-list .gbar[data-group-id=\\\"g1\\\"]').click()")
+        self.page.wait_for_timeout(80)
+        assert json.dumps(read_storage_raw(self.page, "blattam-groups"), sort_keys=True) == before
+        d = self._bar_state("g1")
+        assert d == {"collapsed": True, "chev": "▸", "count": "0 вкладок"}, d
+        assert self._slots() == 0
+
+    def test_nonempty_group_still_toggles(self):
+        # Регрессия: непустая группа кликом сворачивается и раскрывается,
+        # карточки уходят из DOM/возвращаются
+        self._load(self._empty_groups(["g1"]),
+                   tabs=[{"name": "T1", "url": "https://t1.com", "spaceId": "sp1", "groupId": "g1"}])
+        d = self._bar_state("g1")
+        assert d == {"collapsed": False, "chev": "▾", "count": "1 вкладка"}, d
+        self.page.evaluate("document.querySelector('#tabs-list .gbar[data-group-id=\\\"g1\\\"]').click()")
+        self.page.wait_for_timeout(80)
+        d = self._bar_state("g1")
+        assert d["collapsed"] is True and d["chev"] == "▸", d
+        assert self.page.evaluate("document.querySelectorAll('#tabs-list .tab-card').length") == 0
+        self.page.evaluate("document.querySelector('#tabs-list .gbar[data-group-id=\\\"g1\\\"]').click()")
+        self.page.wait_for_timeout(80)
+        d = self._bar_state("g1")
+        assert d["collapsed"] is False and d["chev"] == "▾", d
+        assert self.page.evaluate("document.querySelectorAll('#tabs-list .tab-card').length") == 1
+
+    def test_drop_card_on_empty_bar_expands_group(self):
+        # Дроп карточки на шапку пустой группы: вкладка в группу (place-tab),
+        # группа стала непустой — развёрнута (▾), карточка видна, слота нет
+        self._load(self._empty_groups(["g1"]),
+                   tabs=[{"name": "T", "url": "https://t.com", "spaceId": "sp1"}])
+        self.page.evaluate("""() => {
+            const card = document.querySelector('#tabs-list .tab-card');
+            const bar = document.querySelector('#tabs-list .gbar[data-group-id="g1"]');
+            const dt = new DataTransfer();
+            card.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true}));
+            bar.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true}));
+            bar.dispatchEvent(new DragEvent('drop', {dataTransfer: dt, bubbles: true, cancelable: true}));
+            card.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        }""")
+        self.page.wait_for_timeout(80)
+        assert self._group_of("T") == "g1"
+        d = self._bar_state("g1")
+        assert d == {"collapsed": False, "chev": "▾", "count": "1 вкладка"}, d
+        assert self._slots() == 0
+        assert self.page.evaluate("document.querySelectorAll('#tabs-list .tab-card').length") == 1
+
+    def test_gbar_drag_over_empty_group_ghost_in_gap(self):
+        # Pointer-драг шапки g1 над пустой g2 (реальная Playwright-мышь):
+        # заглушка в ЗАЗОРЕ (prev — g2-gbar, next — НЕ .group-empty-slot, его
+        # нет), дроп — порядок [g2, g1], без следов
+        self._load(self._empty_groups(["g1", "g2"]))
+        assert self._slots() == 0
+        pt = self._gname_pt("g1")
+        self.page.mouse.move(pt["x"], pt["y"], steps=3)
+        self.page.wait_for_timeout(60)
+        self.page.mouse.down()
+        self.page.wait_for_timeout(60)
+        for i in range(1, 7):  # arm: >8px вниз
+            self.page.mouse.move(pt["x"], pt["y"] + 40 * i / 6)
+            self.page.wait_for_timeout(10)
+        self.page.wait_for_timeout(320)  # оседание FLIP-слайда (200ms)
+        box = self.page.evaluate("""(() => {
+            const bar = document.querySelector('#tabs-list .gbar[data-group-id="g2"]');
+            const r = bar.getBoundingClientRect();
+            return {x: r.x + r.width / 2, y: r.bottom + 10};
+        })()""")
+        self.page.mouse.move(box["x"], box["y"], steps=8)
+        self.page.wait_for_timeout(200)
+        si = self._slot_info()
+        assert si is not None, "тёплая заглушка не появилась"
+        assert si["prevCls"] and "gbar" in si["prevCls"] and si["prevGid"] == "g2", si
+        assert si["nextCls"] != "group-empty-slot", si
+        self.page.mouse.up()
+        self.page.wait_for_timeout(300)
+        assert self._group_order() == ["g2", "g1"], self._group_order()
+        assert self._leftovers() == {"clone": False, "slot": False, "seam": 0, "hidden": 0, "cursor": ""}
+
+    def test_no_slot_with_three_empty_groups(self):
+        # 3 пустые группы (данные collapsed false/false/true): слотов нигде нет,
+        # все три шапки в свёрнутом виде, add-group-btn — последний элемент
+        self._load(self._empty_groups(["g1", "g2"]) + [
+            {"id": "g3", "name": "G3", "spaceId": "sp1", "collapsed": True}])
+        assert self._slots() == 0
+        for gid in ("g1", "g2", "g3"):
+            d = self._bar_state(gid)
+            assert d == {"collapsed": True, "chev": "▸", "count": "0 вкладок"}, (gid, d)
+        assert self.page.evaluate("document.getElementById('tabs-list').lastElementChild.id") == "add-group-btn"
+        assert json.loads(self.page.evaluate(
+            "JSON.stringify([...document.getElementById('tabs-list').children].map(e => e.className))")) == \
+            ["gbar gbar-collapsed", "gbar gbar-collapsed", "gbar gbar-collapsed", "add-group-row"]
