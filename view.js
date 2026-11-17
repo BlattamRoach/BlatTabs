@@ -359,9 +359,7 @@ function renderSpaces() {
     deleteBtn.title = t('delete_space');
     deleteBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      const remaining = allSpaces.filter(s => s.id !== sp.id);
-      const targetName = remaining.length ? remaining[0].name : t('default_space');
-      if (confirm(t('delete_space_confirm', { name: sp.name, target: targetName }))) {
+      if (confirm(t('delete_space_confirm', { name: sp.name }))) {
         chrome.runtime.sendMessage({ action: 'delete-space', id: sp.id });
       }
     });
@@ -823,12 +821,12 @@ function appendGroupBar(g, memberCount) {
   bar.className = 'gbar';
   // Свёрнутая группа — полноширинная шапка (gbar-collapsed); развёрнутая —
   // компактная область по ширине содержимого (CSS — view.html, .gbar)
-  if (g.collapsed) bar.classList.add('gbar-collapsed');
+  if (g.collapsed || memberCount === 0) bar.classList.add('gbar-collapsed'); // пустая группа — всегда свёрнутый вид (раскрытие убрано)
   bar.dataset.groupId = g.id;
 
   const chev = document.createElement('span');
   chev.className = 'chev';
-  chev.textContent = g.collapsed ? '\u25B8' : '\u25BE';
+  chev.textContent = (g.collapsed || memberCount === 0) ? '\u25B8' : '\u25BE';
 
   const name = document.createElement('span');
   name.className = 'gname';
@@ -986,6 +984,8 @@ function appendGroupBar(g, memberCount) {
       return;
     }
     if (Date.now() - lastDragEndAt < 500) return; // backstop: клик сразу после дропа — не сворачиваем
+    // Пустая группа не раскрывается (раскрытие пустых групп убрано) — клик no-op
+    if (!allTabs.some(t => t.groupId === g.id)) return;
     toggleGroupCollapsed(g.id);
   });
   tabsList.appendChild(bar);
@@ -998,50 +998,6 @@ function appendGroupBar(g, memberCount) {
 function groupVisibleCardCount(groupId) {
   return [...document.querySelectorAll('#tabs-list .tab-card')]
     .filter(c => c.style.display !== 'none' && c.__tab && c.__tab.groupId === groupId).length;
-}
-
-// Слот-заглушка пустой развёрнутой группы: полноширинная пунктирная строка
-// «Перетащите вкладку сюда» сразу после шапки — видимая drop-цель карточки
-// (свёрнутая группа слота не даёт). Drop-семантика как у шапки пустой
-// группы: вкладка уходит в группу (place-tab, anchorIndex null — конец
-// списка); карточка своей группы — no-op. Слот рендерится во всех ветках
-// renderTabs, где группа развёрнута без карточек.
-function appendEmptyGroupSlot(g) {
-  const slot = document.createElement('div');
-  slot.className = 'group-empty-slot';
-  slot.dataset.groupId = g.id;
-  slot.textContent = t('drop_here');
-  slot.draggable = false;
-  // DnD: слот принимает карточку (перетаскиваемая шапка группы — no-op)
-  slot.addEventListener('dragover', (e) => {
-    if (dragSourceGroupId) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    slot.classList.add('drop-over');
-  });
-  slot.addEventListener('dragleave', () => slot.classList.remove('drop-over'));
-  slot.addEventListener('drop', (e) => {
-    e.preventDefault();
-    slot.classList.remove('drop-over');
-    if (dragSourceGroupId) return;
-    const src = allTabs.find(t => t.url === dragSourceUrl);
-    if (!src) return;
-    const batch = dragBatchUrls && dragBatchUrls.length > 1 ? dragBatchUrls : null;
-    if (batch) {
-      // Выделенный батч — в группу целиком, если хоть одна его вкладка не там
-      if (batch.some(u => {
-        const t = allTabs.find(x => x.url === u);
-        return !t || tabGroupOf(t) !== g.id;
-      })) {
-        chrome.runtime.sendMessage({ action: 'place-tabs', urls: batch,
-          anchorUrl: null, side: 'after', groupId: g.id });
-      }
-    } else if (src.groupId !== g.id) {
-      chrome.runtime.sendMessage({ action: 'place-tab', index: allTabs.indexOf(src),
-        anchorIndex: null, side: 'after', groupId: g.id });
-    }
-  });
-  tabsList.appendChild(slot);
 }
 
 // Сворачивание группы: запись в blattam-groups → onChanged → перерисовка.
@@ -1418,7 +1374,6 @@ function renderTabs(filter = '') {
       emptyState.style.display = 'none';
       sGroups.forEach(g => {
         appendGroupBar(g, 0);
-        if (!g.collapsed) appendEmptyGroupSlot(g);
       });
       noResults.style.display = 'none';
       metaCount.textContent = '0';
@@ -1445,7 +1400,6 @@ function renderTabs(filter = '') {
         appendCard(t);
         visibleCount++;
       });
-      if (members.length === 0) appendEmptyGroupSlot(g);
     }
   });
 
@@ -3130,8 +3084,10 @@ function gpdGapAnchor(clientY) {
   edges.push(secs[M - 1].bottom);
   let g = 0;
   while (g < edges.length && edges[g] <= clientY) g++;
-  if (g <= M - 1) return { el: secs[g].gbar, side: 'before', toId: secs[g].gid };
-  return { el: secs[M - 1].lastEl, side: 'after', toId: secs[M - 1].gid };
+  const anchor = (g <= M - 1)
+    ? { el: secs[g].gbar, side: 'before', toId: secs[g].gid }
+    : { el: secs[M - 1].lastEl, side: 'after', toId: secs[M - 1].gid };
+  return anchor;
 }
 
 // Передвинуть уже вставленную тёплую заглушку к якорю (before/after элемента);
@@ -3269,10 +3225,10 @@ function gpdOnMove(e) {
   e.preventDefault();
   pdCloneMove(e.clientX - gpd.ox, e.clientY - gpd.oy);
   pdAutoScrollAt(e.clientX, e.clientY, gpd.bar);
-  // Тёплая заглушка ходит по зазорам; parting-FLIP — только при смене зазора
+  // Тёплая заглушка ходит по зазорам; parting-FLIP — только при смене якоря
   const anchor = gpdGapAnchor(e.clientY);
   if (anchor && gpd.ghostSlot && gpd.ghostSlot.isConnected &&
-      (!gpd.lastGap || gpd.lastGap.el !== anchor.el || gpd.lastGap.side !== anchor.side)) {
+      (!gpd.lastGap || gpd.lastGap.toId !== anchor.toId || gpd.lastGap.side !== anchor.side)) {
     const firstRects = gpdFlipSnapshot();
     gpdMoveGhostSlotInsert(anchor);
     applyFlipFrom(firstRects);

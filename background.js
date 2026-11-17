@@ -174,21 +174,21 @@ async function deleteSpace(spaceId) {
   const spaces = await loadSpaces();
   if (!spaces.some(s => s.id === spaceId)) return;
 
-  // Вкладки удалённого пространства → первое оставшееся (или новое «Мои вкладки»)
+  // Пустое пространство всё равно остаётся (или создаётся новое «Мои вкладки»)
   let remaining = spaces.filter(s => s.id !== spaceId);
   let target = remaining[0] || null;
   if (!target) {
     target = { id: genId('sp'), name: defaultSpaceName(lang) };
     remaining = [target];
   }
-  const tabs = await loadTabs();
-  tabs.forEach(t => { if (t.spaceId === spaceId) t.spaceId = target.id; });
-  // Группы удалённого пространства удаляются
+  // Вкладки удалённого пространства УДАЛЯЮТСЯ (каскодно); его группы тоже удаляются
   const groups = await loadGroups();
   const keptGroups = groups.filter(g => g.spaceId !== spaceId);
+  const tabs = await loadTabs();
+  const keptTabs = tabs.filter(t => t.spaceId !== spaceId);
 
   await saveSpaces(remaining);
-  await saveTabs(tabs);
+  await saveTabs(keptTabs);
   await saveGroups(keptGroups);
 
   // blattam-last-space на удалённом пространстве — переключить на цель
@@ -229,18 +229,15 @@ async function createGroup(spaceId, name) {
   return g;
 }
 
-// Удалить группу: её вкладки остаются в пространстве (groupId → null)
+// Удалить группу: её вкладки УДАЛЯЮТСЯ (каскодно)
 async function deleteGroup(groupId) {
   const groups = await loadGroups();
   if (!groups.some(g => g.id === groupId)) return;
   await saveGroups(groups.filter(g => g.id !== groupId));
 
   const tabs = await loadTabs();
-  let changed = false;
-  tabs.forEach(t => {
-    if (t.groupId === groupId) { t.groupId = null; changed = true; }
-  });
-  if (changed) await saveTabs(tabs);
+  const kept = tabs.filter(t => t.groupId !== groupId);
+  if (kept.length !== tabs.length) await saveTabs(kept);
 }
 
 // === Вкладки ===
