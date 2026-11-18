@@ -1800,8 +1800,11 @@ function layoutRect(el) {
 // happens only at territory borders (gap midpoints, row/section midpoints).
 // Row ends keep the legacy A3a; above the first section header — legacy A3c;
 // the bottom band (below the last row of the last section) never reaches
-// this function (cardAreaEmptyBand handles it). Rail/chip paths still call
-// slotAnchor(cardGapIndex(...)) directly and are untouched.
+// this function (cardAreaEmptyBand handles it). The ONLY remaining direct
+// caller of slotAnchor(cardGapIndex(...)) is the legacy() fallback inside
+// this function (A3a/A3c and edge cases) — the rail→center path switched to
+// cursorCardAnchor (RAIL→CENTER parity), the chip path anchors by its own
+// chip-row midpoint rule.
 function cursorCardAnchor(clientX, clientY) {
   if (slotIsSourceHome(clientY)) return { el: dragSourceCardEl, side: 'after' };
   // Гонка отложенного создания заглушки (dragover раньше setTimeout(0)):
@@ -2088,32 +2091,46 @@ function isLastVisibleOfSection(card) {
   return true;
 }
 
+// Якорь слота → (anchorUrl, side, section) в ПОЛНОМ allTabs: карточка
+// 'before' — перед ней; 'after' — после неё, если она последняя ВИДИМАЯ
+// секции (конец секции), иначе сразу после (mid-section); 'after' шапки —
+// начало её секции (перед первой); 'before' шапки — конец предыдущей
+// секции (после последней). null — нет якоря / пустая секция (dropper
+// кладёт в конец списка).
+function slotAnchorResolution(anchor) {
+  if (!anchor || !anchor.el) return null;
+  const section = slotSection(anchor);
+  let anchorUrl, side = anchor.side;
+  if (anchor.el.classList.contains('tab-card') && anchor.side === 'before') {
+    anchorUrl = anchor.el.__tab.url; // перед видимой карточкой X
+  } else if (anchor.el.classList.contains('tab-card')) {
+    if (isLastVisibleOfSection(anchor.el)) {
+      const t = sectionTabFull(section, true); // end of section (= end of list)
+      if (!t) return null;
+      anchorUrl = t.url; side = 'after';
+    } else {
+      anchorUrl = anchor.el.__tab.url; // mid-section: right after the anchor card
+      side = 'after';
+    }
+  } else if (anchor.side === 'after') {
+    const t = sectionTabFull(section, false); // начало секции
+    if (!t) return null;
+    anchorUrl = t.url; side = 'before';
+  } else {
+    const t = sectionTabFull(section, true); // конец предыдущей секции
+    if (!t) return null;
+    anchorUrl = t.url; side = 'after';
+  }
+  return { anchorUrl, side, section };
+}
+
 function placeCardToSlot(src, anchor) {
   if (!anchor || !anchor.el) return;
   const from = allTabs.indexOf(src);
   if (from === -1) return;
-  const section = slotSection(anchor);
-  let anchorUrl, side = anchor.side;
-  if (anchor.el.classList.contains('tab-card') && anchor.side === 'before') {
-    anchorUrl = anchor.el.__tab.url;               // перед видимой карточкой X
-  } else if (anchor.el.classList.contains('tab-card')) {
-    if (isLastVisibleOfSection(anchor.el)) {
-      const t = sectionTabFull(section, true);       // end of section (= end of list)
-      if (!t) return;
-      anchorUrl = t.url; side = 'after';
-    } else {
-      anchorUrl = anchor.el.__tab.url;               // mid-section: right after the anchor card
-      side = 'after';
-    }
-  } else if (anchor.side === 'after') {
-    const t = sectionTabFull(section, false);      // начало секции
-    if (!t) return;
-    anchorUrl = t.url; side = 'before';
-  } else {
-    const t = sectionTabFull(section, true);       // конец предыдущей секции
-    if (!t) return;
-    anchorUrl = t.url; side = 'after';
-  }
+  const res = slotAnchorResolution(anchor);
+  if (!res) return;
+  const { anchorUrl, side, section } = res;
   const anchorIndex = allTabs.findIndex(t => t.url === anchorUrl);
   if (anchorIndex === -1) return;
   const batch = dragBatchUrls;
@@ -4035,6 +4052,9 @@ function onBtDragEnd() {
   if (dragBrowserTabGhost && dragBrowserTabGhost.isConnected) dragBrowserTabGhost.remove();
   dragBrowserTabGhost = null;
   removeGhostSlot(); // центральная заглушка (рейка → центр)
+  restoreWrapHiddenCard(); // временно скрытая «row-full» карточка — вернуть
+  pdLastTouchCard = null;
+  pdLastTouchAnchor = null;
   if (src && browserTabsList) {
     // Источник мог уже перерисоваться (onChanged) — восстановим видимость по id
     const el = browserTabsList.querySelector('.bt-tab[data-id="' + CSS.escape(String(src.id)) + '"]');
@@ -4164,25 +4184,11 @@ function saveBtToCenter(src, anchor) {
   btDropCommitted = true;
   dragSourceBrowserTab = null;
   let section = null, at = allTabs.length;
-  if (anchor && anchor.el) {
-    section = slotSection(anchor);
-    let anchorUrl, side = anchor.side;
-    if (anchor.el.classList.contains('tab-card') && anchor.side === 'before') {
-      anchorUrl = anchor.el.__tab.url; // перед видимой карточкой X
-    } else if (anchor.el.classList.contains('tab-card')) {
-      const t = sectionTabFull(section, true); // конец секции (= конец списка)
-      if (t) { anchorUrl = t.url; side = 'after'; }
-    } else if (anchor.side === 'after') {
-      const t = sectionTabFull(section, false); // начало секции
-      if (t) { anchorUrl = t.url; side = 'before'; }
-    } else {
-      const t = sectionTabFull(section, true); // конец предыдущей секции
-      if (t) { anchorUrl = t.url; side = 'after'; }
-    }
-    if (anchorUrl != null) {
-      const a = allTabs.findIndex(t => t.url === anchorUrl);
-      if (a !== -1) at = side === 'after' ? a + 1 : a;
-    }
+  const res = slotAnchorResolution(anchor);
+  if (res) {
+    section = res.section;
+    const a = allTabs.findIndex(t => t.url === res.anchorUrl);
+    if (a !== -1) at = res.side === 'after' ? a + 1 : a;
   }
   const tabs = allTabs.slice();
   tabs.splice(at, 0, makeSavedTabFromBrowser(src, section));
@@ -4236,6 +4242,7 @@ document.addEventListener('dragover', (e) => {
   if (closest('.space-chip')) return; // no-target
   if (closest('.gbar') || closest('.group-empty-slot')) {
     if (dragGhostSlot) setGhostDisplay('none');
+    restoreWrapHiddenCard();
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     return;
@@ -4249,9 +4256,22 @@ document.addEventListener('dragover', (e) => {
   if (closest('#tabs-list')) {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
+    // Нижняя полоса: заглушка скрыта, дроп там — отмена
+    if (cardAreaEmptyBand(e.clientX, e.clientY) !== null) {
+      if (dragGhostSlot) setGhostDisplay('none');
+      restoreWrapHiddenCard();
+      return;
+    }
+    // Территориальная система (та же, что у драга карточки)
     ensureCentralBtGhost();
     setGhostDisplay('');
-    moveCentralBtGhost(slotAnchor(cardGapIndex(e.clientX, e.clientY), e.clientY));
+    const anchor = cursorCardAnchor(e.clientX, e.clientY);
+    if (anchor) {
+      updateWrapHiddenCard(anchor);
+      moveCentralBtGhost(anchor);
+    } else {
+      restoreWrapHiddenCard();
+    }
   }
 });
 
@@ -4268,7 +4288,9 @@ document.addEventListener('drop', (e) => {
   if (closest('#browser-tabs-list')) { e.preventDefault(); commitBtRailMove(src); return; }
   if (closest('#tabs-list')) {
     e.preventDefault();
-    saveBtToCenter(src, slotAnchor(cardGapIndex(e.clientX, e.clientY), e.clientY));
+    // Нижняя полоса — отмена (dragend уберёт заглушки)
+    if (cardAreaEmptyBand(e.clientX, e.clientY) !== null) return;
+    saveBtToCenter(src, cursorCardAnchor(e.clientX, e.clientY));
     return;
   }
   // Повсюду остальном — отмена (dragend снимет заглушки)
@@ -4321,6 +4343,9 @@ function btlAfterCommit(p) {
   // центра/группы снимают сами, а коммит в рейку — нет, без неё заглушка
   // остаётся в центральном списке (идемпотентно)
   removeGhostSlot();
+  restoreWrapHiddenCard(); // временно скрытая «row-full» карточка — вернуть
+  pdLastTouchCard = null;
+  pdLastTouchAnchor = null;
   if (dragBrowserTabGhost && dragBrowserTabGhost.isConnected) dragBrowserTabGhost.remove();
   dragBrowserTabGhost = null;
   if (p && p.t && browserTabsList) {
@@ -4342,6 +4367,9 @@ function btlCancelState(p) {
   if (dragBrowserTabGhost && dragBrowserTabGhost.isConnected) dragBrowserTabGhost.remove();
   dragBrowserTabGhost = null;
   removeGhostSlot(); // центральная заглушка (рейка → центр) при отмене
+  restoreWrapHiddenCard(); // временно скрытая «row-full» карточка — вернуть
+  pdLastTouchCard = null;
+  pdLastTouchAnchor = null;
   if (p && p.item && p.item.isConnected) p.item.style.display = '';
   renderBrowserTabs();
   if (p) pdFinishClone(p.homeRect, pdSettleMs());
@@ -4395,9 +4423,11 @@ function btlCommitAt(x, y, p) {
     return rect;
   }
   if (closest('#tabs-list')) {
-    const anchor = slotAnchor(cardGapIndex(x, y), y);
+    // Нижняя полоса — отмена (те же правила, что у драга карточки)
+    if (cardAreaEmptyBand(x, y) !== null) return null;
+    const anchor = cursorCardAnchor(x, y);
     ensureCentralBtGhost();
-    moveCentralBtGhost(anchor);
+    if (anchor) moveCentralBtGhost(anchor);
     let rect = p.homeRect;
     if (dragGhostSlot && dragGhostSlot.isConnected) rect = dragGhostSlot.getBoundingClientRect();
     saveBtToCenter(src, anchor);
@@ -4511,8 +4541,44 @@ function btlTrackAt(x, y) {
     return;
   }
   if (t && t.closest && t.closest('#tabs-list')) {
+    // Шапка группы / слот пустой группы: дроп В группу — центральная
+    // заглушка скрыта целиком (та же семантика, что у драга карточки)
+    if (t.closest('.gbar') || t.closest('.group-empty-slot')) {
+      if (dragGhostSlot) setGhostDisplay('none');
+      restoreWrapHiddenCard();
+      btl.lastAnchor = null;
+      return;
+    }
+    // Нижняя полоса списка (below the last row): заглушка скрыта,
+    // отпускание там — отмена (btlCommitAt вернёт null)
+    if (cardAreaEmptyBand(x, y) !== null) {
+      if (dragGhostSlot) setGhostDisplay('none');
+      restoreWrapHiddenCard();
+      btl.lastAnchor = null;
+      return;
+    }
+    // Территориальная система (та же, что у драга карточки): cursorCardAnchor
     ensureCentralBtGhost();
-    moveCentralBtGhost(slotAnchor(cardGapIndex(x, y), y));
+    if (dragGhostSlot) setGhostDisplay('');
+    const anchor = cursorCardAnchor(x, y);
+    if (anchor) {
+      // FLIP — только при РЕАЛЬНОЙ смене места (как в рейке): повторная
+      // установка в ту же позицию слайда не требует
+      const atPlace = anchor.side === 'before'
+        ? (dragGhostSlot && dragGhostSlot.isConnected && dragGhostSlot.nextElementSibling === anchor.el)
+        : (dragGhostSlot && dragGhostSlot.isConnected && dragGhostSlot.previousElementSibling === anchor.el);
+      const same = btl.lastAnchor && btl.lastAnchor.el === anchor.el && btl.lastAnchor.side === anchor.side;
+      if (!same || !atPlace) {
+        const firstRects = atPlace ? null : snapshotCardRects();
+        updateWrapHiddenCard(anchor);
+        moveCentralBtGhost(anchor);
+        btl.lastAnchor = anchor;
+        if (firstRects) applyFlipFrom(firstRects);
+      }
+    } else {
+      restoreWrapHiddenCard();
+    }
+    return;
   }
   btl.lastAnchor = null; // вне рейки — якорь сбрасывается (в рейке заново FLIP-нет)
 }
@@ -4543,6 +4609,8 @@ function btlOnMove(e) {
     btl.cloneNodes = Array.from(pdClone.childNodes); // SMALL: исходный контент элемента рейки
     btl.armed = true;
     btl.lastAnchor = null;
+    pdLastTouchCard = null;   // fresh drag — no card touched yet (territory freeze state)
+    pdLastTouchAnchor = null;
     // Вооружено: курсор grabbing на body и на элементе
     document.body.style.cursor = 'grabbing';
     if (item.isConnected) item.style.cursor = 'grabbing';
