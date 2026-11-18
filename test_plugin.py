@@ -12579,15 +12579,18 @@ class TestRailCenterGhost:
         assert self._slot_order() == ["card", "slot", "card", "card"]
 
     def test_ghost_tracks_insertion_slot(self):
-        # Заглушка следует за курсором по слотам центра, как у драга карточки
+        # Заглушка следует за курсором по территориям центра (та же система,
+        # что у драга карточки): касание карточки B — перед B; касание A при
+        # заглушке уже ПОСЛЕ A в DOM — sticky-флип, слот остаётся на месте;
+        # пустая клетка в конце строки (A3a) — после C (конец списка)
         load_view(self.page, tabs=self.TABS3, browser_tabs=self.BT)
         self.page.wait_for_timeout(80)
         self._rail_drag_start("bt1")
-        self._rail_over(1, 'before')  # перед B
+        self._rail_over(1, 'before')  # касание B — перед B
         assert self._slot_order() == ["card", "slot", "card", "card"]
-        self._rail_over(0, 'before')  # перед A (начало списка)
+        self._rail_over(0, 'before')  # касание A (заглушка после A в DOM): touch-правило — 'before', начало списка
         assert self._slot_order() == ["slot", "card", "card", "card"]
-        self._rail_over(2, 'after')  # после C (конец списка)
+        self._rail_over(2, 'after')  # пустая клетка после C — конец списка
         assert self._slot_order() == ["card", "card", "card", "slot"]
 
     def test_ghost_matches_card_drag_ghost_styling(self):
@@ -19159,3 +19162,378 @@ class TestQuickSearchFocus:
         assert self.page.evaluate("document.activeElement.id") == "settings-btn"
         self.page.evaluate("grabPageFocus(true)")
         assert self.page.evaluate("document.activeElement.tagName") == "BODY"
+
+
+class TestRailCenterTerritories:
+    """Rail tab drag to center: the central ghost walks by the SAME territory
+    rules as the card drag (cursorCardAnchor): row midpoint tiling, touch
+    freeze on entering a card's rect, the ghost's own cell is STICKY, the
+    empty end of a row keeps the legacy tail, the bottom band of the list =
+    ghost hidden + drop cancels, and the drop resolves the slot like
+    placeCardToSlot (a mid-section "after" lands right after the card — not
+    at the end of the section). Geometry: styled page (theme.css + view.html
+    <style>), viewport 1280x800, 3 loose cards in one 5-column row, 12px
+    gaps, 110px bottom padding band."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self._errors = []
+        page.on("pageerror", self._on_err)
+        yield
+        assert not self._errors, self._errors
+        page.remove_listener("pageerror", self._on_err)
+
+    def _on_err(self, err):
+        self._errors.append(str(err))
+
+    BT = [
+        {"id": "bt1", "title": "Wiki", "url": "https://wiki.example",
+         "favIconUrl": "https://fav.example/1.ico", "windowId": 1, "index": 0},
+        {"id": "bt2", "title": "Mail", "url": "https://mail.example",
+         "favIconUrl": "https://fav.example/2.ico", "windowId": 1, "index": 1},
+    ]
+    SP = [{"id": "sp1", "name": "Main"}]
+    TABS3 = [
+        {"name": "A", "url": "https://a.com", "spaceId": "sp1"},
+        {"name": "B", "url": "https://b.com", "spaceId": "sp1"},
+        {"name": "C", "url": "https://c.com", "spaceId": "sp1"},
+    ]
+    GROUPS = [{"id": "g1", "name": "Grp", "spaceId": "sp1", "collapsed": False}]
+
+    def _load(self, tabs=None, groups=None):
+        load_view(self.page, tabs=self.TABS3 if tabs is None else tabs,
+                  spaces=self.SP, groups=groups, browser_tabs=self.BT)
+        css = load_file("theme.css")
+        html = load_file("view.html")
+        style_block = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate("""(css) => {
+          const s = document.createElement('style');
+          s.textContent = css;
+          document.head.appendChild(s);
+        }""", css + style_block)
+        self.page.set_viewport_size({"width": 1280, "height": 800})
+        self.page.mouse.move(0, 0)
+        self.page.wait_for_timeout(150)
+
+    # === geometry helpers ===
+
+    def _cards(self):
+        return json.loads(self.page.evaluate("""(() => JSON.stringify(
+            [...document.querySelectorAll('#tabs-list .tab-card')].map(c => {
+                const r = c.getBoundingClientRect();
+                return {left: r.left, top: r.top, right: r.right, bottom: r.bottom,
+                        width: r.width, height: r.height,
+                        name: c.querySelector('.tab-name').textContent.trim()};
+            })))()"""))
+
+    def _slot(self):
+        return self.page.evaluate("""(() => {
+            const s = document.querySelector('#tabs-list .tab-ghost-slot');
+            if (!s) return null;
+            const r = s.getBoundingClientRect();
+            return {left: r.left, top: r.top, right: r.right, bottom: r.bottom,
+                    x: r.left + r.width / 2, y: r.top + r.height / 2,
+                    display: getComputedStyle(s).display};
+        })()""")
+
+    def _slot_order(self):
+        return json.loads(self.page.evaluate("""(() => JSON.stringify(
+            [...document.getElementById('tabs-list').children].map(c =>
+                c.classList.contains('tab-card') ? 'card' :
+                (c.classList.contains('tab-ghost-slot') && c.style.display !== 'none') ? 'slot' : 'other')))()"""))
+
+    def _center_names(self):
+        return json.loads(self.page.evaluate(
+            "JSON.stringify([...document.querySelectorAll('#tabs-list .tab-card .tab-name')].map(e => e.textContent.trim()))"))
+
+    def _stored(self):
+        return read_local(self.page, "blattam-tabs") or []
+
+    def _item_box(self, id):
+        return self.page.evaluate("""(id) => {
+            const c = document.querySelector('#browser-tabs-list .bt-tab[data-id="' + id + '"]');
+            const r = c.getBoundingClientRect();
+            return {x: r.left + r.width / 2, y: r.top + r.height / 2};
+        }""", id)
+
+    def _row_y(self):
+        cards = self._cards()
+        return (cards[0]["top"] + cards[0]["bottom"]) / 2
+
+    def _list_box(self):
+        return self.page.evaluate("""(() => {
+            const r = document.getElementById('tabs-list').getBoundingClientRect();
+            return {left: r.left, right: r.right, bottom: r.bottom};
+        })()""")
+
+    def _arm_flip_counter(self):
+        self.page.evaluate("""(() => {
+            window.__flip = 0;
+            document.querySelectorAll('#tabs-list .tab-card').forEach(c => {
+                c.addEventListener('transitionstart', (e) => {
+                    if (e.propertyName === 'transform') window.__flip++;
+                });
+            });
+        })()""")
+
+    # === pointer path helpers (real mouse) ===
+
+    def _pd_move(self, from_pt, to_pt, steps=10):
+        pg = self.page
+        pg.mouse.move(from_pt["x"], from_pt["y"])
+        pg.mouse.down()
+        for i in range(1, steps + 1):
+            pg.mouse.move(from_pt["x"] + (to_pt["x"] - from_pt["x"]) * i / steps,
+                          from_pt["y"] + (to_pt["y"] - from_pt["y"]) * i / steps)
+
+    def _hover(self, x, y):
+        self.page.mouse.move(x, y)
+
+    def _cancel(self):
+        # release over the LEFT RAIL — not a drop target -> cancel
+        self.page.mouse.move(100, 400)
+        self.page.mouse.up()
+        self.page.wait_for_timeout(150)
+
+    def _touch_b(self):
+        """Drag bt1 from the rail and touch card B (ghost lands before B)."""
+        b1 = self._item_box("bt1")
+        cards = self._cards()
+        b = [c for c in cards if c["name"] == "B"][0]
+        self._pd_move(b1, {"x": b["left"] + b["width"] * 0.25,
+                           "y": b["top"] + b["height"] * 0.25}, steps=12)
+        self.page.wait_for_timeout(350)  # settle the FLIP slide before geometry reads
+
+    # --- pointer tests ---
+
+    def test_pointer_touch_ghost_before_card(self):
+        # Touch card B from the rail: the ghost lands BEFORE B (touch rule,
+        # no ghost yet -> side 'before'); release outside a target — cancel
+        self._load()
+        self._touch_b()
+        assert self._slot_order() == ["card", "slot", "card", "card"]
+        self._cancel()
+        assert [t["url"] for t in self._stored()] == [t["url"] for t in self.TABS3]
+        assert self._slot() is None
+
+    def test_pointer_sticky_ghost_cell(self):
+        # The ghost's own cell is STICKY: hovering inside it does not move the slot
+        self._load()
+        self._touch_b()
+        assert self._slot_order() == ["card", "slot", "card", "card"]
+        s = self._slot()
+        assert s and s["display"] != "none"
+        self._hover(s["x"], s["y"])
+        assert self._slot_order() == ["card", "slot", "card", "card"]
+        self._cancel()
+
+    def test_pointer_gap_left_half_anchor_before(self):
+        # The left half of the gap A|ghost is A's territory; the cursor
+        # approaches A from the right -> side 'before': the slot moves before A
+        self._load()
+        self._touch_b()
+        cards = self._cards()
+        a = [c for c in cards if c["name"] == "A"][0]
+        s = self._slot()
+        self._hover(a["right"] + (s["left"] - a["right"]) * 0.25, self._row_y())
+        assert self._slot_order() == ["slot", "card", "card", "card"]
+        self._cancel()
+
+    def test_pointer_gap_right_half_anchor_after(self):
+        # The right half of the gap ghost|B is B's territory; approach from
+        # the left -> side 'after': the slot moves after B (before C)
+        self._load()
+        self._touch_b()
+        cards = self._cards()
+        b = [c for c in cards if c["name"] == "B"][0]
+        s = self._slot()
+        self._hover(s["right"] + (b["left"] - s["right"]) * 0.75, self._row_y())
+        assert self._slot_order() == ["card", "card", "slot", "card"]
+        self._cancel()
+
+    def test_pointer_row_end_tail(self):
+        # The empty cell right of the last card C — the row end (legacy A3a):
+        # the slot after C (list end); releasing there still cancels? No —
+        # this test only hovers, then cancels; nothing is written
+        self._load()
+        b1 = self._item_box("bt1")
+        cards = self._cards()
+        c = [c for c in cards if c["name"] == "C"][0]
+        self._pd_move(b1, {"x": c["right"] + 6, "y": self._row_y()}, steps=12)
+        assert self._slot_order() == ["card", "card", "card", "slot"]
+        self._cancel()
+        assert [t["url"] for t in self._stored()] == [t["url"] for t in self.TABS3]
+        assert self._slot() is None
+
+    def test_pointer_band_hides_ghost_and_drop_cancels(self):
+        # The bottom band (below the last row, in the list's 110px
+        # padding-bottom zone): the ghost is hidden; releasing there — cancel,
+        # nothing is written, the rail is untouched
+        self._load()
+        self._touch_b()
+        assert self._slot_order() == ["card", "slot", "card", "card"]
+        tl = self._list_box()
+        cards = self._cards()
+        band_y = (cards[0]["bottom"] + tl["bottom"]) / 2
+        self._hover((tl["left"] + tl["right"]) / 2, band_y)
+        s = self._slot()
+        assert s and s["display"] == "none"
+        self.page.mouse.up()
+        self.page.wait_for_timeout(150)
+        assert [t["url"] for t in self._stored()] == [t["url"] for t in self.TABS3]
+        assert self._slot() is None
+        assert self.page.evaluate("document.querySelectorAll('#browser-tabs-list .bt-tab').length") == 2
+
+    def test_pointer_mid_section_drop_lands_mid_section(self):
+        # REGRESSION (the saveBtToCenter fix): dropping "after" a MID-SECTION
+        # card lands right after it — not at the end of the section
+        # (placeCardToSlot parity). Old code: [A, B, C, Wiki]; new: [A, B, Wiki, C]
+        tabs = [dict(t, groupId="g1") for t in self.TABS3]
+        self._load(tabs=tabs, groups=self.GROUPS)
+        self._touch_b()
+        cards = self._cards()
+        b = [c for c in cards if c["name"] == "B"][0]
+        s = self._slot()
+        # right half of the gap ghost|B -> owner B, approach from the left
+        self._hover(s["right"] + (b["left"] - s["right"]) * 0.75, self._row_y())
+        assert self._slot_order() == ["other", "card", "card", "slot", "card"]
+        self.page.mouse.up()
+        self.page.wait_for_timeout(150)
+        assert self._center_names() == ["A", "B", "Wiki", "C"]
+        wiki = [t for t in self._stored() if t["url"] == "https://wiki.example"]
+        assert len(wiki) == 1 and wiki[0].get("groupId") == "g1"
+        assert self._slot() is None
+
+    def test_pointer_gbar_hover_hides_central_ghost(self):
+        # Crossing the group header: the central ghost is hidden (drop-into-
+        # group semantics); releasing on the header — to the group
+        tabs = [dict(t, groupId="g1") for t in self.TABS3]
+        self._load(tabs=tabs, groups=self.GROUPS)
+        self._touch_b()
+        s = self._slot()
+        assert s and s["display"] != "none"
+        gbar = self.page.evaluate("""(() => {
+            const r = document.querySelector('.gbar').getBoundingClientRect();
+            return {x: r.left + r.width / 2, y: r.top + r.height / 2};
+        })()""")
+        self._hover(gbar["x"], gbar["y"])
+        s = self._slot()
+        assert s and s["display"] == "none"
+        self.page.mouse.up()
+        self.page.wait_for_timeout(150)
+        wiki = [t for t in self._stored() if t["url"] == "https://wiki.example"]
+        assert len(wiki) == 1 and wiki[0].get("groupId") == "g1"
+        assert self._slot() is None
+
+    def test_pointer_flip_on_central_anchor_change(self):
+        # FLIP (pointer path, parity with the card drag): a real slot move
+        # slides the cards (transitionstart transform events on #tabs-list)
+        self._load()
+        self._arm_flip_counter()
+        self._touch_b()
+        self.page.evaluate("window.__flip = 0")  # initial touch — reset
+        cards = self._cards()
+        a = [c for c in cards if c["name"] == "A"][0]
+        s = self._slot()
+        # left half of the gap A|ghost -> slot moves before A (A slides)
+        self._hover(a["right"] + (s["left"] - a["right"]) * 0.25, self._row_y())
+        self.page.wait_for_timeout(50)
+        assert self.page.evaluate("window.__flip") >= 1
+        self._cancel()
+
+    def test_pointer_freeze_no_reflow_in_territory(self):
+        # Freeze (touch rule): while the cursor stays INSIDE B's rect, the
+        # anchor is frozen — no card slides. (The drag path enters the list
+        # from the right, so the last touch on arrival may be another card —
+        # establish the touch on B first, then reset the counter.)
+        self._load()
+        self._arm_flip_counter()
+        self._touch_b()  # includes a settle wait — the slide is done
+        cards = self._cards()
+        b = [c for c in cards if c["name"] == "B"][0]
+        self._hover(b["left"] + 4, self._row_y())  # touch B (one possible reflow)
+        self.page.wait_for_timeout(30)
+        self.page.evaluate("window.__flip = 0")
+        order_before = self._slot_order()
+        # wander inside B's rect: frozen — no reflow
+        for x in (b["left"] + b["width"] * 0.5, b["right"] - 4):
+            self._hover(x, self._row_y())
+        self.page.wait_for_timeout(50)
+        assert self.page.evaluate("window.__flip") == 0
+        assert self._slot_order() == order_before
+        self._cancel()
+
+    # --- HTML5 synthetic path (like TestRailCenterGhost) ---
+
+    def test_html5_touch_anchor_and_drop(self):
+        self._load()
+        pg = self.page
+        pg.evaluate("""(() => {
+            const item = document.querySelector('#browser-tabs-list .bt-tab[data-id="bt1"]');
+            const dt = new DataTransfer();
+            item.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true, cancelable: true}));
+            window.__dt = dt;
+        })()""")
+        cards = self._cards()
+        b = [c for c in cards if c["name"] == "B"][0]
+        over_x, over_y = b["left"] + b["width"] * 0.25, b["top"] + b["height"] * 0.25
+        pg.evaluate("""([x, y]) => {
+            document.getElementById('tabs-list').dispatchEvent(new DragEvent('dragover', {
+                dataTransfer: window.__dt, bubbles: true, cancelable: true, clientX: x, clientY: y
+            }));
+        }""", [over_x, over_y])
+        assert self._slot_order() == ["card", "slot", "card", "card"]
+        # re-read B's rect: the reflowed position (the ghost took B's old cell)
+        cards2 = self._cards()
+        b2 = [c for c in cards2 if c["name"] == "B"][0]
+        pg.evaluate("""([x, y]) => {
+            document.getElementById('tabs-list').dispatchEvent(new DragEvent('drop', {
+                dataTransfer: window.__dt, bubbles: true, cancelable: true, clientX: x, clientY: y
+            }));
+        }""", [b2["left"] + b2["width"] * 0.25, b2["top"] + b2["height"] * 0.25])
+        pg.wait_for_timeout(100)
+        assert self._center_names() == ["A", "Wiki", "B", "C"]
+        assert self._slot() is None
+        assert [t["url"] for t in self._stored()] == ["https://a.com", "https://wiki.example",
+                                                       "https://b.com", "https://c.com"]
+
+    def test_html5_band_drop_cancels(self):
+        self._load()
+        pg = self.page
+        pg.evaluate("""(() => {
+            const item = document.querySelector('#browser-tabs-list .bt-tab[data-id="bt1"]');
+            const dt = new DataTransfer();
+            item.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true, cancelable: true}));
+            window.__dt = dt;
+        })()""")
+        cards = self._cards()
+        b = [c for c in cards if c["name"] == "B"][0]
+        tl = self._list_box()
+        band_x = (tl["left"] + tl["right"]) / 2
+        band_y = (cards[0]["bottom"] + tl["bottom"]) / 2
+        pg.evaluate("""([x, y]) => {
+            document.getElementById('tabs-list').dispatchEvent(new DragEvent('dragover', {
+                dataTransfer: window.__dt, bubbles: true, cancelable: true, clientX: x, clientY: y
+            }));
+        }""", [b["left"] + b["width"] * 0.25, b["top"] + b["height"] * 0.25])
+        assert self._slot_order() == ["card", "slot", "card", "card"]
+        pg.evaluate("""([x, y]) => {
+            document.getElementById('tabs-list').dispatchEvent(new DragEvent('dragover', {
+                dataTransfer: window.__dt, bubbles: true, cancelable: true, clientX: x, clientY: y
+            }));
+        }""", [band_x, band_y])
+        s = self._slot()
+        assert s and s["display"] == "none"
+        pg.evaluate("""([x, y]) => {
+            document.getElementById('tabs-list').dispatchEvent(new DragEvent('drop', {
+                dataTransfer: window.__dt, bubbles: true, cancelable: true, clientX: x, clientY: y
+            }));
+        }""", [band_x, band_y])
+        pg.evaluate("""(() => {
+            const item = document.querySelector('#browser-tabs-list .bt-tab[data-id="bt1"]');
+            item.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        })()""")
+        pg.wait_for_timeout(100)
+        assert [t["url"] for t in self._stored()] == [t["url"] for t in self.TABS3]
+        assert self._slot() is None
