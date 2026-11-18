@@ -502,7 +502,7 @@ POPUP_DOM = body_dom("popup.html")
 
 def load_view(pg, tabs=None, spaces=None, groups=None, folders=None,
               last_space=None, theme=None, confirm=False, browser_tabs=None,
-              bg=None, tab_color=None, lang=None):
+              bg=None, tab_color=None, lang=None, quick_search=None):
     """about:blank + mock + данные + DOM view.html + view.js.
 
     browser_tabs — список открытых вкладок браузера (chrome.tabs._tabs):
@@ -528,6 +528,8 @@ def load_view(pg, tabs=None, spaces=None, groups=None, folders=None,
         init.append("chrome.storage.local._data['blattam-tab-color'] = " + json.dumps(tab_color) + ";")
     if lang is not None:
         init.append("chrome.storage.local._data['blattam-lang'] = " + json.dumps(lang) + ";")
+    if quick_search is not None:
+        init.append("chrome.storage.local._data['blattam-quick-search'] = " + json.dumps(quick_search) + ";")
     if confirm:
         init.append("window.confirm = () => true;")
     pg.goto("about:blank")
@@ -1514,9 +1516,10 @@ class TestViewSpaceModal:
         assert len(read_storage_raw(self.page, "blattam-spaces")) == 1
         assert not self.page.evaluate("document.getElementById('space-modal').classList.contains('open')")
 
-    def test_rename_space_via_chip(self):
+    def test_rename_space_via_meta_row(self):
+        # ✎ мету-строки — на АКТИВНОЕ пространство (sp1 — единственное)
         load_view(self.page, spaces=[{"id": "sp1", "name": "Main"}])
-        self.page.evaluate("document.querySelector('.space-chip .chip-icon-btn').click()")
+        self.page.evaluate("document.getElementById('meta-rename-btn').click()")
         assert self.page.evaluate("document.getElementById('modal-title').textContent") == "Переименовать пространство"
         assert self.page.locator("#space-name-input").input_value() == "Main"
         self.page.locator("#space-name-input").fill("Renamed")
@@ -1530,12 +1533,13 @@ class TestViewSpaceModal:
 
     def test_rename_space_no_change_no_message(self):
         load_view(self.page, spaces=[{"id": "sp1", "name": "Main"}])
-        self.page.evaluate("document.querySelector('.space-chip .chip-icon-btn').click()")
+        self.page.evaluate("document.getElementById('meta-rename-btn').click()")
         self.page.locator("#modal-confirm").click()  # имя не изменено
         msg = json.loads(self.page.evaluate("JSON.stringify(window.lastMessage || null)"))
         assert msg is None or msg.get("action") != "rename-space"
 
-    def test_delete_space_via_chip(self):
+    def test_delete_space_via_meta_row(self):
+        # ✕ мету-строки — на АКТИВНОЕ пространство (sp1, last_space="sp1")
         load_view(self.page, confirm=True, spaces=[
             {"id": "sp1", "name": "Main"},
             {"id": "sp2", "name": "Work"},
@@ -1543,7 +1547,7 @@ class TestViewSpaceModal:
             {"name": "M", "url": "https://m.com", "spaceId": "sp1"},
             {"name": "W", "url": "https://w.com", "spaceId": "sp2"},
         ], last_space="sp1")
-        self.page.evaluate("document.querySelectorAll('.space-chip .chip-icon-btn')[1].click()")  # ✕ у sp1
+        self.page.evaluate("document.getElementById('meta-delete-btn').click()")
         msg = json.loads(self.page.evaluate("JSON.stringify(window.lastMessage)"))
         assert msg["action"] == "delete-space" and msg["id"] == "sp1"
         sps = read_storage_raw(self.page, "blattam-spaces")
@@ -1551,6 +1555,70 @@ class TestViewSpaceModal:
         tabs = read_storage_raw(self.page, "blattam-tabs")
         assert [t["name"] for t in tabs] == ["W"]  # вкладка удалённого sp1 удалена
         assert read_storage_raw(self.page, "blattam-last-space") == "sp2"
+
+
+# ==========================================
+#  VIEW.JS: МЕТА-СТРОКА ПРОСТРАНСТВА (✎/✕ — на активное)
+# ==========================================
+
+class TestSpaceMetaRow:
+    """✎/✕ live in the meta row (right of the active space name + count) and
+    act on the ACTIVE space, resolved at click time (the row is static, the
+    active space changes). Space chips no longer carry .chip-actions."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    SP = [{"id": "sp1", "name": "Main"}, {"id": "sp2", "name": "Work"}]
+
+    def test_meta_rename_opens_modal_with_active_name(self):
+        load_view(self.page, spaces=self.SP)
+        assert self.page.evaluate("document.getElementById('meta-label').textContent") == "Main"
+        self.page.evaluate("document.getElementById('meta-rename-btn').click()")
+        assert self.page.evaluate("document.getElementById('space-modal').classList.contains('open')")
+        assert self.page.evaluate("document.getElementById('modal-title').textContent") == "Переименовать пространство"
+        assert self.page.locator("#space-name-input").input_value() == "Main"
+
+    def test_meta_delete_active_space_cascades_tabs(self):
+        # ✕ — confirm + delete-space АКТИВНОГО (sp1); вкладки sp1 удаляются
+        # каскадно; активное переключается на sp2 (мета-строка следует)
+        load_view(self.page, confirm=True, spaces=self.SP, tabs=[
+            {"name": "M", "url": "https://m.com", "spaceId": "sp1"},
+            {"name": "W", "url": "https://w.com", "spaceId": "sp2"},
+        ])
+        self.page.evaluate("document.getElementById('meta-delete-btn').click()")
+        msg = json.loads(self.page.evaluate("JSON.stringify(window.lastMessage)"))
+        assert msg["action"] == "delete-space" and msg["id"] == "sp1"
+        sps = read_storage_raw(self.page, "blattam-spaces")
+        assert [s["id"] for s in sps] == ["sp2"]
+        tabs = read_storage_raw(self.page, "blattam-tabs")
+        assert [t["name"] for t in tabs] == ["W"]
+        assert self.page.evaluate("document.getElementById('meta-label').textContent") == "Work"
+
+    def test_meta_buttons_follow_active_space(self):
+        # Кнопки статичны, но резолвят активное пространство в момент клика:
+        # переключение sp1 → sp2 меняет, ЧТО переименовывает ✎
+        load_view(self.page, spaces=self.SP)
+        self.page.evaluate("document.getElementById('meta-rename-btn').click()")
+        assert self.page.locator("#space-name-input").input_value() == "Main"
+        self.page.evaluate("document.getElementById('modal-cancel').click()")
+        self.page.evaluate("document.querySelector('.space-chip[data-space-id=\"sp2\"]').click()")
+        assert self.page.evaluate("document.getElementById('meta-label').textContent") == "Work"
+        self.page.evaluate("document.getElementById('meta-rename-btn').click()")
+        assert self.page.evaluate("document.getElementById('space-modal').classList.contains('open')")
+        assert self.page.locator("#space-name-input").input_value() == "Work"
+        self.page.evaluate("document.getElementById('modal-cancel').click()")
+
+    def test_chip_has_no_actions(self):
+        # Регрессия: ✎/✕ убраны с чипа — в чипе нет ни .chip-actions, ни
+        # .chip-icon-btn; кнопки живут только в мета-строке
+        load_view(self.page, spaces=self.SP)
+        assert self.page.evaluate("document.querySelectorAll('.space-chip .chip-actions').length") == 0
+        assert self.page.evaluate("document.querySelectorAll('.space-chip .chip-icon-btn').length") == 0
+        assert self.page.evaluate("document.querySelectorAll('.meta-actions .meta-icon-btn').length") == 2
+        # Чип остался кнопкой-переключателем: drag-флаг и data-space-id на месте
+        assert self.page.evaluate("document.querySelector('.space-chip').draggable") is True
 
 
 # ==========================================
@@ -1677,7 +1745,7 @@ class TestViewGroupCreate:
     def test_create_group_in_empty_space(self):
         # Пустое пространство (0 вкладок) — кнопка работает и создаёт гбар
         load_view(self.page, spaces=self.SP, tabs=[])
-        self.page.evaluate("document.getElementById('add-group-btn').click()")
+        self.page.evaluate("document.getElementById('create-group-btn').click()")
         assert self.page.evaluate("document.getElementById('modal-title').textContent") == "Новая группа"
         assert self.page.evaluate("document.getElementById('space-modal').classList.contains('open')")
         self.page.locator("#space-name-input").fill("NewG")
@@ -1698,7 +1766,7 @@ class TestViewGroupCreate:
         load_view(self.page, spaces=self.SP, tabs=[
             {"name": "T", "url": "https://t.com", "spaceId": "sp1"},
         ])
-        self.page.evaluate("document.getElementById('add-group-btn').click()")
+        self.page.evaluate("document.getElementById('create-group-btn').click()")
         self.page.locator("#modal-confirm").click()
         groups = read_storage_raw(self.page, "blattam-groups")
         assert len(groups) == 1 and groups[0]["name"] == "Группа 1"
@@ -1708,7 +1776,7 @@ class TestViewGroupCreate:
 
     def test_create_group_cancel_noop(self):
         load_view(self.page, spaces=self.SP, tabs=[])
-        self.page.evaluate("document.getElementById('add-group-btn').click()")
+        self.page.evaluate("document.getElementById('create-group-btn').click()")
         self.page.locator("#modal-cancel").click()
         assert read_storage_raw(self.page, "blattam-groups") == []
         assert not self.page.evaluate("document.getElementById('space-modal').classList.contains('open')")
@@ -2414,91 +2482,64 @@ class TestSelectedBatchDnD:
 #  VIEW.JS: «+ ГРУППА» — СТРОКА В КОНЦЕ СПИСКА ВКЛАДОК
 # ==========================================
 
-class TestAddGroupRow:
+class TestCreateGroupRailButton:
     @pytest.fixture(autouse=True)
     def _setup(self, page):
         self.page = page
 
     SP = [{"id": "sp1", "name": "Main"}]
 
-    def _inject_real_styles(self):
-        # Харнес ставит только body.innerHTML — подгружаем настоящие стили
-        # (theme.css + <style> view.html), чтобы computed-значения были реальными
-        theme = load_file("theme.css")
-        html = load_file("view.html")
-        style = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
-        self.page.evaluate(
-            "(styles) => { var st = document.createElement('style'); st.textContent = styles; document.head.appendChild(st); }",
-            [theme + "\n" + style])
-
-    def test_add_group_btn_last_child_dashed_full_width(self):
-        # Обычное пространство (группа + негрупповая вкладка): кнопка —
-        # ПОСЛЕДНИЙ элемент #tabs-list, пунктирная, полноширинная
-        load_view(self.page, spaces=self.SP, groups=[
-            {"id": "g1", "name": "Dev", "spaceId": "sp1", "collapsed": False},
-        ], tabs=[
-            {"name": "D1", "url": "https://d1.com", "spaceId": "sp1", "groupId": "g1"},
-            {"name": "L", "url": "https://l.com", "spaceId": "sp1"},
-        ])
-        self._inject_real_styles()
-        d = json.loads(self.page.evaluate("""(() => {
-          const list = document.getElementById('tabs-list');
-          const btn = document.getElementById('add-group-btn');
-          const cs = getComputedStyle(btn);
-          return JSON.stringify({
-            inList: list.contains(btn),
-            isLast: list.lastElementChild === btn,
-            borderStyle: cs.borderStyle,
-            height: cs.height,
-            listW: list.getBoundingClientRect().width,
-            btnW: btn.getBoundingClientRect().width
-          });
-        })()"""))
-        assert d["inList"] and d["isLast"], d
-        assert d["borderStyle"] == "dashed", d
-        assert d["height"] == "40px", d
-        assert abs(d["btnW"] - d["listW"]) <= 4, d
-        # Кнопка больше не в мета-строке (там только метатитул)
-        assert self.page.evaluate("document.querySelector('.metarow #add-group-btn')") is None
-
-    def test_add_group_btn_in_groups_only_space(self):
-        # Пространство без вкладок, но с группами: кнопка после пустых гбаров
-        load_view(self.page, spaces=self.SP, groups=[
-            {"id": "g1", "name": "Dev", "spaceId": "sp1", "collapsed": False},
-        ])
-        d = json.loads(self.page.evaluate("""(() => {
-          const list = document.getElementById('tabs-list');
-          const btn = document.getElementById('add-group-btn');
-          return JSON.stringify({
-            inList: list.contains(btn),
-            isLast: list.lastElementChild === btn,
-            bars: document.querySelectorAll('.gbar').length
-          });
-        })()"""))
-        assert d["inList"] and d["isLast"] and d["bars"] == 1, d
-
-    def test_add_group_btn_in_fully_empty_space(self):
-        # Полностью пустое пространство: кнопка присутствует (рядом с empty-state)
+    def test_rail_button_position_after_theme(self):
+        # «Создать группу» — .rail-item в #rail-controls, сразу ПОСЛЕ #theme-btn
         load_view(self.page, spaces=self.SP, tabs=[])
         d = json.loads(self.page.evaluate("""(() => {
-          const list = document.getElementById('tabs-list');
-          const btn = document.getElementById('add-group-btn');
+          const btn = document.getElementById('create-group-btn');
+          const ctrl = document.getElementById('rail-controls');
+          const rail = document.getElementById('rail-left');
           return JSON.stringify({
-            inList: list.contains(btn),
-            isLast: list.lastElementChild === btn,
-            emptyVisible: document.getElementById('empty-state').style.display !== 'none'
+            exists: !!btn,
+            inRail: rail.contains(btn),
+            inControls: ctrl.contains(btn),
+            isRailItem: btn && btn.classList.contains('rail-item'),
+            afterTheme: btn && btn.previousElementSibling
+              && btn.previousElementSibling.id === 'theme-btn',
+            beforeExport: btn && btn.nextElementSibling
+              && btn.nextElementSibling.id === 'export-btn'
           });
         })()"""))
-        assert d["inList"] and d["isLast"] and d["emptyVisible"], d
+        assert d == {"exists": True, "inRail": True, "inControls": True,
+                     "isRailItem": True, "afterTheme": True, "beforeExport": True}, d
 
-    def test_add_group_btn_opens_group_modal(self):
-        # Клик открывает ту же модалку создания группы
+    def test_rail_button_label_ru_default(self):
+        # Подпись .t — ru-по-умолчанию «Создать группу» + подстрока .s
         load_view(self.page, spaces=self.SP, tabs=[])
-        self.page.evaluate("document.getElementById('add-group-btn').click()")
+        d = json.loads(self.page.evaluate("""(() => {
+          const btn = document.getElementById('create-group-btn');
+          return JSON.stringify({
+            t: btn.querySelector('.t').textContent,
+            s: btn.querySelector('.s').textContent,
+            title: btn.getAttribute('title')
+          });
+        })()"""))
+        assert d["t"] == "Создать группу", d
+        assert d["s"] == "Новая группа в этом пространстве", d
+        assert d["title"] == "Создать новую группу", d
+
+    def test_rail_button_opens_group_modal_in_empty_space(self):
+        # Клик открывает модалку создания группы даже в пустом пространстве
+        load_view(self.page, spaces=self.SP, tabs=[])
+        self.page.evaluate("document.getElementById('create-group-btn').click()")
         assert self.page.evaluate("document.getElementById('modal-title').textContent") == "Новая группа"
         assert self.page.evaluate("document.getElementById('space-modal').classList.contains('open')")
 
+    def test_old_add_group_btn_absent(self):
+        # Старая пунктирная строка «+ Группа» в #tabs-list удалена из DOM
+        load_view(self.page, spaces=self.SP, tabs=[])
+        assert self.page.evaluate("document.getElementById('add-group-btn')") is None
+        assert self.page.evaluate("document.querySelector('#tabs-list .add-group-row')") is None
 
+
+# ==========================================
 # ==========================================
 #  VIEW.JS: КОНТРАСТ КАРТОЧЕК (--card-bg ≠ фон страницы, обе темы)
 # ==========================================
@@ -3358,7 +3399,7 @@ class TestBlatTabsDnD:
         })()""")
         s = json.loads(out)
         assert s["line"] is False  # линии нет вообще
-        assert s["order"] == ["card", "card", "slot", "card", "other"]  # A (скрыта), B, [заглушка после B — B сдвинулась влево], C — курсор внутри B
+        assert s["order"] == ["card", "card", "slot", "card"]  # A (скрыта), B, [заглушка после B — B сдвинулась влево], C — курсор внутри B
         self._end_drag()
 
     def test_drop_into_gap(self):
@@ -3431,7 +3472,7 @@ class TestBlatTabsDnD:
         })()""")
         s = json.loads(slot)
         assert s["line"] is False
-        assert s["order"] == ["card", "card", "card", "card", "slot", "other"]  # без keeper: ghost в той же (loose) секции, после D
+        assert s["order"] == ["card", "card", "card", "card", "slot"]  # без keeper: ghost в той же (loose) секции, после D
         self._drop(r["left"] + r["width"] * 0.4, r["top"] + r["height"] * 0.5)
         self._end_drag()
         # A встаёт на место D — ПОСЛЕ D (заглушка заняла клетку D, D сдвинулась влево)
@@ -3579,7 +3620,7 @@ class TestTabGhostSlot:
         assert s["present"] is True and s["count"] == 1
         assert s["sameWidth"] is True and s["sameHeight"] is True
         # Заглушка в слоте исходной карточки: сразу после A, до B/C
-        assert self._slot_order() == ["card", "slot", "card", "card", "other"]
+        assert self._slot_order() == ["card", "slot", "card", "card"]
 
     def test_placeholder_is_empty_silhouette_not_interactive(self):
         load_view(self.page, tabs=self.TABS3)
@@ -3606,23 +3647,23 @@ class TestTabGhostSlot:
         self._start_drag()  # A: [card, slot, card, card, other]
         c = self._card_rect(2)
         self._hover(c["left"] + c["width"] * 0.25, c["top"] + c["height"] * 0.25)  # курсор внутри C — C сдвинулась влево
-        assert self._slot_order() == ["card", "card", "card", "slot", "other"]  # без keeper: ghost после C (взял её клетку)
+        assert self._slot_order() == ["card", "card", "card", "slot"]  # без keeper: ghost после C (взял её клетку)
         c = self._card_rect(2)
         self._hover(c["left"] + c["width"] + 20, c["top"] + c["height"] * 0.5)  # пустое место справа от C → заглушка после C
-        assert self._slot_order() == ["card", "card", "card", "slot", "other"]  # без keeper: ghost в секции
+        assert self._slot_order() == ["card", "card", "card", "slot"]  # без keeper: ghost в секции
         self._end_drag()
 
     def test_placeholder_moves_to_earlier_slots(self):
         tabs4 = self.TABS3 + [{"name": "D", "url": "https://d.com"}]
         load_view(self.page, tabs=tabs4)
         self._start_drag(2)  # C: [A, B, C(none), slot, D]
-        assert self._slot_order() == ["card", "card", "card", "slot", "card", "other"]
+        assert self._slot_order() == ["card", "card", "card", "slot", "card"]
         a = self._card_rect(0)
         self._hover(a["left"] + a["width"] * 0.25, a["top"] + a["height"] * 0.5)  # самое начало
-        assert self._slot_order() == ["slot", "card", "card", "card", "card", "other"]  # без keeper: ghost в секции
+        assert self._slot_order() == ["slot", "card", "card", "card", "card"]  # без keeper: ghost в секции
         b = self._card_rect(1)
         self._hover(b["left"] + b["width"] * 0.25, b["top"] + b["height"] * 0.5)  # курсор внутри B — B сдвинулась влево
-        assert self._slot_order() == ["card", "card", "slot", "card", "card", "other"]  # без keeper: ghost после B (взял её клетку)
+        assert self._slot_order() == ["card", "card", "slot", "card", "card"]  # без keeper: ghost после B (взял её клетку)
         self._end_drag()
 
     def test_drop_commits_order_and_clears_placeholder(self):
@@ -3665,11 +3706,11 @@ class TestTabGhostSlot:
         self._start_drag(1)  # B
         a = self._card_rect(0)
         self._hover(a["left"] + a["width"] * 0.25, a["top"] + a["height"] * 0.5)  # заглушка ушла в начало
-        assert self._slot_order() == ["slot", "card", "card", "card", "other"]  # без keeper: ghost в секции
+        assert self._slot_order() == ["slot", "card", "card", "card"]  # без keeper: ghost в секции
         self._end_drag()
         assert self.page.evaluate("document.querySelectorAll('.tab-ghost-slot').length") == 0
         assert self.page.evaluate("!!document.querySelector('.tab-ghost')") is False
-        assert self._slot_order() == ["card", "card", "card", "other"]
+        assert self._slot_order() == ["card", "card", "card"]
         b_display = self.page.evaluate(
             "getComputedStyle(document.querySelectorAll('#tabs-list .tab-card')[1]).display")
         assert b_display != "none"
@@ -4013,7 +4054,7 @@ class TestGroupAwareGhostSlot:
         self._start_drag("A")
         c = self._card_rect("C")
         self._hover(c["left"] + c["width"] + 20, c["top"] + c["height"] * 0.5)  # пустое место справа от C → конец g1
-        assert self._slot_order() == ["gbar", "card", "card", "card", "slot", "gbar", "card", "card", "other"]  # без keeper: ghost в исходной секции
+        assert self._slot_order() == ["gbar", "card", "card", "card", "slot", "gbar", "card", "card"]  # без keeper: ghost в исходной секции
         self._end_drag()
 
     def test_drop_commits_end_of_group(self):
@@ -4035,7 +4076,7 @@ class TestGroupAwareGhostSlot:
         self._start_drag("A")
         e = self._card_rect("E")
         self._hover(e["left"] + e["width"] + 20, e["top"] + e["height"] * 0.5)  # пустое место справа от E → конец списка
-        assert self._slot_order() == ["gbar", "card", "card", "card", "gbar", "card", "card", "slot", "other"]  # без keeper: карточка A остаётся в сетке
+        assert self._slot_order() == ["gbar", "card", "card", "card", "gbar", "card", "card", "slot"]  # без keeper: карточка A остаётся в сетке
         self._drop(e["left"] + e["width"] + 20, e["top"] + e["height"] * 0.5)
         assert self._names() == ["D", "B", "E", "A", "C"]
         assert self._group_of("A") == "g2"
@@ -4048,7 +4089,7 @@ class TestGroupAwareGhostSlot:
         e = self._card_rect("E")
         x, y = e["left"] + e["width"] * 0.25, e["top"] + e["height"] * 0.5  # курсор внутри E — E сдвинулась влево, заглушка после E
         self._hover(x, y)
-        assert self._slot_order() == ["gbar", "card", "card", "card", "gbar", "card", "card", "slot", "other"]  # без keeper: карточка A остаётся в сетке
+        assert self._slot_order() == ["gbar", "card", "card", "card", "gbar", "card", "card", "slot"]  # без keeper: карточка A остаётся в сетке
         self._drop(x, y)
         assert self._names() == ["D", "B", "E", "A", "C"]
         assert self._group_of("A") == "g2"
@@ -4062,7 +4103,7 @@ class TestGroupAwareGhostSlot:
         d = self._card_rect("D")
         x, y = d["left"] + d["width"] * 0.25, d["top"] + 1
         self._hover(x, y)
-        assert self._slot_order() == ["gbar", "card", "card", "card", "gbar", "slot", "card", "card", "other"]  # без keeper: карточка A остаётся в сетке
+        assert self._slot_order() == ["gbar", "card", "card", "card", "gbar", "slot", "card", "card"]  # без keeper: карточка A остаётся в сетке
         self._drop(x, y)
         assert self._names() == ["A", "D", "B", "E", "C"]
         assert self._group_of("A") == "g2"
@@ -4082,7 +4123,7 @@ class TestGroupAwareGhostSlot:
         l2 = self._card_rect("L2")
         x, y = l2["left"] + l2["width"] * 0.25, l2["top"] + l2["height"] * 0.5
         self._hover(x, y)  # курсор внутри L2 — L2 сдвинулась влево, заглушка после L2 (конец loose-секции)
-        assert self._slot_order() == ["gbar", "card", "card", "other", "card", "card", "slot", "other"]  # без keeper: карточка A остаётся в сетке
+        assert self._slot_order() == ["gbar", "card", "card", "other", "card", "card", "slot"]  # без keeper: карточка A остаётся в сетке
         self._drop(x, y)
         assert self._names() == ["L1", "B", "L2", "A"]
         assert self._group_of("A") is None
@@ -4102,7 +4143,7 @@ class TestGroupAwareGhostSlot:
         l1 = self._card_rect("L1")
         x, y = l1["left"] + l1["width"] * 0.25, l1["top"] + 1
         self._hover(x, y)
-        assert self._slot_order() == ["gbar", "card", "card", "other", "slot", "card", "card", "other"]  # без keeper: карточка A остаётся в сетке
+        assert self._slot_order() == ["gbar", "card", "card", "other", "slot", "card", "card"]  # без keeper: карточка A остаётся в сетке
         self._drop(x, y)
         assert self._names() == ["A", "L1", "B", "L2"]
         assert self._group_of("A") is None
@@ -4249,7 +4290,7 @@ class TestCollapsedRunGhostSlot:
         assert d["prev"] == "B" and d["next"] == "C", d  # заглушка перед C в хвоте g1
         assert self._slot_order() == ["gbar", "card", "card", "slot", "card",
                                       "gbar", "gbar", "gbar", "gbar",
-                                      "card", "card", "card", "other"]
+                                      "card", "card", "card"]
         self._end_drag()
 
     def test_ghost_above_first_collapsed_header(self):
@@ -4357,7 +4398,7 @@ class TestDragRowReflow:
         })()""")
 
     def _anchor_top(self):
-        return self.page.evaluate("document.getElementById('add-group-btn').getBoundingClientRect().top")
+        return self.page.evaluate("document.getElementById('tabs-list').getBoundingClientRect().bottom")
 
     def test_in_section_no_keeper_row_fixed(self):
         # Группа на 2 строки (5 колонок при 1280px: 5+1); тащим вкладку из
@@ -4396,7 +4437,7 @@ class TestDragRowReflow:
             t9Top: b9.top,
             t9Display: find('T6').style.display,
             slotTop: slot.getBoundingClientRect().top,
-            top: document.getElementById('add-group-btn').getBoundingClientRect().top
+            top: document.getElementById('tabs-list').getBoundingClientRect().bottom
           });
         })()"""))
         assert d["keepers"] == 0, d
@@ -4488,7 +4529,7 @@ class TestDragRowReflow:
             slotAfterU1: !!prev && prev.classList.contains('tab-card') &&
               prev.querySelector('.tab-name') &&
               prev.querySelector('.tab-name').textContent.trim() === 'U1',
-            top: document.getElementById('add-group-btn').getBoundingClientRect().top
+            top: document.getElementById('tabs-list').getBoundingClientRect().bottom
           });
         })()"""))
         assert d["keepers"] == 1, d
@@ -6776,12 +6817,15 @@ class TestEmptyGroupDrop:
             {"id": "g1", "name": "Empty", "spaceId": "sp1", "collapsed": False},
             {"id": "g2", "name": "Coll", "spaceId": "sp1", "collapsed": True},
         ], tabs=[])
-        assert self.page.evaluate("document.getElementById('tabs-list').lastElementChild.id") == "add-group-btn"
+        assert self.page.evaluate("document.getElementById('add-group-btn')") is None
+        assert self.page.evaluate(
+            "document.getElementById('tabs-list').lastElementChild.classList.contains('gbar')")
         assert self._slots() == []
-        # Слоотов нет — обе шапки свёрнуты (пустая группа — всегда свёрнутый вид)
+        # Слоотов нет — обе шапки свёрнуты (пустая группа — всегда свёрнутый вид),
+        # последний элемент — шапка группы (строка «+ Группа» удалена)
         assert json.loads(self.page.evaluate(
             "JSON.stringify([...document.getElementById('tabs-list').children].map(e => e.className))")) == \
-            ["gbar gbar-collapsed", "gbar gbar-collapsed", "add-group-row"]
+            ["gbar gbar-collapsed", "gbar gbar-collapsed"]
 
 
 # ==========================================
@@ -7508,21 +7552,12 @@ class TestSpaceChipStyles:
         assert d["chipLeft"] - d["barLeft"] <= 8, d
 
     def test_add_group_btn_full_width_row_in_tabs_list(self):
-        # «+ Группа» больше не в мета-строке — полноширинная строка в #tabs-list
+        # Пунктирная строка «+ Группа» из #tabs-list удалена (кнопка создания
+        # группы теперь — .rail-item «Создать группу» в левой рейке)
         load_view(self.page, tabs=self.TABS)
         self._inject_real_styles()
-        d = json.loads(self.page.evaluate("""(() => {
-          const list = document.getElementById('tabs-list');
-          const btn = document.getElementById('add-group-btn');
-          return JSON.stringify({
-            inList: list.contains(btn),
-            isLast: list.lastElementChild === btn,
-            listW: list.getBoundingClientRect().width,
-            btnW: btn.getBoundingClientRect().width
-          });
-        })()"""))
-        assert d["inList"] and d["isLast"], d
-        assert abs(d["btnW"] - d["listW"]) <= 4, d
+        assert self.page.evaluate("document.getElementById('add-group-btn')") is None
+        assert self.page.evaluate("document.querySelector('#tabs-list .add-group-row')") is None
 
 
 # ==========================================
@@ -8414,7 +8449,7 @@ class TestDragRowKeeper:
 
     def _anchor_top(self):
         return self.page.evaluate(
-            "document.getElementById('add-group-btn').getBoundingClientRect().top")
+            "document.getElementById('tabs-list').getBoundingClientRect().bottom")
 
     def _inject_css(self):
         css = load_file("theme.css")
@@ -8458,7 +8493,7 @@ class TestDragRowKeeper:
             srcOpacity: getComputedStyle(src).opacity,
             slotAtStart: document.getElementById('tabs-list').firstElementChild === slot,
             bLeft: bb.left, bTop: bb.top,
-            top: document.getElementById('add-group-btn').getBoundingClientRect().top
+            top: document.getElementById('tabs-list').getBoundingClientRect().bottom
           });
         })()"""))
         assert d["keepers"] == 0, d
@@ -8539,7 +8574,7 @@ class TestDragRowKeeper:
             srcDisplay: src.style.display,
             srcOpacity: getComputedStyle(src).opacity,
             slotAtG1Head: !!slot && !!bar && bar.nextElementSibling === slot,
-            top: document.getElementById('add-group-btn').getBoundingClientRect().top
+            top: document.getElementById('tabs-list').getBoundingClientRect().bottom
           });
         })()"""))
         assert d["keepers"] == 0, d
@@ -8558,8 +8593,8 @@ class TestDragSourceRowHold:
     вооружение шапок групп её не видят) — и только когда без него число
     строк секции уменьшается (nFull — все вкладки секции, включая
     схваченную; rOrig = ceil(nFull/cols)). Холдер — в хвоте секции (после
-    последней видимой карточки / после .gbar, если карточек нет / перед
-    «+ Группа» в негрупповой секции). Снимается при возврате заглушки в
+    последней видимой карточки / после .gbar, если карточек нет / в конце
+    #tabs-list в негрупповой секции). Снимается при возврате заглушки в
     секцию, dragend/Escape и на перерисовке. Лейауты без схлопывания —
     холдера нет."""
 
@@ -8653,8 +8688,7 @@ class TestDragSourceRowHold:
             keepers: document.querySelectorAll('.tab-row-keeper').length,
             kOpacity: k ? getComputedStyle(k).opacity : null,
             kTop: k ? k.getBoundingClientRect().top : null,
-            kBeforeBtn: k && k.nextElementSibling ?
-              k.nextElementSibling.id === 'add-group-btn' : false,
+            kIsLast: k ? k === document.getElementById('tabs-list').lastElementChild : false,
             kPrevName: k ? nm(k.previousElementSibling) : null,
             kPrevGbar: k && k.previousElementSibling && k.previousElementSibling.classList
               && k.previousElementSibling.classList.contains('gbar')
@@ -8662,14 +8696,14 @@ class TestDragSourceRowHold:
             ghostHidden: (() => { const s = document.querySelector('.tab-ghost-slot');
               return !s || getComputedStyle(s).display === 'none'; })(),
             gbar2Top: bar2 ? bar2.getBoundingClientRect().top : null,
-            btnTop: document.getElementById('add-group-btn').getBoundingClientRect().top
+            btnTop: document.getElementById('tabs-list').getBoundingClientRect().bottom
           });
         })()"""))
 
     def test_lone_last_row_tab_ghost_moved_out_row_held(self):
         # Главное: группа 5+1 — единственную вкладку последней строки тащим
         # в другую группу: последняя строка ДЕРЖИТСЯ (холдер на её месте),
-        # шапка следующей группы и «+ Группа» не сдвинулись
+        # шапка следующей группы и низ списка не сдвинулись
         self._load(self.G2, self._g1_tabs(6) + self._g2_tabs(2))
         pre = self._state()
         t6 = self._rect("T6")
@@ -8886,8 +8920,8 @@ class TestDragSourceRowHold:
         assert self._state()["keepers"] == 0
 
     def test_loose_section_row_held(self):
-        # Негрупповая секция 5+1: вкладка уезжает в группу — холдер перед
-        # «+ Группа» держит последнюю строку
+        # Негрупповая секция 5+1: вкладка уезжает в группу — холдер в хвоте
+        # #tabs-list держит последнюю строку
         tabs = self._g2_tabs(2) + [
             {"name": f"T{i}", "url": f"https://t{i}.com", "spaceId": "sp1"}
             for i in range(1, 7)]
@@ -8898,7 +8932,7 @@ class TestDragSourceRowHold:
         self._hover(u1["left"] + u1["width"] * 0.5, u1["top"] + u1["height"] * 0.5)
         d = self._state()
         assert d["keepers"] == 1, d
-        assert d["kBeforeBtn"] is True, d  # холдер — перед «+ Группа»
+        assert d["kIsLast"] is True, d  # холдер — последний элемент #tabs-list
         assert abs(d["btnTop"] - pre["btnTop"]) < 2, (pre["btnTop"], d["btnTop"])
         assert abs(d["gbar2Top"] - pre["gbar2Top"]) < 2, (pre["gbar2Top"], d["gbar2Top"])
         self._end_drag()
@@ -9401,7 +9435,7 @@ class TestGhostOverGroupEmptyArea:
             while (h && !h.classList.contains('gbar') &&
                    !h.classList.contains('loose-label') && h.id !== 'add-group-btn')
               h = h.nextElementSibling;
-            const hTop = h ? h.getBoundingClientRect().top : Infinity;
+            const hTop = h ? h.getBoundingClientRect().top : list.bottom;
             y = (bottom + hTop) / 2;
           }
           return [list.left + list.width / 2, y];
@@ -10087,31 +10121,6 @@ class TestSpaceChipReorder:
         by = {t["name"]: t for t in tabs}
         assert by["B3"]["spaceId"] == "sp1"
         assert self._spaces() == ["Alpha", "Beta", "Gamma"]
-
-    def test_chip_icon_btn_press_no_drag_and_opens_rename(self):
-        # Нажатие на ✎ + движение ≥5px: drag чипа НЕ стартует (draggable снят
-        # guard'ом), клик по кнопке работает — открывается модалка rename
-        load_view(self.page, spaces=self.SP, tabs=self.TABS)
-        self.page.evaluate("window.__chipDragStarts = 0; document.addEventListener('dragstart', () => { window.__chipDragStarts++; }, true);")
-        self.page.hover(".space-chip")
-        box = self.page.evaluate("(() => { const r = document.querySelector('.space-chip .chip-icon-btn').getBoundingClientRect(); return {x: r.x + r.width/2, y: r.y + r.height/2}; })()")
-        self.page.mouse.move(box["x"], box["y"], steps=2)
-        self.page.wait_for_timeout(60)
-        self.page.mouse.down()
-        self.page.wait_for_timeout(40)
-        self.page.evaluate("window.__during = document.querySelector('.space-chip').draggable")
-        self.page.mouse.move(box["x"] - 5, box["y"] - 4, steps=2)
-        self.page.wait_for_timeout(50)
-        self.page.mouse.up()
-        self.page.wait_for_timeout(200)
-        assert self.page.evaluate("window.__during") is False
-        assert self.page.evaluate("document.querySelector('.space-chip').draggable") is True
-        assert self.page.evaluate("window.__chipDragStarts") == 0
-        # Клик по ✎ открывает модалку переименования
-        assert self.page.evaluate("document.getElementById('modal-title').textContent") == "Переименовать пространство"
-        assert self.page.evaluate("document.getElementById('space-modal').classList.contains('open')")
-        # Чип без «застрявших» классов после press
-        assert self.page.evaluate("document.querySelector('.space-chip').className") == "chip space-chip active"
 
 class TestSpaceChipGhostSlot:
     """Drag chips of spaces — warm ghost-slot, same as tab-card drag:
@@ -11419,8 +11428,8 @@ class TestRailLayout:
             assert d["right"]["shadow"] == "none", (theme, d)
 
     def test_left_rail_contents(self):
-        # 4 hover-reveal-строки (Тема/Экспорт/Импорт/Настройки) в #rail-controls,
-        # все кнопки — в левой рейке; #settings-btn — no-op; #import-input скрыт
+        # 5 hover-reveal-строк (Тема/Создать группу/Экспорт/Импорт/Настройки)
+        # в #rail-controls; все кнопки — в левой рейке; #import-input скрыт
         load_view(self.page, tabs=self.TABS)
         self._inject_real_styles()
         self.page.wait_for_timeout(120)
@@ -11443,8 +11452,8 @@ class TestRailLayout:
               && document.querySelector('.workspace').nextElementSibling.id === 'import-input'
           });
         })()"""))
-        assert d["items"] == 4, d
-        assert d["titles"] == ["Тема", "Экспорт", "Импорт", "Настройки"], d
+        assert d["items"] == 5, d
+        assert d["titles"] == ["Тема", "Создать группу", "Экспорт", "Импорт", "Настройки"], d
         assert d["themeInRail"] and d["exportInRail"] and d["importInRail"], d
         assert d["searchInRail"] and d["brandFirst"], d
         assert d["settingsExists"], d
@@ -11592,6 +11601,79 @@ class TestRailLayout:
         assert d["rightDisplay"] == "none", d
         assert d["lblDisplay"] == "none", d
         assert d["goDisplay"] == "none", d
+
+
+class TestRailVersion:
+    """Версия в левой рейке: строка #rail-version сразу НАД карточкой
+    аккаунта (.rail-accounts) — margin-top:auto перенесён с .rail-accounts
+    на .rail-version (оба элемента в нижнем закреплённом блоке рейки);
+    текст — динамический chrome.runtime.getManifest().version (без i18n)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self._errors = []
+        page.on("pageerror", self._on_err)
+        yield
+        assert not self._errors, self._errors
+        page.remove_listener("pageerror", self._on_err)
+
+    def _on_err(self, err):
+        self._errors.append(str(err))
+
+    TABS = [
+        {"name": "GitHub", "url": "https://github.com"},
+        {"name": "Docs", "url": "https://docs.python.org"},
+    ]
+
+    def _inject_real_styles(self):
+        theme = load_file("theme.css")
+        html = load_file("view.html")
+        style = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate(
+            "(styles) => { var st = document.createElement('style'); st.textContent = styles; document.head.appendChild(st); }",
+            [theme + "\n" + style])
+
+    def test_rail_version_above_accounts(self):
+        # #rail-version существует внутри #rail-left, СЛЕДУЮЩИЙ элемент —
+        # .rail-accounts, текст == '1.0.0' (mock манифеста), закреплена внизу:
+        # центр строки >= 0.7 высоты рейки
+        self.page.set_viewport_size({"width": 1440, "height": 900})
+        load_view(self.page, tabs=self.TABS)
+        self._inject_real_styles()
+        self.page.wait_for_timeout(120)
+        d = json.loads(self.page.evaluate("""(() => {
+          const rail = document.getElementById('rail-left');
+          const ver = document.getElementById('rail-version');
+          if (!ver || !rail.contains(ver)) return JSON.stringify({exists: false});
+          const r = ver.getBoundingClientRect();
+          const rr = rail.getBoundingClientRect();
+          const next = ver.nextElementSibling;
+          return JSON.stringify({
+            exists: true,
+            text: ver.textContent,
+            nextIsAccounts: next && next.classList.contains('rail-accounts'),
+            centerFrac: (r.top + r.height / 2) / rr.height
+          });
+        })()"""))
+        assert d["exists"], d
+        assert d["text"] == "1.0.0", d
+        assert d["nextIsAccounts"], d
+        assert d["centerFrac"] >= 0.7, d
+
+    def test_rail_version_text_matches_manifest(self):
+        # Текст #rail-version == chrome.runtime.getManifest().version (оба —
+        # одной evaluate-выражением): строка отражает манифест, не застаревший литерал
+        load_view(self.page, tabs=self.TABS)
+        d = json.loads(self.page.evaluate("""(() => {
+          const ver = document.getElementById('rail-version');
+          return JSON.stringify({
+            text: ver ? ver.textContent : null,
+            manifest: chrome.runtime.getManifest().version
+          });
+        })()"""))
+        assert d["text"] is not None, d
+        assert d["text"] == d["manifest"], d
 
 
 class TestLeftRailSearchAndCleanup:
@@ -12494,7 +12576,7 @@ class TestRailCenterGhost:
         assert s["present"] is True and s["inCenter"] is True
         assert s["connected"] is True and s["count"] == 1
         assert s["display"] != "none"
-        assert self._slot_order() == ["card", "slot", "card", "card", "other"]
+        assert self._slot_order() == ["card", "slot", "card", "card"]
 
     def test_ghost_tracks_insertion_slot(self):
         # Заглушка следует за курсором по слотам центра, как у драга карточки
@@ -12502,11 +12584,11 @@ class TestRailCenterGhost:
         self.page.wait_for_timeout(80)
         self._rail_drag_start("bt1")
         self._rail_over(1, 'before')  # перед B
-        assert self._slot_order() == ["card", "slot", "card", "card", "other"]
+        assert self._slot_order() == ["card", "slot", "card", "card"]
         self._rail_over(0, 'before')  # перед A (начало списка)
-        assert self._slot_order() == ["slot", "card", "card", "card", "other"]
+        assert self._slot_order() == ["slot", "card", "card", "card"]
         self._rail_over(2, 'after')  # после C (конец списка)
-        assert self._slot_order() == ["card", "card", "card", "slot", "other"]
+        assert self._slot_order() == ["card", "card", "card", "slot"]
 
     def test_ghost_matches_card_drag_ghost_styling(self):
         # Заглушка рейки → центр — та же «тёплая» заглушка, что у драга
@@ -12781,7 +12863,7 @@ class TestSettingsBackground:
             titles = json.loads(self.page.evaluate(
                 "JSON.stringify([...document.querySelectorAll('#settings-modal .settings-section-title')]"
                 ".map(el => el.textContent.trim()))"))
-            assert titles == ["Фон", "Цвет вкладок", "Язык", "Частые вопросы", "О программе"]
+            assert titles == ["Фон", "Цвет вкладок", "Язык", "Экспериментальное", "Частые вопросы", "О программе"]
             assert self.page.evaluate("document.getElementById('bg-file-btn').textContent.trim()") == "Выбрать картинку"
             assert self.page.evaluate("document.getElementById('bg-clear-btn').textContent.trim()") == "Убрать"
             # скрытый input-файла рядом с #import-input
@@ -12948,7 +13030,7 @@ class TestSettingsTabColor:
             titles = json.loads(self.page.evaluate(
                 "JSON.stringify([...document.querySelectorAll('#settings-modal .settings-section-title')]"
                 ".map(el => el.textContent.trim()))"))
-            assert titles == ["Фон", "Цвет вкладок", "Язык", "Частые вопросы", "О программе"]
+            assert titles == ["Фон", "Цвет вкладок", "Язык", "Экспериментальное", "Частые вопросы", "О программе"]
             assert self.page.evaluate("document.getElementById('tab-color-input').type") == "color"
             assert self.page.evaluate(
                 "document.getElementById('tab-color-reset').textContent.trim()") == "Сбросить"
@@ -14585,8 +14667,7 @@ class TestDragEmptyBandHome:
         # и в другой точке той же низовой полосы
         pt2 = self.page.evaluate("""(() => {
           const lr = document.getElementById('tabs-list').getBoundingClientRect();
-          const b = document.getElementById('add-group-btn').getBoundingClientRect();
-          return [(lr.left + lr.right) / 2, b.bottom + (lr.bottom - b.bottom) / 2];
+          return [(lr.left + lr.right) / 2, lr.bottom - 10];
         })()""")
         self._over_point(*pt2)
         d = self._ghost()
@@ -14849,17 +14930,18 @@ class TestDragBandHeaderRowBottom:
         }""", gid)
 
     def _btn_row_point(self):
+        # Низовая полоса: точка под последней строкой (list.bottom - 10) —
+        # в отступе .tabs-list, заглушка скрыта, дроп отменяется
         return self.page.evaluate("""() => {
           const list = document.getElementById('tabs-list').getBoundingClientRect();
-          const b = document.getElementById('add-group-btn').getBoundingClientRect();
-          return [list.left + list.width / 2, b.top + b.height / 2];
+          return [list.left + list.width / 2, list.bottom - 10];
         }""")
 
     def _bottom_padding_point(self):
+        # Отступ .tabs-list (110px) — середина низовой полосы
         return self.page.evaluate("""() => {
           const list = document.getElementById('tabs-list').getBoundingClientRect();
-          const b = document.getElementById('add-group-btn').getBoundingClientRect();
-          return [list.left + list.width / 2, (b.bottom + list.bottom) / 2];
+          return [list.left + list.width / 2, list.bottom - 55];
         }""")
 
     # === состояние ===
@@ -16722,11 +16804,10 @@ class TestNoMansLandTerritory:
         })()""")
 
     def _bottom_point(self):
-        """Точка в низовой полосе: строка #add-group-btn под последней строкой."""
+        """Точка в низовой полосе: под последней строкой (отступ #tabs-list)."""
         return self.page.evaluate("""(() => {
           const lr = document.getElementById('tabs-list').getBoundingClientRect();
-          const btn = document.getElementById('add-group-btn').getBoundingClientRect();
-          return {x: (lr.left + lr.right) / 2, y: (btn.top + btn.bottom) / 2};
+          return {x: (lr.left + lr.right) / 2, y: lr.bottom - 10};
         })()""")
 
     # 1. Зазор между двумя карточками, левая половина: заглушка ВИДИМА,
@@ -18186,22 +18267,30 @@ class TestI18nDynamic:
         d = self.page.evaluate("document.getElementById('selection-count').textContent")
         assert d == "2 выбрано", d
 
-    def test_ungrouped_addgroup_en(self):
+    def test_rail_group_label_i18n(self):
+        # «Создать группу» в левой рейке: i18n-подписи (.t/.title) ru + en;
+        # i18n шапки негрупповой секции сохранён (en)
         tabs = [{"name": "T", "url": "http://t.example.com", "spaceId": "sp1", "groupId": "g1"},
                 {"name": "L", "url": "http://l.example.com", "spaceId": "sp1"}]
-        load_view(self.page, lang="en", spaces=[{"id": "sp1", "name": "S"}],
-                  groups=[{"id": "g1", "name": "G", "spaceId": "sp1", "collapsed": False}], tabs=tabs)
-        self.page.wait_for_timeout(120)
-        d = json.loads(self.page.evaluate("""(() => JSON.stringify({
-          loose: document.querySelector('.loose-name').textContent,
-          loose_title: document.querySelector('.loose-select').title,
-          add_text: document.getElementById('add-group-btn').textContent,
-          add_title: document.getElementById('add-group-btn').title
-        }))()"""))
-        assert d["loose"] == "Ungrouped", d
-        assert d["loose_title"] == "Select all ungrouped tabs", d
-        assert d["add_text"] == "+ Group", d
-        assert d["add_title"] == "New group", d
+        groups = [{"id": "g1", "name": "G", "spaceId": "sp1", "collapsed": False}]
+        for lang, exp_t, exp_title in (
+                (None, "Создать группу", "Создать новую группу"),
+                ("en", "Create group", "Create a new group")):
+            kw = {"lang": lang} if lang else {}
+            load_view(self.page, spaces=[{"id": "sp1", "name": "S"}],
+                      groups=groups, tabs=tabs, **kw)
+            self.page.wait_for_timeout(120)
+            d = json.loads(self.page.evaluate("""(() => JSON.stringify({
+              loose: document.querySelector('.loose-name').textContent,
+              loose_title: document.querySelector('.loose-select').title,
+              t: document.querySelector('#create-group-btn .t').textContent,
+              title: document.getElementById('create-group-btn').title
+            }))()"""))
+            assert d["t"] == exp_t, d
+            assert d["title"] == exp_title, d
+            if lang == "en":
+                assert d["loose"] == "Ungrouped", d
+                assert d["loose_title"] == "Select all ungrouped tabs", d
 
     def test_confirm_delete_tab_both_langs(self):
         for lang, expected in (("en", 'Delete tab "MyTab"?'),
@@ -18858,14 +18947,215 @@ class TestEmptyGroupAlwaysCollapsed:
 
     def test_no_slot_with_three_empty_groups(self):
         # 3 пустые группы (данные collapsed false/false/true): слотов нигде нет,
-        # все три шапки в свёрнутом виде, add-group-btn — последний элемент
+        # все три шапки в свёрнутом виде; строка «+ Группа» из списка удалена
         self._load(self._empty_groups(["g1", "g2"]) + [
             {"id": "g3", "name": "G3", "spaceId": "sp1", "collapsed": True}])
         assert self._slots() == 0
         for gid in ("g1", "g2", "g3"):
             d = self._bar_state(gid)
             assert d == {"collapsed": True, "chev": "▸", "count": "0 вкладок"}, (gid, d)
-        assert self.page.evaluate("document.getElementById('tabs-list').lastElementChild.id") == "add-group-btn"
+        assert self.page.evaluate("document.getElementById('add-group-btn')") is None
         assert json.loads(self.page.evaluate(
             "JSON.stringify([...document.getElementById('tabs-list').children].map(e => e.className))")) == \
-            ["gbar gbar-collapsed", "gbar gbar-collapsed", "gbar gbar-collapsed", "add-group-row"]
+            ["gbar gbar-collapsed", "gbar gbar-collapsed", "gbar gbar-collapsed"]
+
+# ==========================================
+#  Quick search (experimental mode)
+# ==========================================
+class TestQuickSearch:
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    TABS = [
+        {"name": "Питон", "url": "https://python.org"},
+        {"name": "Гитхаб", "url": "https://github.com"},
+        {"name": "Таблица", "url": "https://table.example"},
+    ]
+
+    def _key(self, key):
+        self.page.evaluate(f"""(() => {{
+          document.dispatchEvent(new KeyboardEvent('keydown', {{key: '{key}', bubbles: true, cancelable: true}}));
+        }})()""")
+
+    def _card_names(self):
+        return json.loads(self.page.evaluate(
+            "JSON.stringify([...document.querySelectorAll('.tab-card .tab-name')].map(e => e.textContent))"))
+
+    def _search_value(self):
+        return self.page.evaluate("document.getElementById('search').value")
+
+    def _overlay_letter(self):
+        return self.page.evaluate("document.getElementById('qs-letter').textContent")
+
+    def _overlay_opacity(self):
+        return float(self.page.evaluate(
+            "getComputedStyle(document.getElementById('qs-overlay')).opacity"))
+
+    def _inject_real_styles(self):
+        # Harness sets only body.innerHTML — load the real styles (theme.css + view.html style block)
+        theme = load_file("theme.css")
+        html = load_file("view.html")
+        style = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate(
+            "(styles) => { var st = document.createElement('style'); st.textContent = styles; document.head.appendChild(st); }",
+            [theme + "\n" + style])
+
+    def _open_settings(self):
+        self.page.evaluate("document.getElementById('settings-btn').click()")
+
+    def _flip_toggle(self):
+        self.page.evaluate("""(() => {
+          const t = document.getElementById('qs-toggle');
+          t.click();
+          t.dispatchEvent(new Event('change', {bubbles: true}));
+        })()""")
+
+    # --- Settings ---
+
+    def test_settings_section_toggle_default_off(self):
+        load_view(self.page, tabs=self.TABS)
+        self._open_settings()
+        assert self.page.evaluate("!!document.getElementById('qs-section')")
+        assert self.page.evaluate(
+            "document.querySelector('#qs-section .settings-section-title').textContent") == "Экспериментальное"
+        assert not self.page.evaluate("document.getElementById('qs-toggle').checked")
+
+    def test_toggle_writes_storage(self):
+        load_view(self.page, tabs=self.TABS)
+        self._open_settings()
+        self._flip_toggle()
+        assert self.page.evaluate("chrome.storage.local._data['blattam-quick-search']") is True
+        self._flip_toggle()
+        assert self.page.evaluate("chrome.storage.local._data['blattam-quick-search']") is False
+
+    def test_toggle_reflects_seeded_storage(self):
+        load_view(self.page, tabs=self.TABS, quick_search=True)
+        self._open_settings()
+        assert self.page.evaluate("document.getElementById('qs-toggle').checked")
+
+    # --- Letters ---
+
+    def test_letter_starts_search_without_click(self):
+        load_view(self.page, tabs=self.TABS, quick_search=True)
+        self._key("п")
+        assert self._search_value() == "п"
+        assert self._card_names() == ["Питон"]
+        assert self._overlay_letter() == "п"
+
+    def test_letter_updates_overlay_and_query(self):
+        load_view(self.page, tabs=self.TABS, quick_search=True)
+        self._key("п")
+        self._key("т")
+        assert self._search_value() == "пт"
+        assert self._overlay_letter() == "т"
+        assert self._card_names() == []  # «пт» matches nothing — live filter
+
+    def test_overlay_fades_out(self):
+        load_view(self.page, tabs=self.TABS, quick_search=True)
+        self._inject_real_styles()
+        self._key("п")
+        # right after the keystroke the overlay is fully visible (fade just started)
+        assert self._overlay_opacity() > 0.9
+        self.page.wait_for_timeout(900)
+        assert self._overlay_opacity() < 0.05
+
+    def test_digits_and_symbols_ignored(self):
+        load_view(self.page, tabs=self.TABS, quick_search=True)
+        self._key("5")
+        self._key("!")
+        self._key(" ")
+        assert self._search_value() == ""
+        assert self._overlay_letter() == ""
+        assert self._card_names() == ["Питон", "Гитхаб", "Таблица"]
+
+    def test_disabled_by_default(self):
+        load_view(self.page, tabs=self.TABS)  # no quick_search seed — mode off
+        self._key("п")
+        assert self._search_value() == ""
+        assert self._overlay_letter() == ""
+        assert self._card_names() == ["Питон", "Гитхаб", "Таблица"]
+
+    def test_uppercase_shift_letter(self):
+        load_view(self.page, tabs=self.TABS, quick_search=True)
+        self._key("П")
+        assert self._search_value() == "П"
+        assert self._overlay_letter() == "П"
+        assert self._card_names() == ["Питон"]  # search is case-insensitive
+
+    def test_escape_clears_and_hides_overlay(self):
+        load_view(self.page, tabs=self.TABS, quick_search=True)
+        self._inject_real_styles()
+        self._key("п")
+        self._key("т")
+        self._key("Escape")
+        assert self._search_value() == ""
+        assert self._card_names() == ["Питон", "Гитхаб", "Таблица"]
+        assert self._overlay_opacity() < 0.05
+
+    def test_backspace_deletes_last_char(self):
+        load_view(self.page, tabs=self.TABS, quick_search=True)
+        self._key("п")
+        self._key("т")
+        assert self._search_value() == "пт"
+        self._key("Backspace")
+        assert self._search_value() == "п"
+        assert self._card_names() == ["Питон"]
+        self._key("Backspace")
+        assert self._search_value() == ""
+        assert self._card_names() == ["Питон", "Гитхаб", "Таблица"]
+        # Backspace on an empty query — old behavior: no active card, nothing deleted
+        self._key("Backspace")
+        assert [t["name"] for t in read_storage_raw(self.page, "blattam-tabs")] == ["Питон", "Гитхаб", "Таблица"]
+
+    def test_letter_ignored_when_search_focused(self):
+        load_view(self.page, tabs=self.TABS, quick_search=True)
+        self.page.evaluate("document.getElementById('search').focus()")
+        self._key("п")
+        # the global handler must not double-process a focused editable field
+        assert self._search_value() == ""
+
+    def test_letter_ignored_when_modal_open(self):
+        load_view(self.page, tabs=self.TABS, quick_search=True)
+        self._open_settings()
+        self._key("п")
+        assert self._search_value() == ""
+        assert self._overlay_letter() == ""
+
+    def test_toggle_off_hides_overlay(self):
+        load_view(self.page, tabs=self.TABS, quick_search=True)
+        self._inject_real_styles()
+        self._key("п")
+        assert self._overlay_opacity() > 0.9
+        self._open_settings()
+        self._flip_toggle()
+        assert self.page.evaluate("chrome.storage.local._data['blattam-quick-search']") is False
+        assert self._overlay_opacity() < 0.05
+
+# ==========================================
+#  Quick search — focus grab (Ctrl+T / "+" leaves focus in the omnibox)
+# ==========================================
+
+class TestQuickSearchFocus:
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    TABS = [{"name": "Питон", "url": "https://python.org"}]
+
+    def test_focus_init_called_when_quick_search_on(self):
+        load_view(self.page, tabs=self.TABS, quick_search=True)
+        self.page.wait_for_timeout(800)
+        assert self.page.evaluate("window.__qsFocusInitCalls") >= 1
+
+    def test_focus_init_not_called_when_quick_search_off(self):
+        load_view(self.page, tabs=self.TABS)
+        self.page.wait_for_timeout(800)
+        assert self.page.evaluate("window.__qsFocusInitCalls") == 0
+
+    def test_grab_focus_moves_focus_to_body(self):
+        load_view(self.page, tabs=self.TABS, quick_search=True)
+        self.page.evaluate("document.getElementById('settings-btn').focus()")
+        assert self.page.evaluate("document.activeElement.id") == "settings-btn"
+        self.page.evaluate("grabPageFocus(true)")
+        assert self.page.evaluate("document.activeElement.tagName") == "BODY"

@@ -46,7 +46,8 @@
     .rail-item:hover .go, .rail-item:focus-within .go, .rail-item:focus-visible .go { opacity: 1; transform: translateX(0); }
 
     /* нижний зарезервированный блок — аккаунт (единственный, только внизу) */
-    .rail-accounts { margin-top: auto; padding-top: 16px; }
+    .rail-version { margin-top: auto; padding: 0 14px 10px; font: 400 10px/1 var(--font-mono); color: var(--text-faint); letter-spacing: .04em; user-select: none; }
+    .rail-accounts { padding-top: 6px; }
     .rail-accounts .slot { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 8px; box-shadow: inset 0 0 0 1px var(--line); background: var(--bg); }
     .rail-accounts .avatar { width: 28px; height: 28px; border-radius: 50%; flex: none; display: grid; place-items: center; box-shadow: inset 0 0 0 1px var(--line2); color: var(--text-faint); }
     .rail-accounts .avatar svg { display: block; }
@@ -129,16 +130,17 @@
     .metarow { display: flex; align-items: baseline; gap: 12px; padding: 16px 0 12px; }
     .metatitle { font-size: 15px; font-weight: 600; letter-spacing: -.2px; display: flex; align-items: baseline; gap: 8px; }
     .metatitle .n { font: 500 11px/1 var(--font-mono); color: var(--text-faint); letter-spacing: 0; }
-
-    /* «+ Группа» — полноширинная пунктирная строка в конце списка вкладок
-       (все ветки рендера, включая пустое пространство) */
-    #add-group-btn {
-      grid-column: 1 / -1; height: 40px; padding: 0;
-      border: 1px dashed var(--dashed); border-radius: 6px; background: transparent;
-      color: var(--text-muted); font: 500 12.5px/1 var(--font-ui); letter-spacing: -.1px;
-      cursor: pointer; transition: background .1s, border-color .1s;
+    /* «Изменить»/«Удалить» — правее названия активного пространства;
+       бледные иконки (в стиле chip-icon-btn), на hover ярче */
+    .meta-actions { display: inline-flex; align-items: center; gap: 4px; align-self: center; }
+    .meta-icon-btn {
+      width: 20px; height: 20px; border: none; background: var(--sel-glow);
+      border-radius: 50%; cursor: pointer; font-size: 10px; display: flex;
+      align-items: center; justify-content: center; color: var(--text-faint); line-height: 1;
+      transition: color .1s, background .1s;
     }
-    #add-group-btn:hover { background: var(--hover); border-color: var(--dashed-hover); }
+    .meta-icon-btn:hover { color: var(--text); background: var(--hover); }
+
 
     /* ---------- grid ---------- */
     .tabs-list {
@@ -558,6 +560,23 @@
       .rail-accounts .slot { justify-content: center; }
       .main { padding-left: 16px; padding-right: 16px; }
     }
+    /* Быстрый поиск: потемнение + большая буква в центре (fade на каждое нажатие) */
+    .qs-overlay {
+      position: fixed; inset: 0; z-index: 500; display: flex; align-items: center; justify-content: center;
+      background: var(--qs-dim); opacity: 0; pointer-events: none;
+      transition: opacity 650ms ease-out;
+    }
+    .qs-overlay.show { opacity: 1; transition: none; }
+    body:focus { outline: none; }
+    .qs-overlay span {
+      font-size: 200px; font-weight: 300; line-height: 1; color: var(--qs-letter);
+      user-select: none;
+    }
+    .qs-row { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+    .qs-row input { margin-top: 2px; accent-color: var(--ink); }
+    .qs-lbl { display: flex; flex-direction: column; gap: 2px; }
+    .qs-t { font-size: 13px; font-weight: 600; color: var(--text); }
+    .qs-s { font-size: 11.5px; color: var(--text-muted); }
   </style>
 </head>
 <body>
@@ -576,6 +595,11 @@
           <span class="lbl"><span class="t" data-i18n="theme_label">Тема</span><span class="s" data-i18n="theme_sub">Светлая · тёмная</span></span>
           <span class="go">→</span>
         </button>
+        <button class="rail-item" id="create-group-btn" data-i18n-title="rail_group_title" title="Создать новую группу">
+          <span class="ico"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 8v8"/><path d="M8 12h8"/></svg></span>
+          <span class="lbl"><span class="t" data-i18n="rail_group_label">Создать группу</span><span class="s" data-i18n="rail_group_sub">Новая группа в этом пространстве</span></span>
+          <span class="go">→</span>
+        </button>
         <button class="rail-item" id="export-btn" data-i18n-title="export_title" title="Экспортировать JSON">
           <span class="ico"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 11 5 5 5-5"/><path d="M5 21h14"/></svg></span>
           <span class="lbl"><span class="t" data-i18n="export_label">Экспорт</span><span class="s" data-i18n="export_sub">Скачать JSON</span></span>
@@ -592,6 +616,8 @@
           <span class="go">→</span>
         </button>
       </div>
+
+      <div class="rail-version" id="rail-version">…</div>
 
       <div class="rail-accounts">
         <div class="slot" data-i18n-title="account_title" title="Скоро — вход и синхронизация вкладок">
@@ -619,6 +645,10 @@
         <!-- Meta -->
         <div class="metarow">
           <div class="metatitle"><span id="meta-label" data-i18n="meta_label">Мои вкладки</span><span class="n" id="meta-count">0</span></div>
+          <div class="meta-actions">
+            <button class="meta-icon-btn" id="meta-rename-btn" data-i18n-title="rename" title="Переименовать">✎</button>
+            <button class="meta-icon-btn" id="meta-delete-btn" data-i18n-title="delete_space" title="Удалить пространство">✕</button>
+          </div>
         </div>
 
         <!-- States -->
@@ -645,6 +675,9 @@
 
   <input type="file" id="import-input" accept=".json" style="display:none;">
   <input type="file" id="bg-file-input" accept="image/*" style="display:none;">
+
+  <!-- Быстрый поиск: потемнение + большая буква в центре (транзиторный, pointer-events:none) -->
+  <div id="qs-overlay" class="qs-overlay" aria-hidden="true"><span id="qs-letter"></span></div>
 
   <!-- Selection bar -->
   <div id="selection-bar" class="selection-bar hidden">
@@ -718,6 +751,16 @@
           <button class="btn btn-ghost" id="lang-btn-ru" data-i18n="lang_ru">Русский</button>
           <button class="btn btn-ghost" id="lang-btn-en" data-i18n="lang_en">English</button>
         </div>
+      </section>
+      <section class="settings-section" id="qs-section">
+        <h4 class="settings-section-title" data-i18n="qs_title">Экспериментальное</h4>
+        <label class="qs-row">
+          <input type="checkbox" id="qs-toggle">
+          <span class="qs-lbl">
+            <span class="qs-t" data-i18n="qs_search">Быстрый поиск</span>
+            <span class="qs-s" data-i18n="qs_search_sub">Печатайте буквы — поиск начнётся сразу, без клика по строке</span>
+          </span>
+        </label>
       </section>
           </div>
           <div class="settings-pane" id="settings-pane-faq" style="display:none;">

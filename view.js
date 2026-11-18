@@ -49,6 +49,35 @@ function applyBackgroundImage(dataUrl) {
 chrome.storage.local.get(['blattam-bg-image'], (result) => {
   applyBackgroundImage(result['blattam-bg-image'] || '');
 });
+// Быстрый поиск (экспериментальный): blattam-quick-search (local), по умолчанию off.
+let quickSearchOn = false;
+// Захват фокуса у адресной строки: после Ctrl+T / «+» фокус у омнибокса Chrome,
+// и печатание уходит в адресную строку, а не на страницу (быстрый поиск молчит).
+// Скриптовый DOM-фокус возвращает фокус в страницу. Работает только при
+// включённом быстром поиске (иначе печатание всё равно никуда бы не денется).
+window.__qsFocusInitCalls = 0;
+function grabPageFocus(force) {
+  if (!force && document.hasFocus()) return;
+  window.__qsFocusInitCalls++;
+  window.focus();
+  // body фокусируется скриптом только с tabindex (проверено в Chromium)
+  const target = document.body || document.documentElement;
+  if (target !== document.documentElement && !target.hasAttribute('tabindex')) {
+    target.setAttribute('tabindex', '-1');
+  }
+  target.focus();
+}
+function initFocusGrab() {
+  grabPageFocus(true); // первая попытка сразу: страница только загрузилась
+  setTimeout(() => grabPageFocus(), 250); // Chrome может держать омнибокс ещё немного
+  setTimeout(() => grabPageFocus(), 700);
+}
+chrome.storage.local.get(['blattam-quick-search'], (result) => {
+  quickSearchOn = result['blattam-quick-search'] === true;
+  const qsTgl = document.getElementById('qs-toggle');
+  if (qsTgl) qsTgl.checked = quickSearchOn;
+  if (quickSearchOn) initFocusGrab();
+});
 
 // === Цвет вкладок (кастомный фон карточек) ===
 // blattam-tab-color — hex (например '#8a6d5c'); пустое значение — токены темы.
@@ -83,6 +112,9 @@ themeBtn.addEventListener('click', () => {
   chrome.storage.local.set({ 'blattam-theme': next });
 });
 
+const createGroupBtn = document.getElementById('create-group-btn');
+if (createGroupBtn) createGroupBtn.addEventListener('click', createGroupInActiveSpace);
+
 // === DOM-ссылки ===
 
 const tabsList = document.getElementById('tabs-list');
@@ -94,6 +126,24 @@ const metaCount = document.getElementById('meta-count');
 const spacesBar = document.getElementById('spaces-bar');
 const spaceChips = document.getElementById('space-chips');
 const addSpaceBtn = document.getElementById('add-space-btn');
+const metaRenameBtn = document.getElementById('meta-rename-btn');
+const metaDeleteBtn = document.getElementById('meta-delete-btn');
+
+// «Изменить»/«Удалить» в мета-строке (статичные кнопки, привязка один раз) —
+// на ТЕКУЩЕЕ (активное) пространство: резолвим его В МОМЕНТ КЛИКА, строка
+// живёт дольше, чем активное пространство
+if (metaRenameBtn) metaRenameBtn.addEventListener('click', () => {
+  const sp = allSpaces.find(x => x.id === activeSpaceId);
+  if (!sp) return;
+  openRenameSpaceModal(sp.id, sp.name);
+});
+if (metaDeleteBtn) metaDeleteBtn.addEventListener('click', () => {
+  const sp = allSpaces.find(x => x.id === activeSpaceId);
+  if (!sp) return;
+  if (confirm(t('delete_space_confirm', { name: sp.name }))) {
+    chrome.runtime.sendMessage({ action: 'delete-space', id: sp.id });
+  }
+});
 
 // Модалка (создание/переименование пространства, создание группы)
 const spaceModal = document.getElementById('space-modal');
@@ -340,46 +390,18 @@ function renderSpaces() {
     name.textContent = sp.name;
     chip.appendChild(name);
 
-    // Действия (✎ ✕) — видны на hover чипа
-    const actions = document.createElement('div');
-    actions.className = 'chip-actions';
-
-    const renameBtn = document.createElement('button');
-    renameBtn.className = 'chip-icon-btn';
-    renameBtn.textContent = '\u270E';
-    renameBtn.title = t('rename');
-    renameBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      openRenameSpaceModal(sp.id, sp.name);
-    });
-
-    const deleteBtn = document.createElement('button');
-    deleteBtn.className = 'chip-icon-btn';
-    deleteBtn.textContent = '\u2715';
-    deleteBtn.title = t('delete_space');
-    deleteBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (confirm(t('delete_space_confirm', { name: sp.name }))) {
-        chrome.runtime.sendMessage({ action: 'delete-space', id: sp.id });
-      }
-    });
-
-    actions.appendChild(renameBtn);
-    actions.appendChild(deleteBtn);
-    chip.appendChild(actions);
+    // «Изменить»/«Удалить» — НЕ на чипе: кнопки мету-строки (ниже,
+    // .meta-actions) действуют на АКТИВНОЕ пространство, резолв в момент клика
 
     // DnD: чип принимает перетаскиваемую карточку
     attachSpaceDrop(chip, sp.id);
 
     // DnD-источник: чип тянем на другой чип — reorder пространств (порядок
     // чипов = порядок массива blattam-spaces). Пейлоад: id пространства
-    // (у карточки — индекс вкладки). Кнопки ✎/✕ не стартуют drag:
-    // guardDragOverButtons снимает draggable на время press
+    // (у карточки — индекс вкладки)
     chip.draggable = true;
-    guardDragOverButtons(chip, '.chip-icon-btn');
     pcdBindChip(chip, sp.id); // pointer-путь (реальный Chrome) — см. ниже
     chip.addEventListener('dragstart', (e) => {
-      if (!chip.draggable) { e.preventDefault(); return; } // press начался на кнопке
       // Нативный HTML5-драг отменяется в реальном Chrome (цикл ведёт
       // pointer-путь, см. «Pointer drag of space chips» ниже); синтетический
       // dragstart харнесса (не-trusted) проходит дальше и работает без изменений
@@ -657,6 +679,15 @@ if (tabColorResetBtn) {
     applyTabCardColor('');
   });
 }
+// Тумблер «Быстрый поиск» в настройках.
+const qsToggle = document.getElementById('qs-toggle');
+if (qsToggle) {
+  qsToggle.addEventListener('change', () => {
+    quickSearchOn = qsToggle.checked;
+    chrome.storage.local.set({ 'blattam-quick-search': quickSearchOn });
+    if (!quickSearchOn) qsHide();
+  });
+}
 
 // «О программе»: версия (из манифеста) + «Проверить обновления»
 // (chrome.runtime.requestUpdateCheck → статус). Подмена копии на месте и
@@ -668,6 +699,10 @@ const updateStatus = document.getElementById('update-status');
 if (aboutVersion) {
   aboutVersion.textContent = chrome.runtime.getManifest().version;
 }
+
+// Версия в левой рейке (#rail-version) — та же динамическая строка из манифеста
+const railVersion = document.getElementById('rail-version');
+if (railVersion) railVersion.textContent = chrome.runtime.getManifest().version;
 
 if (checkUpdateBtn && updateStatus) {
   const finishUpdateCheck = (res) => {
@@ -1140,10 +1175,10 @@ function reorderSpaces(fromId, toId, side) {
   chrome.storage.sync.set({ 'blattam-spaces': allSpaces });
 }
 
-// «+ Группа» — полноширинная пунктирная строка В КОНЦЕ списка вкладок
-// (строится в renderTabs во всех ветках рендера, включая пустое
-// пространство; работает и с пустым пространством).
-// Пустое имя → «Группа N». Группа создаётся в активном пространстве.
+// «Создать группу» — кнопка .rail-item в левой рейке (#create-group-btn,
+// под переключателем темы): открывает модалку создания группы; работает
+// и с пустым пространством. Пустое имя → «Группа N».
+// Группа создаётся в активном пространстве.
 function createGroupInActiveSpace() {
   modalTitle.textContent = t('new_group');
   spaceNameInput.value = '';
@@ -1154,16 +1189,6 @@ function createGroupInActiveSpace() {
   });
 }
 
-// Строит кнопку «+ Группа» (последний элемент #tabs-list)
-function appendAddGroupBtn() {
-  const btn = document.createElement('button');
-  btn.className = 'add-group-row';
-  btn.id = 'add-group-btn';
-  btn.title = t('new_group');
-  btn.textContent = t('add_group');
-  btn.addEventListener('click', createGroupInActiveSpace);
-  tabsList.appendChild(btn);
-}
 
 // === Карточки вкладок ===
 
@@ -1382,7 +1407,6 @@ function renderTabs(filter = '') {
       noResults.style.display = 'none';
       metaCount.textContent = '0';
     }
-    appendAddGroupBtn();
     updateSelectionBar();
     return;
   }
@@ -1438,8 +1462,6 @@ function renderTabs(filter = '') {
   // (visibleCount === 0 без фильтра) его не показывает
   noResults.style.display = (visibleCount === 0 && filter) ? 'block' : 'none';
   metaCount.textContent = String(visibleCount);
-  // «+ Группа» — всегда последним элементом списка
-  appendAddGroupBtn();
   updateSelectionBar();
   // Активная карточка видна на экране
   if (activeUrl) {
@@ -2497,13 +2519,11 @@ function syncSourceRowKeeper() {
   if (srcGid != null) {
     anchorEl = lastVisibleGroupCard(srcGid) ||
       document.querySelector('#tabs-list .gbar[data-group-id="' + srcGid + '"]');
-  } else {
-    anchorEl = document.getElementById('add-group-btn');
-  }
-  if (!anchorEl) { removeSourceRowKeeper(); return; }
+    if (!anchorEl) { removeSourceRowKeeper(); return; }
+  } // loose (srcGid null): append keepers at the END of #tabs-list
   while (dragRowKeepers.length < keepersNeeded) {
     const k = makeRowKeeper();
-    if (srcGid != null) anchorEl.after(k); else anchorEl.before(k);
+    if (srcGid != null) anchorEl.after(k); else tabsList.appendChild(k);
     dragRowKeepers.push(k);
   }
   while (dragRowKeepers.length > keepersNeeded) {
@@ -3414,8 +3434,6 @@ function pcdOnMove(e) {
 function pcdBindChip(chip, spId) {
   chip.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
-    if (!chip.draggable) return; // guardDragOverButtons снял draggable — press на ✎/✕
-    if (e.target.closest('.chip-icon-btn')) return; // кнопки держат свою работу
     const rect = chip.getBoundingClientRect();
     pcd = { spId: spId, chip: chip, homeRect: rect,
             startX: e.clientX, startY: e.clientY,
@@ -3561,6 +3579,24 @@ function deleteActiveTab() {
   renderTabs(searchInput.value); // onChanged-обработчик обнулит activeUrl, если карточки не осталось
 }
 
+// Быстрый поиск: вспышка большой буквы в центре + потемнение окна.
+// Каждое нажатие буквы перезапускает fade (CSS transition 650ms на .qs-overlay).
+const qsOverlay = document.getElementById('qs-overlay');
+const qsLetter = document.getElementById('qs-letter');
+function qsFlash(ch) {
+  if (!qsOverlay || !qsLetter) return;
+  qsLetter.textContent = ch;
+  qsOverlay.classList.add('show');
+  void qsOverlay.offsetHeight; // reflow: при снятии .show перезапускается fade-переход
+  qsOverlay.classList.remove('show');
+}
+function qsHide() {
+  if (!qsOverlay) return;
+  qsOverlay.style.transition = 'none';
+  qsOverlay.classList.remove('show');
+  void qsOverlay.offsetHeight;
+  qsOverlay.style.transition = '';
+}
 document.addEventListener('keydown', (e) => {
   // Модалка работает сама — не перехватываем
   if (spaceModal.classList.contains('open')) return;
@@ -3570,6 +3606,7 @@ document.addEventListener('keydown', (e) => {
   // сбрасывается — нет «Все», к которому можно вернуться). Работает и из поля
   // (например, из поиска) — очищает его и снимает фокус.
   if (e.key === 'Escape') {
+    qsHide();
     if (searchInput.value) searchInput.value = '';
     const ae = document.activeElement;
     if (ae && ae !== document.body) ae.blur();
@@ -3582,6 +3619,23 @@ document.addEventListener('keydown', (e) => {
 
   // Остальные клавиши не перехватываем, пока набирается текст
   if (isEditable(document.activeElement)) return;
+
+  // Быстрый поиск: любая буква (лат/кир, с Shift или без) — в поиск,
+  // вспышка буквы в центре. Цифры и символы не обрабатываются.
+  if (quickSearchOn && e.key.length === 1 && /^[\p{L}]$/u.test(e.key)) {
+    searchInput.value += e.key;
+    renderTabs(searchInput.value);
+    qsFlash(e.key);
+    e.preventDefault();
+    return;
+  }
+  if (quickSearchOn && e.key === 'Backspace' && searchInput.value) {
+    searchInput.value = searchInput.value.slice(0, -1);
+    renderTabs(searchInput.value);
+    qsHide();
+    e.preventDefault();
+    return;
+  }
 
   switch (e.key) {
     case 'ArrowDown':
