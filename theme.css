@@ -25,6 +25,8 @@
   --text-soft: #4d4d4d;
   --text-muted: #666666;
   --text-faint: #808080;
+  --qs-dim: rgba(24, 18, 14, 0.15);
+  --qs-letter: var(--text);
   --card-name: #171717;    /* имя карточки — светлая тема: как --text */
   --on-ink: #ffffff;         /* текст на черниле (активные чипы, тёмные кнопки) */
 
@@ -97,6 +99,8 @@
   --text-soft: #d7d1cb;
   --text-muted: #a8a09a;
   --text-faint: #827c76;
+  --qs-dim: rgba(0, 0, 0, 0.25);
+  --qs-letter: var(--text);
   --card-name: #b5ada6;    /* имя карточки — тусклее, ближе к --text-muted */
   --on-ink: #1f1c1b;
 
