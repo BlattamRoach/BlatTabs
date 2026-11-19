@@ -4669,3 +4669,119 @@ loadLang().then(function () {
   loadData();
   loadBrowserTabs();
 });
+
+// === Аккаунт (левая рейка, низ): GitHub — вход и синхронизация ===
+// Слот .rail-accounts .slot — кнопка #account-slot. Состояния:
+// не подключён (подпись «Нажмите, чтобы войти в GitHub») / подключён
+// («GitHub: <login>» + «Синхронизация через GitHub»). Клик: не подключён
+// → OAuth-поток (get-token); подключён → sync-now (pull+push).
+(function initAccountSlot() {
+  const slot = document.getElementById('account-slot');
+  if (!slot) return;
+  const label = slot.querySelector('.a-t');
+  const sub = slot.querySelector('.a-s');
+  const tag = slot.querySelector('.tag');
+
+  function renderAccount(user) {
+    if (user) {
+      label.textContent = 'GitHub: ' + user.login;
+      sub.textContent = t('account_connected_sub');
+      if (tag) { tag.textContent = '✓'; }
+    } else {
+      label.textContent = t('account_label');
+      sub.textContent = t('account_connect_sub');
+      if (tag) { tag.textContent = t('account_tag'); }
+    }
+  }
+
+  function refreshAccount() {
+    chrome.storage.local.get('github-token', (r) => {
+      if (!r['github-token']) { renderAccount(null); return; }
+      chrome.runtime.sendMessage({ action: 'verify-github' }, (res) => {
+        renderAccount(res && res.success ? res.user : null);
+      });
+    });
+  }
+
+  // Device Flow (fallback, когда auth-окно не открывается): background
+  // запрашивает код и начинает поллинг; мы открываем страницу ввода кода
+  // обычной вкладкой и показываем код в подписи. Успех придёт сам
+  // (storage.onChanged → refreshAccount).
+  function startDeviceFlowLogin() {
+    if (sub) sub.textContent = t('account_device_starting');
+    chrome.runtime.sendMessage({ action: 'device-flow-start' }, (res) => {
+      if (!res) {
+        chrome.storage.local.get('github-auth-error', (r) => {
+          if (sub) sub.textContent = r['github-auth-error'] || t('account_sync_error');
+        });
+        return;
+      }
+      // Открываем страницу ввода кода обычной вкладкой (всегда работает)
+      chrome.tabs.create({ url: res.verification_uri, active: true });
+      if (sub) sub.textContent = t('account_device_hint', { code: res.user_code });
+      // Код живёт до 5 минут — потом возвращаем подпись к обычному виду
+      setTimeout(refreshAccount, 300000);
+    });
+  }
+
+  // OAuth web-flow СТРОГО со страницы (живой жест — Chrome не отклонит
+  // окно; из background это падало бы с «Authorization page could not be loaded»)
+  function startGitHubLogin() {
+    const m = chrome.runtime.getManifest();
+    const redirectUri = chrome.runtime.getURL('oauth-callback.html');
+    const authUrl = 'https://github.com/login/oauth/authorize'
+      + '?client_id=' + encodeURIComponent(m.oauth2.client_id)
+      + '&scope=' + encodeURIComponent('repo')
+      + '&redirect_uri=' + encodeURIComponent(redirectUri);
+    chrome.identity.launchWebAuthFlow({ url: authUrl, interactive: true }, (resultUrl) => {
+      if (chrome.runtime.lastError) {
+        // Auth-окно не открылось (кPageLoadFailure и т.п.) — Device Flow:
+        // код + обычная вкладка github.com/login/device (без спец-окон)
+        startDeviceFlowLogin();
+        return;
+      }
+      if (!resultUrl) return; // окно закрыто/отменено
+      const params = new URLSearchParams(new URL(resultUrl).search);
+      const code = params.get('code');
+      const error = params.get('error');
+      if (!code) {
+        if (sub) sub.textContent = error ? 'GitHub: ' + error : t('account_sync_error');
+        return;
+      }
+      chrome.runtime.sendMessage({ action: 'oauth-exchange', code, redirectUri }, (token) => {
+        if (token) {
+          refreshAccount(); // токен в storage → подпись «GitHub: <login>»
+        } else {
+          chrome.storage.local.get('github-auth-error', (r) => {
+            if (sub) sub.textContent = r['github-auth-error'] || t('account_sync_error');
+          });
+        }
+      });
+    });
+  }
+
+  slot.addEventListener('click', () => {
+    chrome.storage.local.get('github-token', (r) => {
+      if (r['github-token']) {
+        // Подключён: синхронизация (pull+push), потом обновить подпись
+        chrome.runtime.sendMessage({ action: 'sync-now' }, (res) => {
+          if (sub) {
+            sub.textContent = (res && (res.pulled || res.pushed)) ? t('account_sync_done') : t('account_sync_error');
+            setTimeout(refreshAccount, 3000);
+          }
+        });
+      } else {
+        // Не подключён: OAuth-поток (окно GitHub); токен сохранится в
+        // storage → onChanged ниже сам обновит подпись
+        startGitHubLogin();
+      }
+    });
+  });
+
+  // Слот обновляется, когда токен появляется/исчезает (вход/выход из popup или отсюда)
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === 'local' && changes['github-token']) refreshAccount();
+  });
+
+  refreshAccount();
+})();
