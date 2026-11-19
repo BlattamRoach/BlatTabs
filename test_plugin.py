@@ -502,7 +502,8 @@ POPUP_DOM = body_dom("popup.html")
 
 def load_view(pg, tabs=None, spaces=None, groups=None, folders=None,
               last_space=None, theme=None, confirm=False, browser_tabs=None,
-              bg=None, tab_color=None, lang=None, quick_search=None):
+              bg=None, tab_color=None, lang=None, quick_search=None,
+              custom_theme=None):
     """about:blank + mock + данные + DOM view.html + view.js.
 
     browser_tabs — список открытых вкладок браузера (chrome.tabs._tabs):
@@ -530,11 +531,22 @@ def load_view(pg, tabs=None, spaces=None, groups=None, folders=None,
         init.append("chrome.storage.local._data['blattam-lang'] = " + json.dumps(lang) + ";")
     if quick_search is not None:
         init.append("chrome.storage.local._data['blattam-quick-search'] = " + json.dumps(quick_search) + ";")
+    if custom_theme is not None:
+        init.append("chrome.storage.local._data['blattam-custom-theme'] = " + json.dumps(custom_theme, ensure_ascii=False) + ";")
     if confirm:
         init.append("window.confirm = () => true;")
     pg.goto("about:blank")
     pg.evaluate(MOCK_CHROME + "\n".join(init))
     pg.evaluate("document.body.innerHTML = " + json.dumps(VIEW_DOM))
+    # CSS строки Device Flow (.account-device* из <style> view.html): реальные
+    # computed-значения (user-select/display) для тестов строки кода; остальной
+    # харнес остаётся без CSS (тесты рассчитаны на UA-дефолты)
+    _vh = load_file("view.html")
+    _ds = _vh.index("/* Device Flow: код")
+    _dh = _vh.index(".account-device-copy:hover {")
+    pg.evaluate(
+        "(css) => { var st = document.createElement('style'); st.textContent = css; document.head.appendChild(st); }",
+        [_vh[_ds:_vh.index('}', _dh) + 1]])
     try:
         pg.evaluate(load_file("i18n.js") + "; 'i18n'")
         pg.evaluate(load_file("view.js") + "; 'loaded'")
@@ -12866,7 +12878,7 @@ class TestSettingsBackground:
             titles = json.loads(self.page.evaluate(
                 "JSON.stringify([...document.querySelectorAll('#settings-modal .settings-section-title')]"
                 ".map(el => el.textContent.trim()))"))
-            assert titles == ["Фон", "Цвет вкладок", "Язык", "Экспериментальное", "Частые вопросы", "О программе"]
+            assert titles == ["Фон", "Цвет вкладок", "Цвета", "Размер и форма", "Шрифт", "Язык", "Экспериментальное", "Частые вопросы", "О программе"]
             assert self.page.evaluate("document.getElementById('bg-file-btn').textContent.trim()") == "Выбрать картинку"
             assert self.page.evaluate("document.getElementById('bg-clear-btn').textContent.trim()") == "Убрать"
             # скрытый input-файла рядом с #import-input
@@ -13033,7 +13045,7 @@ class TestSettingsTabColor:
             titles = json.loads(self.page.evaluate(
                 "JSON.stringify([...document.querySelectorAll('#settings-modal .settings-section-title')]"
                 ".map(el => el.textContent.trim()))"))
-            assert titles == ["Фон", "Цвет вкладок", "Язык", "Экспериментальное", "Частые вопросы", "О программе"]
+            assert titles == ["Фон", "Цвет вкладок", "Цвета", "Размер и форма", "Шрифт", "Язык", "Экспериментальное", "Частые вопросы", "О программе"]
             assert self.page.evaluate("document.getElementById('tab-color-input').type") == "color"
             assert self.page.evaluate(
                 "document.getElementById('tab-color-reset').textContent.trim()") == "Сбросить"
@@ -19537,3 +19549,345 @@ class TestRailCenterTerritories:
         pg.wait_for_timeout(100)
         assert [t["url"] for t in self._stored()] == [t["url"] for t in self.TABS3]
         assert self._slot() is None
+
+
+class TestCustomTheme:
+    """«Кастомизация визуала»: цвета, размер и форма, шрифт (blattam-custom-theme, local)."""
+
+    TOKENS = ["--bg", "--rail-bg", "--surface", "--text", "--text-muted",
+              "--card-name", "--ink", "--ghost-bg", "--ghost-ring",
+              "--card-radius", "--card-gap", "--card-min", "--card-name-size", "--font-ui"]
+    TITLES = ["Фон", "Цвет вкладок", "Цвета", "Размер и форма", "Шрифт",
+              "Язык", "Экспериментальное", "Частые вопросы", "О программе"]
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self.page_errors = []
+        self._on_pageerror = lambda exc: self.page_errors.append(str(exc))
+        self.page.on("pageerror", self._on_pageerror)
+        yield
+        self.page.remove_listener("pageerror", self._on_pageerror)
+
+    def _inject_css(self):
+        # реальный CSS (theme.css + <style> view.html) — для computed-style проверок
+        theme = open(f"{EXT_PATH}/theme.css", encoding="utf-8").read()
+        html = open(f"{EXT_PATH}/view.html", encoding="utf-8").read()
+        style = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate(
+            "(() => { const st = document.createElement('style'); st.textContent = "
+            + json.dumps(theme + style)
+            + "; (document.head || document.documentElement).appendChild(st); })()")
+
+    def _load(self, **kw):
+        load_view(self.page, **kw)
+        self._inject_css()
+
+    def _open(self):
+        self.page.locator("#settings-btn").click()
+
+    def _tabs(self, n=2):
+        return [{"name": f"Вкладка {i}", "url": f"https://example.com/{i}"} for i in range(1, n + 1)]
+
+    def _stored(self):
+        return self.page.evaluate("chrome.storage.local._data['blattam-custom-theme']")
+
+    def _inline(self, token):
+        return self.page.evaluate(
+            "document.documentElement.style.getPropertyValue(" + json.dumps(token) + ")")
+
+    def _set_color(self, cid, hex_val):
+        self.page.evaluate(
+            "(() => { const i = document.getElementById('cust-color-' + " + json.dumps(cid)
+            + "); i.value = " + json.dumps(hex_val)
+            + "; i.dispatchEvent(new Event('input', {bubbles: true})); })()")
+
+    def test_defaults_no_inline_no_key(self):
+        self._load(tabs=self._tabs())
+        for tk in self.TOKENS:
+            assert self._inline(tk) == ""
+        assert self._stored() is None
+
+    def test_sections_present_and_defaults(self):
+        self._load(tabs=self._tabs())
+        self._open()
+        titles = json.loads(self.page.evaluate(
+            "JSON.stringify([...document.querySelectorAll('#settings-modal .settings-section-title')]"
+            ".map(el => el.textContent.trim()))"))
+        assert titles == self.TITLES
+        assert self.page.evaluate("document.getElementById('cust-color-bg').type") == "color"
+        disp = json.loads(self.page.evaluate(
+            "JSON.stringify([...document.querySelectorAll('[data-cust-reset]')]"
+            ".map(b => b.style.display))"))
+        assert disp == ["none"] * 13
+        assert self.page.evaluate("document.getElementById('cust-colors-reset-all').style.display") == "none"
+        assert self.page.evaluate("document.getElementById('cust-geo-reset-all').style.display") == "none"
+        assert self.page.evaluate("document.getElementById('cust-font').value") == "default"
+        # пикеры показывают дефолты темы
+        assert self.page.evaluate("document.getElementById('cust-color-bg').value") == "#ffffff"
+        assert self.page.evaluate("document.getElementById('cust-geo-radius').value") == "8"
+        assert self.page.evaluate("document.getElementById('cust-geo-gap-val').textContent") == "12px"
+        # тёмная тема — дефолт темы
+        self._load(tabs=self._tabs(), theme="dark")
+        self._open()
+        assert self.page.evaluate("document.getElementById('cust-color-bg').value") == "#1f1c1b"
+
+    def test_color_set_live(self):
+        self._load(tabs=self._tabs())
+        self._open()
+        self._set_color("bg", "#123456")
+        assert self._stored() == {"--bg": "#123456"}
+        assert self._inline("--bg") == "#123456"
+        assert self.page.evaluate("getComputedStyle(document.body).backgroundColor") == "rgb(18, 52, 86)"
+        assert self.page.evaluate(
+            "document.querySelector('[data-cust-reset=\"bg\"]').style.display") != "none"
+        assert self.page.evaluate("document.getElementById('cust-colors-reset-all').style.display") != "none"
+
+    def test_color_reset_row(self):
+        self._load(tabs=self._tabs(), custom_theme={"--bg": "#336699"})
+        assert self.page.evaluate(
+            "document.querySelector('[data-cust-reset=\"bg\"]').style.display") != "none"
+        self._open()
+        self.page.locator('[data-cust-reset="bg"]').click()
+        assert self._stored() is None
+        assert self._inline("--bg") == ""
+        assert self.page.evaluate("getComputedStyle(document.body).backgroundColor") == "rgb(255, 255, 255)"
+        assert self.page.evaluate(
+            "document.querySelector('[data-cust-reset=\"bg\"]').style.display") == "none"
+
+    def test_reset_all_colors(self):
+        self._load(tabs=self._tabs(), custom_theme={"--bg": "#336699", "--ink": "#663399"})
+        self._open()
+        self.page.locator("#cust-colors-reset-all").click()
+        assert self._stored() is None
+        assert self._inline("--bg") == ""
+        assert self._inline("--ink") == ""
+        assert self.page.evaluate(
+            "document.querySelector('[data-cust-reset=\"bg\"]').style.display") == "none"
+        assert self.page.evaluate(
+            "document.querySelector('[data-cust-reset=\"ink\"]').style.display") == "none"
+
+    def test_geometry_gap_applies(self):
+        self._load(tabs=self._tabs(), custom_theme={"--card-gap": "20px"})
+        g = json.loads(self.page.evaluate(
+            "(() => { const s = getComputedStyle(document.querySelector('.tabs-list'));"
+            " return JSON.stringify({cg: s.columnGap, rg: s.rowGap}); })()"))
+        assert g["cg"] == "20px" and g["rg"] == "20px"
+        assert self.page.evaluate("document.getElementById('cust-geo-gap').value") == "20"
+        assert self.page.evaluate("document.getElementById('cust-geo-gap-val').textContent") == "20px"
+
+    def test_geometry_width_applies(self):
+        self._load(tabs=self._tabs(), custom_theme={"--card-min": "180px"})
+        assert self._inline("--card-min") == "180px"
+        # токен применяется к сетке: computed --card-min на .tabs-list = 180px
+        assert self.page.evaluate(
+            "getComputedStyle(document.querySelector('.tabs-list')).getPropertyValue('--card-min')") == "180px"
+
+    def test_geometry_reset_all(self):
+        self._load(tabs=self._tabs(), custom_theme={"--card-radius": "16px", "--card-gap": "20px"})
+        self._open()
+        self.page.locator("#cust-geo-reset-all").click()
+        assert self._stored() is None
+        assert self._inline("--card-radius") == ""
+        assert self._inline("--card-gap") == ""
+        assert self.page.evaluate("document.getElementById('cust-geo-radius-val').textContent") == "8px"
+        assert self.page.evaluate("document.getElementById('cust-geo-gap-val').textContent") == "12px"
+
+    def test_font_serif_applies(self):
+        self._load(tabs=self._tabs(), custom_theme={"--font-ui": "serif"})
+        assert "Georgia" in self._inline("--font-ui")
+        assert self.page.evaluate("document.getElementById('cust-font').value") == "serif"
+        fam = self.page.evaluate(
+            "getComputedStyle(document.querySelector('.rail-item .t')).fontFamily")
+        assert "Georgia" in fam
+
+    def test_persists_across_reload(self):
+        self._load(tabs=self._tabs())
+        self._open()
+        self._set_color("bg", "#336699")
+        stored = self._stored()
+        assert stored == {"--bg": "#336699"}
+        # пересоздаём страницу с тем же ключом в local — применяется при init
+        self._load(tabs=self._tabs(), custom_theme=stored)
+        assert self._inline("--bg") == "#336699"
+        assert self.page.evaluate("document.getElementById('cust-color-bg').value") == "#336699"
+        assert self.page.evaluate(
+            "document.querySelector('[data-cust-reset=\"bg\"]').style.display") != "none"
+
+    def test_onchanged_external(self):
+        self._load(tabs=self._tabs())
+        self.page.evaluate("chrome.storage.local.set({'blattam-custom-theme': {'--rail-bg': '#554433'}})")
+        self.page.wait_for_timeout(50)
+        assert self._inline("--rail-bg") == "#554433"
+        self.page.evaluate("chrome.storage.local.set({'blattam-custom-theme': {}})")
+        self.page.wait_for_timeout(50)
+        assert self._inline("--rail-bg") == ""
+
+    def test_theme_switch_keeps_custom(self):
+        self._load(tabs=self._tabs(), theme="dark", custom_theme={"--bg": "#336699"})
+        self.page.locator("#theme-btn").click()
+        assert self.page.evaluate("document.documentElement.dataset.theme") == "light"
+        assert self._inline("--bg") == "#336699"
+        assert self.page.evaluate("getComputedStyle(document.body).backgroundColor") == "rgb(51, 102, 153)"
+
+    def test_i18n_en(self):
+        self._load(tabs=self._tabs(), lang="en")
+        self._open()
+        titles = json.loads(self.page.evaluate(
+            "JSON.stringify([...document.querySelectorAll('#settings-modal .settings-section-title')]"
+            ".map(el => el.textContent.trim()))"))
+        assert "Colors" in titles and "Size and shape" in titles and "Font" in titles
+        assert self.page.evaluate(
+            "document.querySelector('[data-i18n=\"cust_bg\"]').textContent.trim()") == "Page background"
+
+    def test_no_pageerrors(self):
+        self._load(tabs=self._tabs(), custom_theme={"--bg": "#336699", "--card-gap": "20px", "--font-ui": "serif"})
+        self._open()
+        # модалка перехватывает pointer events — клик по #theme-btn через JS
+        self.page.evaluate("document.getElementById('theme-btn').click()")
+        # закрыть модалку (кнопка закрытия вне viewport харнесса — Escape, тот же путь, что в view.js)
+        self.page.keyboard.press("Escape")
+        self.page.wait_for_timeout(100)
+        assert self.page_errors == []
+class TestAccountDeviceCode:
+    """GitHub Device Flow: код в карточке аккаунта — КОПИРУЕМЫЙ.
+
+    Код показывается строкой ПОД кнопкой аккаунта (#account-device):
+    выделяемый текст (user-select: text — внутри <button> в Chrome текст
+    не выделяется) + кнопка копирования (navigator.clipboard). Вкладка
+    открывается по verification_uri_complete — страница с подставленным
+    кодом (вводить руками не нужно)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    def _install_flow_mocks(self, user_code="ABCD-1234"):
+        """device-flow-start → фиксированный ответ; auth-окно «падает»
+        (lastError) → путь device flow; getManifest — с oauth2."""
+        self.page.evaluate("""(uc) => {
+          window.__deviceRes = {
+            user_code: uc,
+            verification_uri: 'https://github.com/login/device',
+            verification_uri_complete: 'https://github.com/login/device#' + uc
+          };
+          const orig = chrome.runtime.sendMessage.bind(chrome.runtime);
+          chrome.runtime.sendMessage = function (msg, cb) {
+            if (msg && msg.action === 'device-flow-start') {
+              if (cb) cb(window.__deviceRes);
+              return Promise.resolve(window.__deviceRes);
+            }
+            return orig(msg, cb);
+          };
+          chrome.identity = {
+            launchWebAuthFlow: function (opts, cb) {
+              chrome.runtime.lastError = { message: 'mock: auth window failed' };
+              if (cb) cb();
+              return Promise.resolve(undefined);
+            }
+          };
+          const origManifest = chrome.runtime.getManifest.bind(chrome.runtime);
+          chrome.runtime.getManifest = function () {
+            return Object.assign({}, origManifest(), { oauth2: { client_id: 'mock-client' } });
+          };
+        }""", user_code)
+
+    def _stub_clipboard(self):
+        self.page.evaluate("""() => {
+          window.__clipboard = [];
+          navigator.clipboard = {
+            writeText: (t) => { window.__clipboard.push(t); return Promise.resolve(); }
+          };
+        }""")
+
+    def _start_flow(self):
+        load_view(self.page)
+        self.page.wait_for_timeout(150)
+        self._install_flow_mocks()
+        self.page.click("#account-slot")
+        self.page.wait_for_timeout(100)
+
+    def _device_state(self):
+        return json.loads(self.page.evaluate("""(() => JSON.stringify({
+          rowHidden: document.getElementById('account-device').hidden,
+          rowDisplay: getComputedStyle(document.getElementById('account-device')).display,
+          code: document.getElementById('account-device-code').textContent,
+          codeUserSelect: getComputedStyle(document.getElementById('account-device-code')).userSelect,
+          sub: document.querySelector('#account-slot .a-s').textContent,
+          codeInButton: !!document.getElementById('account-device-code').closest('#account-slot'),
+          lastTab: (chrome.tabs.createdTabs.length ? chrome.tabs.createdTabs[chrome.tabs.createdTabs.length - 1].url : null)
+        }))()"""))
+
+    def test_device_row_hidden_by_default(self):
+        load_view(self.page)
+        self.page.wait_for_timeout(150)
+        d = self._device_state()
+        assert d["rowHidden"] is True, d
+        assert d["rowDisplay"] == "none", d
+        assert d["code"] == "", d
+
+    def test_device_flow_shows_code_row(self):
+        self._start_flow()
+        d = self._device_state()
+        assert d["rowHidden"] is False, d
+        assert d["rowDisplay"] != "none", d
+        assert d["code"] == "ABCD-1234", d
+        # Ядро фикса: текст КОДА ВЫДЕЛЯЕМЫЙ (внутри кнопки Chrome не выделяет)
+        # и код живёт НЕ внутри #account-slot
+        assert d["codeUserSelect"] == "text", d
+        assert d["codeInButton"] is False, d
+        assert d["sub"] == "Введите код в открытой вкладке", d
+
+    def test_tab_opens_prefilled_device_page(self):
+        self._start_flow()
+        d = self._device_state()
+        assert d["lastTab"] == "https://github.com/login/device#ABCD-1234", d
+
+    def test_copy_button_writes_code_to_clipboard(self):
+        self._start_flow()
+        self._stub_clipboard()
+        self.page.click("#account-device-copy")
+        self.page.wait_for_timeout(100)
+        d = json.loads(self.page.evaluate("""(() => JSON.stringify({
+          written: window.__clipboard,
+          glyph: document.getElementById('account-device-copy').textContent
+        }))()"""))
+        assert d["written"] == ["ABCD-1234"], d
+        assert d["glyph"] == "✓", d
+
+    def test_connected_hides_device_row(self):
+        self._start_flow()
+        self.page.evaluate("""() => {
+          const orig = chrome.runtime.sendMessage.bind(chrome.runtime);
+          chrome.runtime.sendMessage = function (msg, cb) {
+            if (msg && msg.action === 'verify-github') {
+              const r = { success: true, user: { login: 'roach' } };
+              if (cb) cb(r);
+              return Promise.resolve(r);
+            }
+            return orig(msg, cb);
+          };
+          chrome.storage.local.set({ 'github-token': 'mock-token' });
+        }""")
+        self.page.wait_for_timeout(200)
+        d = self._device_state()
+        assert d["rowHidden"] is True, d
+        assert d["code"] == "", d
+        assert d["sub"] == "Синхронизация через GitHub", d
+        label = self.page.evaluate("document.querySelector('#account-slot .a-t').textContent")
+        assert label == "GitHub: roach", label
+
+    def test_i18n_en_device_row(self):
+        load_view(self.page, lang="en")
+        self.page.wait_for_timeout(150)
+        self._install_flow_mocks()
+        self.page.click("#account-slot")
+        self.page.wait_for_timeout(100)
+        d = json.loads(self.page.evaluate("""(() => JSON.stringify({
+          sub: document.querySelector('#account-slot .a-s').textContent,
+          copyTitle: document.getElementById('account-device-copy').title,
+          codeTitle: document.getElementById('account-device-code').title
+        }))()"""))
+        assert d["sub"] == "Enter the code in the opened tab", d
+        assert d["copyTitle"] == "Copy", d
+        assert d["codeTitle"] == "Code for github.com/login/device", d

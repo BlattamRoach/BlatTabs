@@ -32,7 +32,7 @@ async function exchangeGitHubCode(code, redirectUri) {
 // (когда auth-окно не открывается: «Authorization page could not be loaded» —
 //  окно создаётся, но страница GitHub в нём не грузится; device flow ходит
 //  только через fetch + обычную вкладку с кодом).
-// 1) POST github.com/login/device/code → {device_code, user_code, verification_uri}
+// 1) POST github.com/login/device/code → {device_code, user_code, verification_uri, verification_uri_complete}
 // 2) пользователь вводит user_code на github.com/login/device (открываем вкладкой)
 // 3) поллинг POST access_token (grant_type=device_code): authorization_pending →
 //    ждём; slow_down → +5с; success → токен в storage (view обновится по onChanged)
@@ -81,7 +81,7 @@ async function deviceFlowStart() {
   const data = await resp.json();
   if (!data.device_code) throw new Error(data.error_description || data.error || 'device flow failed');
   deviceFlowPoll(data, data.interval || 5);
-  return { user_code: data.user_code, verification_uri: data.verification_uri || 'https://github.com/login/device' };
+  return { user_code: data.user_code, verification_uri: data.verification_uri || 'https://github.com/login/device', verification_uri_complete: data.verification_uri_complete || '' };
 }
 
 // Отключение: сбрасываем кэш identity + локальный токен (Gist остаётся).

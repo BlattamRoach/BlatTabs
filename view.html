@@ -56,6 +56,12 @@
     .rail-accounts .tag { margin-left: auto; font: 500 8.5px/1 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--text-faint); border-radius: 4px; box-shadow: inset 0 0 0 1px var(--line2); padding: 3px 5px; white-space: nowrap; }
     #account-slot { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 10px; border: 0; border-radius: 8px; box-shadow: inset 0 0 0 1px var(--line); background: var(--bg); font: inherit; text-align: left; cursor: pointer; }
     #account-slot:hover { box-shadow: inset 0 0 0 1px var(--line2); }
+    /* Device Flow: код для github.com/login/device — выделяемый текст + кнопка копирования */
+    .account-device { display: flex; align-items: center; gap: 6px; margin: 4px 0 0; padding: 6px 7px; border-radius: 6px; background: var(--ghost-bg); box-shadow: inset 0 0 0 1px var(--ghost-ring); }
+    .account-device[hidden] { display: none; }
+    .account-device-code { flex: 1 1 auto; min-width: 0; font: 500 11px/1 var(--font-mono); letter-spacing: .05em; color: var(--text-soft); user-select: text; cursor: text; }
+    .account-device-copy { flex: none; width: 22px; height: 22px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 4px; background: var(--bg); box-shadow: inset 0 0 0 1px var(--line2); color: var(--text-muted); font: 400 11px/1 var(--font-mono); cursor: pointer; user-select: none; }
+    .account-device-copy:hover { color: var(--text); box-shadow: inset 0 0 0 1px var(--text-muted); }
 
     /* ---------- центральная колонка: чипы, мета-строка, grid (header убран — wordmark и поиск в левой рейке) ---------- */
     .center { min-height: 0; overflow-y: auto; background: var(--bg); }
@@ -500,7 +506,7 @@
     /* Модалка настроек (FAQ) — шире общей .modal; крестик сверху справа;
        блок «Частые вопросы»: заголовок + строка вопроса + приглушённый ответ.
        Только токены (var(--…)) — работает и в светлой, и в тёмной теме */
-    #settings-modal .modal { min-width: 560px; max-width: 640px; width: min(640px, calc(100vw - 24px)); min-height: 440px; padding: 22px 20px; position: relative; display: flex; flex-direction: column; }
+    #settings-modal .modal { min-width: 560px; max-width: 640px; width: min(640px, calc(100vw - 24px)); min-height: 440px; max-height: 440px; padding: 22px 20px; position: relative; display: flex; flex-direction: column; }
     #settings-modal .modal h3 { font-size: 15px; margin-bottom: 16px; }
     /* Двухпанное окно: слева навигация разделов (.settings-nav — кнопки
     .settings-nav-item: активная — --hover + --ink, неактивная — --text-soft),
@@ -537,6 +543,15 @@
       width: 34px; height: 28px; padding: 2px; border: 0; border-radius: 6px;
       box-shadow: 0 0 0 1px var(--line); background: var(--bg); cursor: pointer;
     }
+    /* Кастомизация: строки «Цвета»/«Размер и форма»/«Шрифт» (только токены) */
+    #settings-modal .cust-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+    #settings-modal .cust-lbl { flex: 1 1 auto; min-width: 0; font: 400 12.5px/1.4 var(--font-ui); color: var(--text-soft); }
+    #settings-modal .cust-row input[type="color"] { flex: 0 0 auto; width: 34px; height: 26px; padding: 2px; border: 0; border-radius: 6px; box-shadow: 0 0 0 1px var(--line); background: var(--bg); cursor: pointer; }
+    #settings-modal .cust-row input[type="range"] { flex: 1 1 auto; accent-color: var(--ink); }
+    #settings-modal .cust-row select { flex: 0 0 auto; height: 26px; padding: 0 6px; border: 0; border-radius: 6px; box-shadow: 0 0 0 1px var(--line); background: var(--bg); color: var(--text); font: 400 12.5px/1 var(--font-ui); cursor: pointer; }
+    #settings-modal .cust-val { flex: 0 0 auto; min-width: 44px; text-align: right; font: 400 11.5px/1 var(--font-mono); color: var(--text-muted); }
+    #settings-modal .cust-reset { flex: 0 0 auto; }
+    #settings-modal .cust-section-actions { margin-top: 6px; }
     #settings-modal #bg-preview {
       display: block; width: 100%; height: 64px; object-fit: cover;
       border-radius: var(--card-radius); box-shadow: 0 0 0 1px var(--line);
@@ -637,6 +652,10 @@
           </span>
           <span class="tag" data-i18n="account_tag">скоро</span>
         </button>
+        <div class="account-device" id="account-device" hidden>
+          <span class="account-device-code" id="account-device-code" data-i18n-title="account_device_code_title" title="Код для github.com/login/device"></span>
+          <button class="account-device-copy" id="account-device-copy" type="button" data-i18n-title="account_copy" title="Копировать">⧉</button>
+        </div>
       </div>
     </aside>
 
@@ -751,6 +770,101 @@
           <input type="color" id="tab-color-input" data-i18n-title="tab_color_input_title" title="Цвет карточек сохранённых вкладок">
           <button class="btn btn-ghost" id="tab-color-reset" data-i18n="tab_color_reset" style="display:none;">Сбросить</button>
         </div>
+      </section>
+      <!-- Цвета — кастомные цвета основных элементов (blattam-custom-theme, hex, local) -->
+      <section class="settings-section" id="cust-colors-section">
+        <h4 class="settings-section-title" data-i18n="cust_colors_title">Цвета</h4>
+        <label class="cust-row">
+          <span class="cust-lbl" data-i18n="cust_bg">Фон страницы</span>
+          <input type="color" id="cust-color-bg">
+          <button class="btn btn-ghost cust-reset" data-cust-reset="bg" style="display:none;" data-i18n="cust_reset">Сбросить</button>
+        </label>
+        <label class="cust-row">
+          <span class="cust-lbl" data-i18n="cust_rail">Боковые рейки</span>
+          <input type="color" id="cust-color-rail">
+          <button class="btn btn-ghost cust-reset" data-cust-reset="rail" style="display:none;" data-i18n="cust_reset">Сбросить</button>
+        </label>
+        <label class="cust-row">
+          <span class="cust-lbl" data-i18n="cust_surface">Панели и модальные окна</span>
+          <input type="color" id="cust-color-surface">
+          <button class="btn btn-ghost cust-reset" data-cust-reset="surface" style="display:none;" data-i18n="cust_reset">Сбросить</button>
+        </label>
+        <label class="cust-row">
+          <span class="cust-lbl" data-i18n="cust_text">Основной текст</span>
+          <input type="color" id="cust-color-text">
+          <button class="btn btn-ghost cust-reset" data-cust-reset="text" style="display:none;" data-i18n="cust_reset">Сбросить</button>
+        </label>
+        <label class="cust-row">
+          <span class="cust-lbl" data-i18n="cust_muted">Приглушённый текст</span>
+          <input type="color" id="cust-color-muted">
+          <button class="btn btn-ghost cust-reset" data-cust-reset="muted" style="display:none;" data-i18n="cust_reset">Сбросить</button>
+        </label>
+        <label class="cust-row">
+          <span class="cust-lbl" data-i18n="cust_cardname">Имена карточек</span>
+          <input type="color" id="cust-color-cardname">
+          <button class="btn btn-ghost cust-reset" data-cust-reset="cardname" style="display:none;" data-i18n="cust_reset">Сбросить</button>
+        </label>
+        <label class="cust-row">
+          <span class="cust-lbl" data-i18n="cust_ink">Акцент (кнопки, активные чипы)</span>
+          <input type="color" id="cust-color-ink">
+          <button class="btn btn-ghost cust-reset" data-cust-reset="ink" style="display:none;" data-i18n="cust_reset">Сбросить</button>
+        </label>
+        <label class="cust-row">
+          <span class="cust-lbl" data-i18n="cust_ghostbg">Фон призрака перетаскивания</span>
+          <input type="color" id="cust-color-ghostbg">
+          <button class="btn btn-ghost cust-reset" data-cust-reset="ghostbg" style="display:none;" data-i18n="cust_reset">Сбросить</button>
+        </label>
+        <label class="cust-row">
+          <span class="cust-lbl" data-i18n="cust_ghostring">Контур призрака перетаскивания</span>
+          <input type="color" id="cust-color-ghostring">
+          <button class="btn btn-ghost cust-reset" data-cust-reset="ghostring" style="display:none;" data-i18n="cust_reset">Сбросить</button>
+        </label>
+        <div class="cust-section-actions">
+          <button class="btn btn-ghost" id="cust-colors-reset-all" style="display:none;" data-i18n="cust_reset_all">Сбросить всё</button>
+        </div>
+      </section>
+      <!-- Размер и форма — геометрия карточек (blattam-custom-theme, px, local) -->
+      <section class="settings-section" id="cust-geo-section">
+        <h4 class="settings-section-title" data-i18n="cust_size_title">Размер и форма</h4>
+        <label class="cust-row">
+          <span class="cust-lbl" data-i18n="cust_radius">Скругление карточек</span>
+          <input type="range" id="cust-geo-radius" min="0" max="24" step="1">
+          <span class="cust-val" id="cust-geo-radius-val"></span>
+          <button class="btn btn-ghost cust-reset" data-cust-reset="radius" style="display:none;" data-i18n="cust_reset">Сбросить</button>
+        </label>
+        <label class="cust-row">
+          <span class="cust-lbl" data-i18n="cust_gap">Зазор между карточками</span>
+          <input type="range" id="cust-geo-gap" min="4" max="32" step="1">
+          <span class="cust-val" id="cust-geo-gap-val"></span>
+          <button class="btn btn-ghost cust-reset" data-cust-reset="gap" style="display:none;" data-i18n="cust_reset">Сбросить</button>
+        </label>
+        <label class="cust-row">
+          <span class="cust-lbl" data-i18n="cust_width">Минимальная ширина карточки</span>
+          <input type="range" id="cust-geo-width" min="100" max="260" step="1">
+          <span class="cust-val" id="cust-geo-width-val"></span>
+          <button class="btn btn-ghost cust-reset" data-cust-reset="width" style="display:none;" data-i18n="cust_reset">Сбросить</button>
+        </label>
+        <label class="cust-row">
+          <span class="cust-lbl" data-i18n="cust_fontsize">Размер текста карточки</span>
+          <input type="range" id="cust-geo-fontsize" min="9" max="16" step="0.5">
+          <span class="cust-val" id="cust-geo-fontsize-val"></span>
+          <button class="btn btn-ghost cust-reset" data-cust-reset="fontsize" style="display:none;" data-i18n="cust_reset">Сбросить</button>
+        </label>
+        <div class="cust-section-actions">
+          <button class="btn btn-ghost" id="cust-geo-reset-all" style="display:none;" data-i18n="cust_reset_all">Сбросить всё</button>
+        </div>
+      </section>
+      <!-- Шрифт — семейство интерфейса (blattam-custom-theme, ключ, local) -->
+      <section class="settings-section" id="cust-font-section">
+        <h4 class="settings-section-title" data-i18n="cust_font_title">Шрифт</h4>
+        <label class="cust-row">
+          <span class="cust-lbl" data-i18n="cust_font_lbl">Семейство интерфейса</span>
+          <select id="cust-font">
+            <option value="default" data-i18n="cust_font_default">Стандартный</option>
+            <option value="serif" data-i18n="cust_font_serif">Классический (serif)</option>
+            <option value="mono" data-i18n="cust_font_mono">Моноширинный (mono)</option>
+          </select>
+        </label>
       </section>
       <section class="settings-section" id="lang-section">
         <h4 class="settings-section-title" data-i18n="lang_title">Язык</h4>
