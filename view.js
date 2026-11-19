@@ -106,6 +106,112 @@ chrome.storage.local.get(['blattam-tab-color'], (result) => {
   applyTabCardColor(result['blattam-tab-color'] || '');
 });
 
+// === Кастомизация визуала (blattam-custom-theme) ===
+// Один local-ключ: объект «управляемые токены → значения» (цвета — hex,
+// геометрия — px, шрифт — 'serif'/'mono'). Хранятся только НЕДЕФОЛТНЫЕ
+// значения; пустой объект → ключ удаляется. Применяем инлайн-стилем
+// documentElement (переопределяет токены темы, переживает перерисовку и
+// смену темы — как blattam-tab-color).
+const CUST_COLORS = [
+  { token: '--bg', id: 'bg' },
+  { token: '--rail-bg', id: 'rail' },
+  { token: '--surface', id: 'surface' },
+  { token: '--text', id: 'text' },
+  { token: '--text-muted', id: 'muted' },
+  { token: '--card-name', id: 'cardname' },
+  { token: '--ink', id: 'ink' },
+  { token: '--ghost-bg', id: 'ghostbg' },
+  { token: '--ghost-ring', id: 'ghostring' }
+];
+const CUST_GEO = [
+  { token: '--card-radius', id: 'radius' },
+  { token: '--card-gap', id: 'gap' },
+  { token: '--card-min', id: 'width' },
+  { token: '--card-name-size', id: 'fontsize' }
+];
+const CUST_FONTS = {
+  serif: "'Georgia', 'Times New Roman', serif",
+  mono: "'Consolas', 'Cascadia Mono', ui-monospace, monospace"
+};
+const CUST_TOKENS = CUST_COLORS.concat(CUST_GEO).map((x) => x.token).concat(['--font-ui']);
+
+// Дефолт темы для токена: читаем, ВРЕМЕННО сняв инлайн-переопределение
+// (иначе прочитался бы текущий кастомный цвет, а не значение темы).
+function custThemeDefault(token) {
+  const root = document.documentElement;
+  const prev = root.style.getPropertyValue(token);
+  root.style.removeProperty(token);
+  const v = getComputedStyle(root).getPropertyValue(token).trim();
+  if (prev) root.style.setProperty(token, prev);
+  return v;
+}
+
+function applyCustomTheme(obj) {
+  const root = document.documentElement;
+  for (const tk of CUST_TOKENS) {
+    const v = (obj && obj[tk]) ? String(obj[tk]) : '';
+    const resolved = (tk === '--font-ui') ? (CUST_FONTS[v] || '') : v;
+    if (resolved) root.style.setProperty(tk, resolved);
+    else root.style.removeProperty(tk);
+  }
+  for (const c of CUST_COLORS) {
+    const input = document.getElementById('cust-color-' + c.id);
+    const reset = document.querySelector('[data-cust-reset="' + c.id + '"]');
+    if (!input) continue;
+    const custom = (obj && obj[c.token]) ? String(obj[c.token]) : '';
+    const def = custThemeDefault(c.token);
+    input.value = (custom || def) || '#ffffff';
+    if (reset) reset.style.display = custom ? '' : 'none';
+  }
+  for (const g of CUST_GEO) {
+    const input = document.getElementById('cust-geo-' + g.id);
+    const val = document.getElementById('cust-geo-' + g.id + '-val');
+    const reset = document.querySelector('[data-cust-reset="' + g.id + '"]');
+    if (!input) continue;
+    const custom = (obj && obj[g.token]) ? String(obj[g.token]) : '';
+    const def = custThemeDefault(g.token);
+    const shown = custom || def;
+    if (shown && !isNaN(parseFloat(shown))) input.value = String(parseFloat(shown));
+    if (val) val.textContent = shown;
+    if (reset) reset.style.display = custom ? '' : 'none';
+  }
+  const font = document.getElementById('cust-font');
+  if (font) font.value = (obj && CUST_FONTS[obj['--font-ui']] ? obj['--font-ui'] : 'default');
+  const rc = document.getElementById('cust-colors-reset-all');
+  if (rc) rc.style.display = CUST_COLORS.some((c) => obj && obj[c.token]) ? '' : 'none';
+  const rg = document.getElementById('cust-geo-reset-all');
+  if (rg) rg.style.display = CUST_GEO.some((g) => obj && obj[g.token]) ? '' : 'none';
+}
+
+function collectCustomFromControls() {
+  const out = {};
+  for (const c of CUST_COLORS) {
+    const input = document.getElementById('cust-color-' + c.id);
+    if (!input) continue;
+    const v = String(input.value).toLowerCase();
+    if (v && v !== custThemeDefault(c.token).toLowerCase()) out[c.token] = v;
+  }
+  for (const g of CUST_GEO) {
+    const input = document.getElementById('cust-geo-' + g.id);
+    if (!input) continue;
+    const val = parseFloat(input.value);
+    const def = parseFloat(custThemeDefault(g.token));
+    if (!isNaN(val) && !isNaN(def) && val !== def) out[g.token] = val + 'px';
+  }
+  const font = document.getElementById('cust-font');
+  if (font && font.value !== 'default') out['--font-ui'] = font.value;
+  return out;
+}
+
+function saveCustomTheme() {
+  const obj = collectCustomFromControls();
+  if (Object.keys(obj).length === 0) chrome.storage.local.remove('blattam-custom-theme');
+  else chrome.storage.local.set({ 'blattam-custom-theme': obj });
+}
+
+chrome.storage.local.get(['blattam-custom-theme'], (result) => {
+  applyCustomTheme(result['blattam-custom-theme'] || null);
+});
 themeBtn.addEventListener('click', () => {
   const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
   applyTheme(next);
@@ -594,6 +700,10 @@ function openSettingsModal() {
   chrome.storage.local.get(['blattam-tab-color'], (r) => {
     applyTabCardColor(r['blattam-tab-color'] || '');
   });
+  // пикеры кастомизации — актуальные значения (из local-хранилища)
+  chrome.storage.local.get(['blattam-custom-theme'], (r) => {
+    applyCustomTheme(r['blattam-custom-theme'] || null);
+  });
 }
 
 function closeSettingsModal() {
@@ -679,6 +789,59 @@ if (tabColorResetBtn) {
     applyTabCardColor('');
   });
 }
+// «Цвета»/«Размер и форма»/«Шрифт» (blattam-custom-theme): live-применение
+// saveCustomTheme → storage → ветка applyCustomTheme в onChanged.
+CUST_COLORS.forEach((c) => {
+  const input = document.getElementById('cust-color-' + c.id);
+  if (input) input.addEventListener('input', saveCustomTheme);
+});
+CUST_GEO.forEach((g) => {
+  const input = document.getElementById('cust-geo-' + g.id);
+  if (input) input.addEventListener('input', () => {
+    const val = document.getElementById('cust-geo-' + g.id + '-val');
+    if (val) val.textContent = input.value + 'px';
+    saveCustomTheme();
+  });
+});
+function custResetControl(id) {
+  const color = CUST_COLORS.find((c) => c.id === id);
+  const geo = CUST_GEO.find((g) => g.id === id);
+  if (color) {
+    const input = document.getElementById('cust-color-' + id);
+    if (input) input.value = (custThemeDefault(color.token) || '#ffffff');
+  } else if (geo) {
+    const input = document.getElementById('cust-geo-' + id);
+    const val = document.getElementById('cust-geo-' + id + '-val');
+    const def = custThemeDefault(geo.token);
+    if (input) input.value = String(parseFloat(def));
+    if (val) val.textContent = def;
+  }
+  saveCustomTheme();
+}
+document.querySelectorAll('#settings-modal [data-cust-reset]').forEach((btn) => {
+  btn.addEventListener('click', () => custResetControl(btn.getAttribute('data-cust-reset')));
+});
+const custColorsResetAll = document.getElementById('cust-colors-reset-all');
+if (custColorsResetAll) custColorsResetAll.addEventListener('click', () => {
+  CUST_COLORS.forEach((c) => {
+    const input = document.getElementById('cust-color-' + c.id);
+    if (input) input.value = (custThemeDefault(c.token) || '#ffffff');
+  });
+  saveCustomTheme();
+});
+const custGeoResetAll = document.getElementById('cust-geo-reset-all');
+if (custGeoResetAll) custGeoResetAll.addEventListener('click', () => {
+  CUST_GEO.forEach((g) => {
+    const input = document.getElementById('cust-geo-' + g.id);
+    const val = document.getElementById('cust-geo-' + g.id + '-val');
+    const def = custThemeDefault(g.token);
+    if (input) input.value = String(parseFloat(def));
+    if (val) val.textContent = def;
+  });
+  saveCustomTheme();
+});
+const custFont = document.getElementById('cust-font');
+if (custFont) custFont.addEventListener('change', saveCustomTheme);
 // Тумблер «Быстрый поиск» в настройках.
 const qsToggle = document.getElementById('qs-toggle');
 if (qsToggle) {
@@ -3725,6 +3888,11 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     if (changes['blattam-tab-color']) {
       applyTabCardColor(changes['blattam-tab-color'].newValue || '');
     }
+    // «Цвета»/«Размер и форма»/«Шрифт» (blattam-custom-theme): применяем/снимаем
+    // кастомные токены (объект, либо null после удаления ключа).
+    if (changes['blattam-custom-theme']) {
+      applyCustomTheme(changes['blattam-custom-theme'].newValue || null);
+    }
     return;
   }
   if (areaName !== 'sync') return;
@@ -4681,12 +4849,24 @@ loadLang().then(function () {
   const label = slot.querySelector('.a-t');
   const sub = slot.querySelector('.a-s');
   const tag = slot.querySelector('.tag');
+  const devRow = document.getElementById('account-device');
+  const devCodeEl = document.getElementById('account-device-code');
+  const devCopyBtn = document.getElementById('account-device-copy');
+
+  function showDeviceCode(code) {
+    if (devRow && devCodeEl) { devCodeEl.textContent = code; devRow.hidden = false; }
+  }
+  function hideDeviceCode() {
+    if (devRow) devRow.hidden = true;
+    if (devCodeEl) devCodeEl.textContent = '';
+  }
 
   function renderAccount(user) {
     if (user) {
       label.textContent = 'GitHub: ' + user.login;
       sub.textContent = t('account_connected_sub');
       if (tag) { tag.textContent = '✓'; }
+      hideDeviceCode();
     } else {
       label.textContent = t('account_label');
       sub.textContent = t('account_connect_sub');
@@ -4717,10 +4897,13 @@ loadLang().then(function () {
         return;
       }
       // Открываем страницу ввода кода обычной вкладкой (всегда работает)
-      chrome.tabs.create({ url: res.verification_uri, active: true });
-      if (sub) sub.textContent = t('account_device_hint', { code: res.user_code });
+      // Страница ввода кода — verification_uri_complete: код уже подставлен
+      // (без него страница требует ввести код руками)
+      chrome.tabs.create({ url: (res.verification_uri_complete || res.verification_uri), active: true });
+      if (sub) sub.textContent = t('account_device_hint');
+      showDeviceCode(res.user_code);
       // Код живёт до 5 минут — потом возвращаем подпись к обычному виду
-      setTimeout(refreshAccount, 300000);
+      setTimeout(function () { hideDeviceCode(); refreshAccount(); }, 300000);
     });
   }
 
@@ -4777,6 +4960,27 @@ loadLang().then(function () {
       }
     });
   });
+
+  // Копирование кода в буфер: клик — navigator.clipboard.writeText,
+  // фидбек ✓ (возврат глифа через 1.5 с). Отказ буфера — выделить код,
+  // чтобы можно было скопировать руками (текст выделяемый: user-select text).
+  if (devCopyBtn && devCodeEl) {
+    devCopyBtn.addEventListener('click', function () {
+      const code = devCodeEl.textContent;
+      if (!code || !(navigator.clipboard && navigator.clipboard.writeText)) {
+        const sel = window.getSelection();
+        if (sel) sel.selectAllChildren(devCodeEl);
+        return;
+      }
+      navigator.clipboard.writeText(code).then(function () {
+        devCopyBtn.textContent = '✓';
+        setTimeout(function () { devCopyBtn.textContent = '⧉'; }, 1500);
+      }).catch(function () {
+        const sel = window.getSelection();
+        if (sel) sel.selectAllChildren(devCodeEl);
+      });
+    });
+  }
 
   // Слот обновляется, когда токен появляется/исчезает (вход/выход из popup или отсюда)
   chrome.storage.onChanged.addListener((changes, areaName) => {
