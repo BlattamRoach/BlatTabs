@@ -8,7 +8,12 @@
   "description": "__MSG_appDesc__",
   "permissions": [
     "tabs",
-    "storage"
+    "storage",
+    "identity"
+  ],
+  "host_permissions": [
+    "https://github.com/*",
+    "https://api.github.com/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -36,5 +41,9 @@
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
+  },
+  "oauth2": {
+    "client_id": "Ov23liAnTVu9E7T5e7ec",
+    "scopes": ["repo"]
   }
 }

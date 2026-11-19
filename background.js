@@ -1,4 +1,116 @@
 // BlatTabs — background (service worker).
+// === GitHub Auth ===
+// OAuth web-flow к GitHub. ВАЖНО: окно запускается СТРОГО со страницы
+// (view.js / popup.js — там живой пользовательский жест), а не из
+// background (SW): из SW Chrome может отклонить открытие окна
+// («Authorization page could not be loaded»).
+// Страница: authorize URL → launchWebAuthFlow → редирект на
+// oauth-callback.html → ?code= → страница шлёт code в background
+// (action 'oauth-exchange') → обмен на token → chrome.storage.local.
+// Здесь (background) только чтение токена и обмен code на token.
+async function getGitHubToken() {
+  const storage = await chrome.storage.local.get('github-token');
+  return storage['github-token'] || null;
+}
+
+// Обмен OAuth code на access token (POST github.com/login/oauth/access_token).
+async function exchangeGitHubCode(code, redirectUri) {
+  const clientId = chrome.runtime.getManifest().oauth2.client_id;
+  const resp = await fetch('https://github.com/login/oauth/access_token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+    body: JSON.stringify({ client_id: clientId, redirect_uri: redirectUri, code })
+  });
+  const data = await resp.json();
+  if (!data.access_token) throw new Error(data.error_description || data.error || 'Token exchange failed');
+  await chrome.storage.local.set({ 'github-token': data.access_token });
+  await chrome.storage.local.remove('github-auth-error');
+  return data.access_token;
+}
+
+// === GitHub Device Flow — запасной вход БЕЗ окна авторизации ===
+// (когда auth-окно не открывается: «Authorization page could not be loaded» —
+//  окно создаётся, но страница GitHub в нём не грузится; device flow ходит
+//  только через fetch + обычную вкладку с кодом).
+// 1) POST github.com/login/device/code → {device_code, user_code, verification_uri}
+// 2) пользователь вводит user_code на github.com/login/device (открываем вкладкой)
+// 3) поллинг POST access_token (grant_type=device_code): authorization_pending →
+//    ждём; slow_down → +5с; success → токен в storage (view обновится по onChanged)
+let deviceFlowTimer = null;
+
+function deviceFlowPoll(data, intervalS) {
+  if (deviceFlowTimer) clearTimeout(deviceFlowTimer);
+  const wait = Math.max(2, intervalS || 5) * 1000;
+  deviceFlowTimer = setTimeout(async () => {
+    try {
+      const clientId = chrome.runtime.getManifest().oauth2.client_id;
+      const resp = await fetch('https://github.com/login/oauth/access_token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({
+          client_id: clientId,
+          device_code: data.device_code,
+          grant_type: 'urn:ietf:params:oauth:grant-type:device_code'
+        })
+      });
+      const result = await resp.json();
+      if (result.access_token) {
+        await chrome.storage.local.set({ 'github-token': result.access_token });
+        await chrome.storage.local.remove('github-auth-error');
+        return; // view/popup обновятся по storage.onChanged
+      }
+      if (result.error === 'authorization_pending') deviceFlowPoll(data, intervalS);
+      else if (result.error === 'slow_down') deviceFlowPoll(data, (intervalS || 5) + 5);
+      else {
+        await chrome.storage.local.set({ 'github-auth-error': result.error_description || result.error || 'device flow failed' });
+      }
+    } catch (e) {
+      // Сеть недоступна — повторим позже (кожив живёт до 5 минут)
+      deviceFlowPoll(data, (intervalS || 5) + 5);
+    }
+  }, wait);
+}
+
+async function deviceFlowStart() {
+  const clientId = chrome.runtime.getManifest().oauth2.client_id;
+  const resp = await fetch('https://github.com/login/device/code', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+    body: JSON.stringify({ client_id: clientId, scope: 'repo' })
+  });
+  const data = await resp.json();
+  if (!data.device_code) throw new Error(data.error_description || data.error || 'device flow failed');
+  deviceFlowPoll(data, data.interval || 5);
+  return { user_code: data.user_code, verification_uri: data.verification_uri || 'https://github.com/login/device' };
+}
+
+// Отключение: сбрасываем кэш identity + локальный токен (Gist остаётся).
+async function disconnectGitHub() {
+  await chrome.storage.local.get('github-token').then((r) => {
+    const t = r['github-token'];
+    if (t) chrome.identity.removeCachedAuthToken({ token: t });
+  });
+  await chrome.storage.local.remove('github-token');
+  return true;
+}
+
+async function verifyGitHubToken() {
+  const token = await getGitHubToken();
+  if (!token) return null;
+
+  try {
+    const response = await fetch('https://api.github.com/user', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (response.ok) {
+      return await response.json();
+    }
+  } catch (e) {
+    console.error('GitHub verify error:', e);
+  }
+  return null;
+}
+
 // Пространства (blattam-spaces, плоские) + сворачиваемые группы (blattam-groups)
 // + вкладки (blattam-tabs). Вкладка: { name, url, title?, favIconUrl?,
 // spaceId (обязательно), groupId? }. blattam-last-space — последнее активное
@@ -210,6 +322,136 @@ async function renameSpace(spaceId, newName) {
 
 // === Группы (внутри пространств) ===
 
+
+// === GitHub Sync Phase 2 ===
+const GIST_ID_KEY = 'blattam-gist-id';
+
+async function getSyncPayload() {
+  const localData = await chrome.storage.local.get([STORAGE_KEY, GIST_ID_KEY]);
+  const syncData = await chrome.storage.sync.get(null); // Get all sync storage (settings + spaces/groups)
+  
+  return {
+    tabs: localData[STORAGE_KEY] || [],
+    spaces: syncData[SPACES_KEY] || [],
+    groups: syncData[GROUPS_KEY] || [],
+    settings: { ...syncData },
+    updatedAt: Date.now() // Includes lang, last-space, etc.
+  };
+}
+
+
+async function mergeTabs(localTabs, remoteTabs) {
+  const merged = [...localTabs];
+  const localMap = new Map(localTabs.map(t => [`${t.spaceId}|${t.url}`, t]));
+  for (const rt of remoteTabs) {
+    const key = `${rt.spaceId}|${rt.url}`;
+    const lt = localMap.get(key);
+    if (!lt) { merged.push(rt); } else if (rt.updatedAt > (lt.updatedAt || 0)) {
+      const idx = merged.findIndex(t => t.spaceId === rt.spaceId && t.url === rt.url);
+      merged[idx] = rt;
+    }
+  }
+  return merged;
+}
+async function applySyncPayload(payload) {
+  if (!payload) return;
+  const localSet = {};
+  const syncSet = { ...payload.settings };
+  
+  if (payload.tabs) localSet[STORAGE_KEY] = payload.tabs;
+  if (payload.spaces) syncSet[SPACES_KEY] = payload.spaces;
+  if (payload.groups) syncSet[GROUPS_KEY] = payload.groups;
+  
+  await chrome.storage.local.set(localSet);
+  await chrome.storage.sync.set(syncSet);
+}
+
+async function pushToGitHub() {
+  const token = await getGitHubToken();
+  if (!token) return 0;
+
+
+  const payload = await getSyncPayload();
+  const jsonString = JSON.stringify(payload, null, 2);
+  
+  const storage = await chrome.storage.local.get(GIST_ID_KEY);
+  const gistId = storage[GIST_ID_KEY];
+  
+  const url = `https://api.github.com/gists${gistId ? '/' + gistId : ''}`;
+  const method = gistId ? 'PUT' : 'POST';
+  
+  try {
+    const response = await fetch(url, {
+      method: method,
+      headers: { 
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        description: 'BlatTabs Sync Data',
+        public: false,
+        files: { 'sync.json': { content: jsonString } }
+      })
+    });
+
+    if (!response.ok) throw new Error(`GitHub API error: ${response.statusText}`);
+    const data = await response.json();
+    
+    if (!gistId) {
+      await chrome.storage.local.set({ [GIST_ID_KEY]: data.id });
+    }
+  } catch (e) {
+    console.error('pushToGitHub failed:', e);
+    return 0;
+  }
+  return 1;
+}
+
+async function pullFromGitHub() {
+  const token = await getGitHubToken();
+  const storage = await chrome.storage.local.get(GIST_ID_KEY);
+  const gistId = storage[GIST_ID_KEY];
+  if (!token || !gistId) return 0;
+
+
+  try {
+    const response = await fetch(`https://api.github.com/gists/${gistId}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (!response.ok) throw new Error('Fetch failed');
+    const data = await response.json();
+    
+
+    const remotePayload = JSON.parse(data.files['sync.json'].content);
+    const localTabs = await loadTabs();
+    const mergedTabs = await mergeTabs(localTabs, remotePayload.tabs || []);
+    const finalPayload = { ...remotePayload, tabs: mergedTabs, updatedAt: Date.now() };
+    await applySyncPayload(finalPayload);
+  } catch (e) {
+    console.error('pullFromGitHub failed:', e);
+    return 0;
+  }
+  return 1;
+}
+
+// Debounced Sync Trigger
+let syncTimer = null;
+function triggerDebouncedPush() {
+  if (syncTimer) clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => {
+    pushToGitHub();
+  }, 5000);
+}
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  const keysToSync = [STORAGE_KEY, SPACES_KEY, GROUPS_KEY, LAST_SPACE_KEY];
+  const isDataChange = keysToSync.some(k => changes[k]);
+  if (isDataChange && (areaName !== 'local' || STORAGE_KEY in changes)) {
+    triggerDebouncedPush();
+  }
+});
+
+
 async function createGroup(spaceId, name) {
   const lang = await currentLang();
   const spaces = await ensureSpaces();
@@ -264,7 +506,8 @@ async function saveCurrentTab(name, spaceId) {
     url: current.url,
     title: current.title,
     ...(favIconUrl ? { favIconUrl } : {}),
-    spaceId: sid
+    spaceId: sid,
+    updatedAt: Date.now()
   });
   await saveTabs(tabs);
 }
@@ -274,7 +517,7 @@ async function addTab(name, url, spaceId) {
   const sid = spaceId != null ? spaceId : await resolveDefaultSpaceId();
   const tabs = await loadTabs();
   if (tabs.some(t => t.url === url && t.spaceId === sid)) return;
-  tabs.push({ name: name || untitledName(lang), url: url || '', title: '', spaceId: sid });
+  tabs.push({ name: name || untitledName(lang), url: url || '', title: '', spaceId: sid, updatedAt: Date.now() });
   await saveTabs(tabs);
 }
 
@@ -400,6 +643,7 @@ async function updateTab(tabIndex, name, url, comment) {
   if (u) tab.url = u;
   if (c) tab.comment = c;
   else delete tab.comment;
+  tab.updatedAt = Date.now();
   await saveTabs(tabs);
 }
 
@@ -471,11 +715,107 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return p;
     }
 
+    case 'get-token': {
+      const p = getGitHubToken().then((token) => { sendResponse(token); return token; });
+      return p;
+    }
+    case 'oauth-exchange': {
+      const p = exchangeGitHubCode(msg.code, msg.redirectUri)
+        .then((token) => { sendResponse(token); return token; })
+        .catch((e) => {
+          console.error('GitHub exchange failed:', e.message);
+          chrome.storage.local.set({ 'github-auth-error': e.message });
+          sendResponse(null);
+          return null;
+        });
+      return p;
+    }
+    case 'device-flow-start': {
+      const p = deviceFlowStart()
+        .then((res) => { sendResponse(res); return res; })
+        .catch((e) => {
+          console.error('GitHub device flow failed:', e.message);
+          chrome.storage.local.set({ 'github-auth-error': e.message });
+          sendResponse(null);
+          return null;
+        });
+      return p;
+    }
+    case 'disconnect-github': {
+      const p = disconnectGitHub().then((res) => { sendResponse(res); return res; });
+      return p;
+    }
+    case 'verify-github': {
+      const p = verifyGitHubToken().then((user) => { sendResponse(user ? { success: true, user } : { success: false } ); return user; });
+      return p;
+    }
+    case 'clear-cloud': {
+      const p = clearCloudData().then(res => { sendResponse(res); return res; });
+      return p;
+    }
+    case 'check-sync-status': {
+      const p = (async () => {
+        const token = await getGitHubToken();
+        const storage = await chrome.storage.local.get(GIST_ID_KEY);
+        const gistId = storage[GIST_ID_KEY];
+        if (!token || !gistId) return 'disconnected';
+        
+        try {
+          const response = await fetch(`https://api.github.com/gists/${gistId}`, { headers: { Authorization: `token ${token}` } });
+          const remoteData = await response.json();
+          const remotePayload = JSON.parse(remoteData.files['sync.json'].content);
+          const local = await getSyncPayload();
+          
+          if (!remotePayload || !remotePayload.updatedAt) return 'unknown';
+          if (local.updatedAt > remotePayload.updatedAt + 1000) return 'ahead';
+          if (remotePayload.updatedAt > local.updatedAt + 1000) return 'behind';
+          return 'synced';
+        } catch (e) {
+          console.error('check-sync-status failed:', e);
+          return 'unknown';
+        }
+      })().then(res => { sendResponse(res); return res; });
+      return p;
+    }
+    case 'sync-now': {
+      const p = (async () => {
+        const pulled = await pullFromGitHub();
+        const pushed = await pushToGitHub();
+        return { pulled, pushed };
+      })().then(res => { sendResponse(res); return res; });
+      return p;
+    }
+
     default:
       return false;
   }
   return true;
 });
+
+// Added for Phase 4: Clear cloud data (reset Gist content)
+async function clearCloudData() {
+  const token = await getGitHubToken();
+  const storage = await chrome.storage.local.get(GIST_ID_KEY);
+  const gistId = storage[GIST_ID_KEY];
+  if (!token || !gistId) return false;
+
+  try {
+    await fetch(`https://api.github.com/gists/${gistId}`, {
+      method: 'PATCH',
+      headers: { 
+        Authorization: `token ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        files: { 'sync.json': { content: '' } }
+      })
+    });
+    return true;
+  } catch (e) {
+    console.error('clearCloudData failed:', e);
+    return false;
+  }
+}
 
 // === Горячие клавиши ===
 
