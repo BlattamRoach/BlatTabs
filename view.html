@@ -22,7 +22,7 @@
     button { font-family: inherit; cursor: pointer; }
 
     /* ---------- каркас: три колонки, рейки на всю высоту страницы ---------- */
-    .workspace { display: grid; grid-template-columns: 220px minmax(0, 1fr) 190px; width: 100%; height: 100%; }
+    .workspace { display: grid; grid-template-columns: var(--rail-left-w) minmax(0, 1fr) var(--rail-right-w); width: 100%; height: 100%; }
 
     /* ---------- левая рейка: меню/настройки (hover-reveal) + аккаунт внизу ---------- */
     .rail-left {
@@ -576,7 +576,7 @@
     #settings-modal .cust-val { flex: 0 0 auto; min-width: 44px; text-align: right; font: 400 11.5px/1 var(--font-mono); color: var(--text-muted); }
     #settings-modal .cust-reset { flex: 0 0 auto; }
     #settings-modal .cust-section-actions { margin-top: 6px; }
-    #settings-modal #bg-preview {
+    #settings-modal #bg-preview, #settings-modal #bg-left-preview, #settings-modal #bg-right-preview {
       display: block; width: 100%; height: 64px; object-fit: cover;
       border-radius: var(--card-radius); box-shadow: 0 0 0 1px var(--line);
       margin-top: 10px;
@@ -627,7 +627,7 @@
 </head>
 <body>
   <div class="workspace">
-    <!-- ЛЕВАЯ РЕЙКА — меню/настройки (тема, экспорт/импорт, настройки) + аккаунт внизу -->
+    <!-- ЛЕВАЯ РЕЙКА — меню/настройки (экспорт/импорт, настройки) + аккаунт внизу -->
     <aside class="rail-left" id="rail-left" aria-label="Меню и настройки" data-i18n-aria="rail_menu_aria">
       <div class="rail-brand">BlatTabs</div>
       <div class="searchbox">
@@ -636,11 +636,6 @@
         <kbd>/</kbd>
       </div>
       <div class="rail-controls" id="rail-controls">
-        <button class="rail-item" id="theme-btn" data-i18n-title="theme_title" title="Переключить тёмную/светлую тему">
-          <span class="ico"><span class="glyph">🌙</span></span>
-          <span class="lbl"><span class="t" data-i18n="theme_label">Тема</span><span class="s" data-i18n="theme_sub">Светлая · тёмная</span></span>
-          <span class="go">→</span>
-        </button>
         <button class="rail-item" id="create-group-btn" data-i18n-title="rail_group_title" title="Создать новую группу">
           <span class="ico"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 8v8"/><path d="M8 12h8"/></svg></span>
           <span class="lbl"><span class="t" data-i18n="rail_group_label">Создать группу</span><span class="s" data-i18n="rail_group_sub">Новая группа в этом пространстве</span></span>
@@ -742,6 +737,8 @@
   </div>
   <input type="file" id="import-input" accept=".json" style="display:none;">
   <input type="file" id="bg-file-input" accept="image/*" style="display:none;">
+<input type="file" id="bg-left-file-input" accept="image/*" style="display:none;">
+<input type="file" id="bg-right-file-input" accept="image/*" style="display:none;">
 
   <!-- Быстрый поиск: потемнение + большая буква в центре (транзиторный, pointer-events:none) -->
   <div id="qs-overlay" class="qs-overlay" aria-hidden="true"><span id="qs-letter"></span></div>
@@ -789,27 +786,21 @@
       <!-- Две панели: слева навигация разделов, справа — контент активного раздела -->
       <div class="settings-grid">
         <nav class="settings-nav" aria-label="Разделы настроек" data-i18n-aria="settings_nav_aria">
-          <button class="settings-nav-item active" data-section="customization" data-i18n="nav_customization">Кастомизация</button>
+          <button class="settings-nav-item active" data-section="appearance" data-i18n="nav_appearance">Внешний вид</button>
+          <button class="settings-nav-item" data-section="backgrounds" data-i18n="nav_backgrounds">Фоны</button>
+          <button class="settings-nav-item" data-section="general" data-i18n="nav_general">Общие</button>
+          <button class="settings-nav-item" data-section="experimental" data-i18n="nav_experimental">Экспериментальное</button>
           <button class="settings-nav-item" data-section="faq" data-i18n="nav_faq">FAQ</button>
           <button class="settings-nav-item" data-section="about" data-i18n="nav_about">О программе</button>
         </nav>
         <div class="settings-main">
-          <div class="settings-pane" id="settings-pane-customization">
-      <!-- Фон — custom background image (blattam-bg-image, data URL, local) -->
-      <section class="settings-section" id="bg-section">
-        <h4 class="settings-section-title" data-i18n="bg_title">Фон</h4>
-        <div class="bg-row">
-          <button class="btn btn-ghost" id="bg-file-btn" data-i18n-title="bg_pick_title" data-i18n="bg_pick" title="Выбрать картинку для фона">Выбрать картинку</button>
-          <button class="btn btn-ghost" id="bg-clear-btn" data-i18n="bg_clear" style="display:none;">Убрать</button>
-        </div>
-        <img id="bg-preview" data-i18n-alt="bg_preview_alt" style="display:none;" alt="Превью фона">
-      </section>
-      <!-- Цвет вкладок — кастомный фон карточек (blattam-tab-color, hex, local) -->
-      <section class="settings-section" id="tab-color-section">
-        <h4 class="settings-section-title" data-i18n="tab_color_title">Цвет вкладок</h4>
-        <div class="tab-color-row">
-          <input type="color" id="tab-color-input" data-i18n-title="tab_color_input_title" title="Цвет карточек сохранённых вкладок">
-          <button class="btn btn-ghost" id="tab-color-reset" data-i18n="tab_color_reset" style="display:none;">Сбросить</button>
+          <div class="settings-pane" id="settings-pane-appearance">
+      <!-- Тема — светлая/тёмная (blattam-theme, local); переключатель переехал из левой рейки -->
+      <section class="settings-section" id="theme-section">
+        <h4 class="settings-section-title" data-i18n="theme_label">Тема</h4>
+        <div class="lang-row">
+          <button class="btn btn-ghost" id="theme-btn-light" data-i18n="theme_light">Светлая</button>
+          <button class="btn btn-ghost" id="theme-btn-dark" data-i18n="theme_dark">Тёмная</button>
         </div>
       </section>
       <!-- Цвета — кастомные цвета основных элементов (blattam-custom-theme, hex, local) -->
@@ -891,6 +882,18 @@
           <span class="cust-val" id="cust-geo-fontsize-val"></span>
           <button class="btn btn-ghost cust-reset" data-cust-reset="fontsize" style="display:none;" data-i18n="cust_reset">Сбросить</button>
         </label>
+        <label class="cust-row">
+          <span class="cust-lbl" data-i18n="cust_railleft_w">Ширина левой рейки</span>
+          <input type="range" id="cust-geo-railleft" min="140" max="320" step="2">
+          <span class="cust-val" id="cust-geo-railleft-val"></span>
+          <button class="btn btn-ghost cust-reset" data-cust-reset="railleft" style="display:none;" data-i18n="cust_reset">Сбросить</button>
+        </label>
+        <label class="cust-row">
+          <span class="cust-lbl" data-i18n="cust_railright_w">Ширина правой рейки</span>
+          <input type="range" id="cust-geo-railright" min="120" max="320" step="2">
+          <span class="cust-val" id="cust-geo-railright-val"></span>
+          <button class="btn btn-ghost cust-reset" data-cust-reset="railright" style="display:none;" data-i18n="cust_reset">Сбросить</button>
+        </label>
         <div class="cust-section-actions">
           <button class="btn btn-ghost" id="cust-geo-reset-all" style="display:none;" data-i18n="cust_reset_all">Сбросить всё</button>
         </div>
@@ -907,6 +910,46 @@
           </select>
         </label>
       </section>
+          </div>
+          <div class="settings-pane" id="settings-pane-backgrounds" style="display:none;">
+
+      <!-- Фон — custom background image (blattam-bg-image, data URL, local) -->
+      <section class="settings-section" id="bg-section">
+        <h4 class="settings-section-title" data-i18n="bg_title">Фон</h4>
+        <div class="bg-row">
+          <button class="btn btn-ghost" id="bg-file-btn" data-i18n-title="bg_pick_title" data-i18n="bg_pick" title="Выбрать картинку для фона">Выбрать картинку</button>
+          <button class="btn btn-ghost" id="bg-clear-btn" data-i18n="bg_clear" style="display:none;">Убрать</button>
+        </div>
+        <img id="bg-preview" data-i18n-alt="bg_preview_alt" style="display:none;" alt="Превью фона">
+      </section>
+      <!-- Фон левой рейки — картинка фона рейки меню (blattam-bg-image-left, data URL, local) -->
+      <section class="settings-section" id="bg-left-section">
+        <h4 class="settings-section-title" data-i18n="bg_left_title">Фон левой рейки</h4>
+        <div class="bg-row">
+          <button class="btn btn-ghost" id="bg-left-file-btn" data-i18n="bg_pick" title="Выбрать картинку для фона левой рейки" data-i18n-title="bg_left_pick_title">Выбрать картинку</button>
+          <button class="btn btn-ghost" id="bg-left-clear-btn" data-i18n="bg_clear" style="display:none;">Убрать</button>
+        </div>
+        <img id="bg-left-preview" style="display:none;" alt="Превью фона левой рейки" data-i18n-alt="bg_left_preview_alt">
+      </section>
+      <!-- Фон правой рейки — картинка фона рейки вкладок браузера (blattam-bg-image-right, data URL, local) -->
+      <section class="settings-section" id="bg-right-section">
+        <h4 class="settings-section-title" data-i18n="bg_right_title">Фон правой рейки</h4>
+        <div class="bg-row">
+          <button class="btn btn-ghost" id="bg-right-file-btn" data-i18n="bg_pick" title="Выбрать картинку для фона правой рейки" data-i18n-title="bg_right_pick_title">Выбрать картинку</button>
+          <button class="btn btn-ghost" id="bg-right-clear-btn" data-i18n="bg_clear" style="display:none;">Убрать</button>
+        </div>
+        <img id="bg-right-preview" style="display:none;" alt="Превью фона правой рейки" data-i18n-alt="bg_right_preview_alt">
+      </section>
+      <!-- Цвет вкладок — кастомный фон карточек (blattam-tab-color, hex, local) -->
+      <section class="settings-section" id="tab-color-section">
+        <h4 class="settings-section-title" data-i18n="tab_color_title">Цвет вкладок</h4>
+        <div class="tab-color-row">
+          <input type="color" id="tab-color-input" data-i18n-title="tab_color_input_title" title="Цвет карточек сохранённых вкладок">
+          <button class="btn btn-ghost" id="tab-color-reset" data-i18n="tab_color_reset" style="display:none;">Сбросить</button>
+        </div>
+      </section>
+          </div>
+          <div class="settings-pane" id="settings-pane-general" style="display:none;">
       <section class="settings-section" id="lang-section">
         <h4 class="settings-section-title" data-i18n="lang_title">Язык</h4>
         <div class="lang-row">
@@ -914,6 +957,8 @@
           <button class="btn btn-ghost" id="lang-btn-en" data-i18n="lang_en">English</button>
         </div>
       </section>
+          </div>
+          <div class="settings-pane" id="settings-pane-experimental" style="display:none;">
       <section class="settings-section" id="qs-section">
         <h4 class="settings-section-title" data-i18n="qs_title">Экспериментальное</h4>
         <label class="qs-row">
