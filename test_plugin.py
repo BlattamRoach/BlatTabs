@@ -509,8 +509,8 @@ POPUP_DOM = body_dom("popup.html")
 
 def load_view(pg, tabs=None, spaces=None, groups=None, folders=None,
               last_space=None, theme=None, confirm=False, browser_tabs=None,
-              bg=None, tab_color=None, lang=None, quick_search=None,
-              custom_theme=None, trash=None):
+              bg=None, bg_left=None, bg_right=None, tab_color=None, lang=None,
+              quick_search=None, custom_theme=None, trash=None):
     """about:blank + mock + данные + DOM view.html + view.js.
 
     browser_tabs — список открытых вкладок браузера (chrome.tabs._tabs):
@@ -536,6 +536,10 @@ def load_view(pg, tabs=None, spaces=None, groups=None, folders=None,
         init.append("chrome.storage.local._data['blattam-theme'] = " + json.dumps(theme) + ";")
     if bg is not None:
         init.append("chrome.storage.local._data['blattam-bg-image'] = " + json.dumps(bg) + ";")
+    if bg_left is not None:
+        init.append("chrome.storage.local._data['blattam-bg-image-left'] = " + json.dumps(bg_left) + ";")
+    if bg_right is not None:
+        init.append("chrome.storage.local._data['blattam-bg-image-right'] = " + json.dumps(bg_right) + ";")
     if tab_color is not None:
         init.append("chrome.storage.local._data['blattam-tab-color'] = " + json.dumps(tab_color) + ";")
     if lang is not None:
@@ -2512,8 +2516,8 @@ class TestCreateGroupRailButton:
 
     SP = [{"id": "sp1", "name": "Main"}]
 
-    def test_rail_button_position_after_theme(self):
-        # «Создать группу» — .rail-item в #rail-controls, сразу ПОСЛЕ #theme-btn
+    def test_rail_button_position_first(self):
+        # «Создать группу» — ПЕРВАЯ .rail-item в #rail-controls (тема — в настройках, волна 3)
         load_view(self.page, spaces=self.SP, tabs=[])
         d = json.loads(self.page.evaluate("""(() => {
           const btn = document.getElementById('create-group-btn');
@@ -2524,14 +2528,13 @@ class TestCreateGroupRailButton:
             inRail: rail.contains(btn),
             inControls: ctrl.contains(btn),
             isRailItem: btn && btn.classList.contains('rail-item'),
-            afterTheme: btn && btn.previousElementSibling
-              && btn.previousElementSibling.id === 'theme-btn',
+            isFirst: btn && btn.previousElementSibling === null,
             beforeExport: btn && btn.nextElementSibling
               && btn.nextElementSibling.id === 'export-btn'
           });
         })()"""))
         assert d == {"exists": True, "inRail": True, "inControls": True,
-                     "isRailItem": True, "afterTheme": True, "beforeExport": True}, d
+                     "isRailItem": True, "isFirst": True, "beforeExport": True}, d
 
     def test_rail_button_label_ru_default(self):
         # Подпись .t — ru-по-умолчанию «Создать группу» + подстрока .s
@@ -5848,7 +5851,7 @@ class TestRailWarmOnCardDrag:
         assert warm_l["cls"] is True and warm_l["bg"] != base_l, (base_l, warm_l)
         assert warm_l["bg"] == self._probe_token_bg("--rail-warm"), warm_l
         assert warm_l["ring"] != "none", warm_l
-        pg.evaluate("document.getElementById('theme-btn').click()")  # тёмная тема
+        pg.evaluate("setTheme('dark')")  # тёмная тема (функция переключателя из настроек)
         self.page.wait_for_timeout(50)
         base_d = self._warm_state()["bg"]
         self._start_card_drag("T1")
@@ -7102,24 +7105,50 @@ class TestDarkTheme:
     def _setup(self, page):
         self.page = page
 
-    def test_theme_button_exists(self):
+    def _open_theme(self):
+        # Тема — в настройках, панель «Внешний вид» (дефолтная при открытии)
+        self.page.click("#settings-btn")
+        self.page.wait_for_timeout(100)
+
+    def test_theme_section_in_settings(self):
         load_view(self.page)
-        assert self.page.evaluate("!!document.getElementById('theme-btn')")
+        self._open_theme()
+        d = json.loads(self.page.evaluate("""(() => {
+          const sec = document.getElementById('theme-section');
+          const pane = document.getElementById('settings-pane-appearance');
+          const light = document.getElementById('theme-btn-light');
+          const dark = document.getElementById('theme-btn-dark');
+          return JSON.stringify({
+            sectionExists: !!sec,
+            inAppearance: !!sec && pane.contains(sec),
+            firstSection: !!sec && pane.firstElementChild === sec,
+            lightExists: !!light, darkExists: !!dark,
+            lightActive: light ? light.classList.contains('active') : false,
+            darkActive: dark ? dark.classList.contains('active') : false,
+            railBtnGone: !document.getElementById('theme-btn')
+          });
+        })()"""))
+        assert d == {"sectionExists": True, "inAppearance": True, "firstSection": True,
+                     "lightExists": True, "darkExists": True,
+                     "lightActive": True, "darkActive": False,
+                     "railBtnGone": True}, d
 
     def test_default_theme_is_light(self):
         load_view(self.page)
         assert self.page.evaluate("document.documentElement.dataset.theme") == "light"
-        assert self.page.evaluate("document.querySelector('#theme-btn .glyph').textContent") == "\U0001F319"
 
     def test_click_switches_to_dark(self):
         load_view(self.page)
-        self.page.evaluate("document.getElementById('theme-btn').click()")
+        self._open_theme()
+        self.page.locator("#theme-btn-dark").click()
         assert self.page.evaluate("document.documentElement.dataset.theme") == "dark"
-        assert self.page.evaluate("document.querySelector('#theme-btn .glyph').textContent") == "\u2600\uFE0F"
+        assert self.page.evaluate(
+            "document.getElementById('theme-btn-dark').classList.contains('active')")
 
     def test_theme_saved_to_local_storage(self):
         load_view(self.page)
-        self.page.evaluate("document.getElementById('theme-btn').click()")
+        self._open_theme()
+        self.page.locator("#theme-btn-dark").click()
         assert read_local(self.page, "blattam-theme") == "dark"
 
     def test_saved_theme_applied_on_load(self):
@@ -7129,10 +7158,12 @@ class TestDarkTheme:
 
     def test_second_click_returns_to_light(self):
         load_view(self.page)
-        self.page.evaluate("document.getElementById('theme-btn').click()")
-        self.page.evaluate("document.getElementById('theme-btn').click()")
+        self._open_theme()
+        self.page.locator("#theme-btn-dark").click()
+        self.page.locator("#theme-btn-light").click()
         assert self.page.evaluate("document.documentElement.dataset.theme") == "light"
         assert read_local(self.page, "blattam-theme") == "light"
+
 
 
 # ==========================================
@@ -8984,7 +9015,7 @@ class TestDragSourceRowHold:
         assert abs(d["gbar2Top"] - pre["gbar2Top"]) < 2, (pre["gbar2Top"], d["gbar2Top"])
         assert self.page.evaluate(
             "document.documentElement.dataset.theme") == "light"
-        self.page.evaluate("document.getElementById('theme-btn').click()")
+        self.page.evaluate("setTheme('dark')")
         assert self.page.evaluate(
             "document.documentElement.dataset.theme") == "dark"
         d = self._state()
@@ -11473,7 +11504,7 @@ class TestRailLayout:
             assert d["right"]["shadow"] == "none", (theme, d)
 
     def test_left_rail_contents(self):
-        # 6 hover-reveal-строк (Тема/Создать группу/Экспорт/Импорт/Настройки/Корзина)
+        # 5 hover-reveal-строк (Создать группу/Экспорт/Импорт/Настройки/Корзина; тема — в настройках)
         # в #rail-controls; все кнопки — в левой рейке; #import-input скрыт
         load_view(self.page, tabs=self.TABS)
         self._inject_real_styles()
@@ -11487,7 +11518,7 @@ class TestRailLayout:
           return JSON.stringify({
             items: items.length,
             titles: [...document.querySelectorAll('#rail-controls .rail-item .t')].map(e => e.textContent.trim()),
-            themeInRail: inRail('theme-btn'), exportInRail: inRail('export-btn'),
+            createGroupFirst: items.length ? items[0].id === 'create-group-btn' : false, exportInRail: inRail('export-btn'),
             importInRail: inRail('import-btn'), settingsExists: !!document.getElementById('settings-btn'),
             searchInRail: inRail('search'),
             searchFirst: rail.firstElementChild ? rail.firstElementChild.contains(document.getElementById('search')) : false,
@@ -11497,9 +11528,9 @@ class TestRailLayout:
               && document.getElementById('github-modal').nextElementSibling.id === 'import-input'
           });
         })()"""))
-        assert d["items"] == 6, d
-        assert d["titles"] == ["Тема", "Создать группу", "Экспорт", "Импорт", "Настройки", "Корзина"], d
-        assert d["themeInRail"] and d["exportInRail"] and d["importInRail"], d
+        assert d["items"] == 5, d
+        assert d["titles"] == ["Создать группу", "Экспорт", "Импорт", "Настройки", "Корзина"], d
+        assert d["createGroupFirst"] and d["exportInRail"] and d["importInRail"], d
         assert d["searchInRail"] and d["brandFirst"], d
         assert d["settingsExists"], d
         assert d["importInDom"], d
@@ -12810,7 +12841,7 @@ class TestAboutSection:
             load_view(self.page, theme=theme)
             self._open()
             assert self.page.evaluate("document.getElementById('settings-pane-about').style.display") == "none"
-            assert self.page.evaluate("document.getElementById('settings-pane-customization').style.display") != "none"
+            assert self.page.evaluate("document.getElementById('settings-pane-appearance').style.display") != "none"
 
     def test_about_pane_shown_on_nav(self):
         load_view(self.page)
@@ -12892,6 +12923,9 @@ class TestSettingsBackground:
     def _open(self):
         self.page.locator("#settings-btn").click()
 
+    def _open_pane(self, section):
+        self.page.locator("#settings-modal .settings-nav-item[data-section='" + section + "']").click()
+
     def _body_bg(self):
         return self.page.evaluate("getComputedStyle(document.body).backgroundImage")
 
@@ -12911,7 +12945,7 @@ class TestSettingsBackground:
             titles = json.loads(self.page.evaluate(
                 "JSON.stringify([...document.querySelectorAll('#settings-modal .settings-section-title')]"
                 ".map(el => el.textContent.trim()))"))
-            assert titles == ["Фон", "Цвет вкладок", "Цвета", "Размер и форма", "Шрифт", "Язык", "Экспериментальное", "Частые вопросы", "О программе"]
+            assert titles == ["Тема", "Цвета", "Размер и форма", "Шрифт", "Фон", "Фон левой рейки", "Фон правой рейки", "Цвет вкладок", "Язык", "Экспериментальное", "Частые вопросы", "О программе"]
             assert self.page.evaluate("document.getElementById('bg-file-btn').textContent.trim()") == "Выбрать картинку"
             assert self.page.evaluate("document.getElementById('bg-clear-btn').textContent.trim()") == "Убрать"
             # скрытый input-файла рядом с #import-input
@@ -12954,6 +12988,7 @@ class TestSettingsBackground:
     def test_bg_clear_removes_background(self):
         load_view(self.page)
         self._open()
+        self._open_pane("backgrounds")
         self._set_file()
         assert self.page.evaluate("chrome.storage.local._data['blattam-bg-image']") is not None
         self.page.locator("#bg-clear-btn").click()
@@ -13006,6 +13041,7 @@ class TestSettingsBackground:
     def test_bg_flow_no_page_errors(self):
         load_view(self.page)
         self._open()
+        self._open_pane("backgrounds")
         self._set_file()
         self.page.locator("#bg-clear-btn").click()
         data_url = "data:image/png;base64," + "Q" * 100
@@ -13048,6 +13084,9 @@ class TestSettingsTabColor:
     def _open(self):
         self.page.locator("#settings-btn").click()
 
+    def _open_pane(self, section):
+        self.page.locator("#settings-modal .settings-nav-item[data-section='" + section + "']").click()
+
     def _card_bg(self, selector=".tab-card"):
         return self.page.evaluate(
             "getComputedStyle(document.querySelector(" + json.dumps(selector)
@@ -13078,7 +13117,7 @@ class TestSettingsTabColor:
             titles = json.loads(self.page.evaluate(
                 "JSON.stringify([...document.querySelectorAll('#settings-modal .settings-section-title')]"
                 ".map(el => el.textContent.trim()))"))
-            assert titles == ["Фон", "Цвет вкладок", "Цвета", "Размер и форма", "Шрифт", "Язык", "Экспериментальное", "Частые вопросы", "О программе"]
+            assert titles == ["Тема", "Цвета", "Размер и форма", "Шрифт", "Фон", "Фон левой рейки", "Фон правой рейки", "Цвет вкладок", "Язык", "Экспериментальное", "Частые вопросы", "О программе"]
             assert self.page.evaluate("document.getElementById('tab-color-input').type") == "color"
             assert self.page.evaluate(
                 "document.getElementById('tab-color-reset').textContent.trim()") == "Сбросить"
@@ -13124,6 +13163,7 @@ class TestSettingsTabColor:
             assert self._card_bg() == "rgb(51, 102, 153)"
             self._open()
             assert self._reset_visible()
+            self._open_pane("backgrounds")
             self.page.locator("#tab-color-reset").click()
             assert self._stored() is None
             assert self._card_bg() == default
@@ -13158,6 +13198,7 @@ class TestSettingsTabColor:
     def test_tab_color_flow_no_page_errors(self):
         self._load(tabs=self._tabs())
         self._open()
+        self._open_pane("backgrounds")
         self._set_color("#336699")
         self.page.locator("#tab-color-reset").click()
         self.page.evaluate("chrome.storage.local.set({'blattam-tab-color': '#123456'})")
@@ -18084,7 +18125,7 @@ class TestI18n:
         load_view(self.page)
         self.page.wait_for_timeout(150)
         d = json.loads(self.page.evaluate("""(() => {
-          const t = document.querySelector('#theme-btn .t');
+          const t = document.querySelector('#theme-section h4');
           return JSON.stringify({
             theme_label: t ? t.textContent : null,
             search_ph: document.getElementById('search').placeholder,
@@ -18105,7 +18146,7 @@ class TestI18n:
         load_view(self.page, lang="en")
         self.page.wait_for_timeout(150)
         d = json.loads(self.page.evaluate("""(() => {
-          const t = document.querySelector('#theme-btn .t');
+          const t = document.querySelector('#theme-section h4');
           return JSON.stringify({
             theme_label: t ? t.textContent : null,
             search_ph: document.getElementById('search').placeholder,
@@ -18128,7 +18169,7 @@ class TestI18n:
         self.page.click("#settings-btn")
         self.page.wait_for_timeout(150)
         d = self.page.evaluate("""(() => {
-          const sec = document.querySelector('#settings-pane-customization #lang-section');
+          const sec = document.querySelector('#settings-pane-general #lang-section');
           if (!sec) return 'missing';
           return JSON.stringify({
             h4: sec.querySelector('h4').textContent,
@@ -18137,7 +18178,7 @@ class TestI18n:
           });
         })()""")
         if d == "missing":
-            pytest.fail("#lang-section not found inside #settings-pane-customization")
+            pytest.fail("#lang-section not found inside #settings-pane-general")
         r = json.loads(d)
         assert r["h4"] == "Язык", r
         assert r["ru"] == "Русский", r
@@ -18148,10 +18189,11 @@ class TestI18n:
         self.page.wait_for_timeout(150)
         self.page.click("#settings-btn")
         self.page.wait_for_timeout(150)
+        self.page.locator("#settings-modal .settings-nav-item[data-section='general']").click()
         self.page.click("#lang-btn-en")
         self.page.wait_for_timeout(150)
         d = json.loads(self.page.evaluate("""(() => {
-          const t = document.querySelector('#theme-btn .t');
+          const t = document.querySelector('#theme-section h4');
           const navs = [...document.querySelectorAll('#settings-modal .settings-nav-item')].map(b => b.textContent);
           return JSON.stringify({
             theme_label: t ? t.textContent : null,
@@ -18168,7 +18210,7 @@ class TestI18n:
         assert d["ru_active"] is False, d
         assert d["en_active"] is True, d
         assert d["doc_lang"] == "en", d
-        assert d["navs"] == ["Customization", "FAQ", "About"], d
+        assert d["navs"] == ["Appearance", "Backgrounds", "General", "Experimental", "FAQ", "About"], d
         assert d["h4"] == "Language", d
 
     def test_toggle_back_to_ru(self):
@@ -18176,7 +18218,7 @@ class TestI18n:
         self.page.click("#lang-btn-ru")
         self.page.wait_for_timeout(150)
         d = json.loads(self.page.evaluate("""(() => {
-          const t = document.querySelector('#theme-btn .t');
+          const t = document.querySelector('#theme-section h4');
           return JSON.stringify({
             theme_label: t ? t.textContent : null,
             stored: chrome.storage.local._data['blattam-lang'],
@@ -19059,7 +19101,11 @@ class TestQuickSearch:
     def _open_settings(self):
         self.page.evaluate("document.getElementById('settings-btn').click()")
 
+    def _open_pane(self, section):
+        self.page.locator("#settings-modal .settings-nav-item[data-section='" + section + "']").click()
+
     def _flip_toggle(self):
+        self._open_pane("experimental")
         self.page.evaluate("""(() => {
           const t = document.getElementById('qs-toggle');
           t.click();
@@ -19597,8 +19643,9 @@ class TestCustomTheme:
     TOKENS = ["--bg", "--rail-bg", "--surface", "--text", "--text-muted",
               "--card-name", "--ink", "--ghost-bg", "--ghost-ring",
               "--card-radius", "--card-gap", "--card-min", "--card-name-size", "--font-ui"]
-    TITLES = ["Фон", "Цвет вкладок", "Цвета", "Размер и форма", "Шрифт",
-              "Язык", "Экспериментальное", "Частые вопросы", "О программе"]
+    TITLES = ["Тема", "Цвета", "Размер и форма", "Шрифт", "Фон", "Фон левой рейки", "Фон правой рейки",
+              "Цвет вкладок", "Язык", "Экспериментальное",
+              "Частые вопросы", "О программе"]
 
     @pytest.fixture(autouse=True)
     def _setup(self, page):
@@ -19659,7 +19706,7 @@ class TestCustomTheme:
         disp = json.loads(self.page.evaluate(
             "JSON.stringify([...document.querySelectorAll('[data-cust-reset]')]"
             ".map(b => b.style.display))"))
-        assert disp == ["none"] * 13
+        assert disp == ["none"] * 15
         assert self.page.evaluate("document.getElementById('cust-colors-reset-all').style.display") == "none"
         assert self.page.evaluate("document.getElementById('cust-geo-reset-all').style.display") == "none"
         assert self.page.evaluate("document.getElementById('cust-font').value") == "default"
@@ -19732,6 +19779,8 @@ class TestCustomTheme:
         assert self._inline("--card-gap") == ""
         assert self.page.evaluate("document.getElementById('cust-geo-radius-val').textContent") == "8px"
         assert self.page.evaluate("document.getElementById('cust-geo-gap-val').textContent") == "12px"
+        assert self.page.evaluate("document.getElementById('cust-geo-railleft-val').textContent") == "220px"
+        assert self.page.evaluate("document.getElementById('cust-geo-railright-val').textContent") == "190px"
 
     def test_font_serif_applies(self):
         self._load(tabs=self._tabs(), custom_theme={"--font-ui": "serif"})
@@ -19765,7 +19814,8 @@ class TestCustomTheme:
 
     def test_theme_switch_keeps_custom(self):
         self._load(tabs=self._tabs(), theme="dark", custom_theme={"--bg": "#336699"})
-        self.page.locator("#theme-btn").click()
+        self._open()
+        self.page.locator("#theme-btn-light").click()
         assert self.page.evaluate("document.documentElement.dataset.theme") == "light"
         assert self._inline("--bg") == "#336699"
         assert self.page.evaluate("getComputedStyle(document.body).backgroundColor") == "rgb(51, 102, 153)"
@@ -19783,8 +19833,8 @@ class TestCustomTheme:
     def test_no_pageerrors(self):
         self._load(tabs=self._tabs(), custom_theme={"--bg": "#336699", "--card-gap": "20px", "--font-ui": "serif"})
         self._open()
-        # модалка перехватывает pointer events — клик по #theme-btn через JS
-        self.page.evaluate("document.getElementById('theme-btn').click()")
+        # модалка перехватывает pointer events — клик по кнопке темы через JS (панель «Внешний вид»)
+        self.page.evaluate("document.getElementById('theme-btn-dark').click()")
         # закрыть модалку (кнопка закрытия вне viewport харнесса — Escape, тот же путь, что в view.js)
         self.page.keyboard.press("Escape")
         self.page.wait_for_timeout(100)
@@ -20953,3 +21003,521 @@ class TestTrash:
         assert d["ru_empty"] == "Корзина пуста" and d["en_empty"] == "Trash is empty", d
         assert d["ru_restore"] == "Вернуть" and d["en_restore"] == "Restore", d
         assert d["keys_equal"] is True, d
+
+
+class TestRailBackgrounds:
+    """«Фоны боковых реек» в настройках (blattam-bg-image-left/right, data URL, local)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self.page_errors = []
+        self._on_pageerror = lambda exc: self.page_errors.append(str(exc))
+        self.page.on("pageerror", self._on_pageerror)
+        yield
+        self.page.remove_listener("pageerror", self._on_pageerror)
+
+    def _open(self):
+        self.page.locator("#settings-btn").click()
+
+    def _open_pane(self, section):
+        self.page.locator("#settings-modal .settings-nav-item[data-section='" + section + "']").click()
+
+    def _rail_bg(self, which):
+        return self.page.evaluate(
+            "getComputedStyle(document.getElementById('rail-' + " + repr(which) + ")).backgroundImage")
+
+    def _titles(self):
+        return json.loads(self.page.evaluate(
+            "JSON.stringify([...document.querySelectorAll('#settings-modal .settings-section-title')]"
+            ".map(el => el.textContent.trim()))"))
+
+    def _set_file(self, which, buf=TINY_PNG, name="img.png", mime="image/png"):
+        self.page.set_input_files("#bg-%s-file-input" % which,
+                                  [{"name": name, "mimeType": mime, "buffer": buf}])
+        self.page.wait_for_timeout(200)  # FileReader — async
+
+    def test_sections_present_default_hidden(self):
+        for theme in (None, "dark"):
+            load_view(self.page, theme=theme)
+            self._open()
+            # новые разделы сразу после «Фона», до «Цвет вкладок»
+            assert self._titles() == ["Тема", "Цвета", "Размер и форма", "Шрифт", "Фон", "Фон левой рейки",
+                                      "Фон правой рейки", "Цвет вкладок", "Язык", "Экспериментальное",
+                                      "Частые вопросы", "О программе"]
+            for which in ("left", "right"):
+                assert self.page.evaluate(
+                    "chrome.storage.local._data['blattam-bg-image-%s']" % which) is None
+                assert self._rail_bg(which) == "none"
+                assert self.page.evaluate(
+                    "document.getElementById('bg-%s-preview').style.display" % which) == "none"
+                assert self.page.evaluate(
+                    "document.getElementById('bg-%s-clear-btn').style.display" % which) == "none"
+
+    def test_left_set_file_applies(self):
+        load_view(self.page)
+        self._open()
+        self._set_file("left")
+        stored = self.page.evaluate("chrome.storage.local._data['blattam-bg-image-left']")
+        assert isinstance(stored, str) and stored.startswith("data:image/png;base64,")
+        assert self._rail_bg("left").startswith('url("data:image')
+        # cover/center/fixed
+        cs = json.loads(self.page.evaluate(
+            "JSON.stringify(getComputedStyle(document.getElementById('rail-left')))"))
+        assert (cs["backgroundSize"], cs["backgroundPositionX"], cs["backgroundAttachment"]) == ("cover", "50%", "fixed")
+        # превью + «Убрать» видны
+        assert self.page.evaluate("document.getElementById('bg-left-preview').style.display") == "block"
+        assert self.page.evaluate("document.getElementById('bg-left-clear-btn').style.display") != "none"
+        # правая рейка не тронута; центральный ключ не создан
+        assert self._rail_bg("right") == "none"
+        assert self.page.evaluate("chrome.storage.local._data['blattam-bg-image']") is None
+
+    def test_right_set_file_applies(self):
+        load_view(self.page)
+        self._open()
+        self._set_file("right")
+        stored = self.page.evaluate("chrome.storage.local._data['blattam-bg-image-right']")
+        assert isinstance(stored, str) and stored.startswith("data:image/png;base64,")
+        assert self._rail_bg("right").startswith('url("data:image')
+        assert self.page.evaluate("document.getElementById('bg-right-preview').style.display") == "block"
+        assert self.page.evaluate("document.getElementById('bg-right-clear-btn').style.display") != "none"
+        # левая рейка не тронута; центральный ключ не создан
+        assert self._rail_bg("left") == "none"
+        assert self.page.evaluate("chrome.storage.local._data['blattam-bg-image']") is None
+
+    def test_left_clear(self):
+        load_view(self.page)
+        self._open()
+        self._open_pane("backgrounds")
+        self._set_file("left")
+        assert self.page.evaluate("chrome.storage.local._data['blattam-bg-image-left']") is not None
+        self.page.locator("#bg-left-clear-btn").click()
+        assert self.page.evaluate("chrome.storage.local._data['blattam-bg-image-left']") is None
+        assert self._rail_bg("left") == "none"
+        assert self.page.evaluate("document.getElementById('bg-left-preview').style.display") == "none"
+        assert self.page.evaluate("document.getElementById('bg-left-clear-btn').style.display") == "none"
+
+    def test_too_big_alert(self):
+        load_view(self.page)
+        self.page.evaluate("window.alert = (m) => { window.__lastAlert = m; };")
+        self._set_file("left", buf=b"\x00" * 4000001)
+        assert "слишком большая" in (self.page.evaluate("window.__lastAlert") or "")
+        assert self.page.evaluate("chrome.storage.local._data['blattam-bg-image-left']") is None
+        assert self._rail_bg("left") == "none"
+        assert self.page.evaluate("document.getElementById('bg-left-preview').style.display") == "none"
+
+    def test_persists_across_reload(self):
+        load_view(self.page)
+        self._open()
+        self._set_file("left")
+        stored = self.page.evaluate("chrome.storage.local._data['blattam-bg-image-left']")
+        assert stored and stored.startswith("data:")
+        # пересоздаём страницу с тем же ключом в local — фон применяется при init
+        load_view(self.page, bg_left=stored)
+        assert self._rail_bg("left").startswith("url(") and stored in self._rail_bg("left")
+        assert self.page.evaluate("document.getElementById('bg-left-preview').style.display") == "block"
+        assert self.page.evaluate("document.getElementById('bg-left-clear-btn').style.display") != "none"
+
+    def test_onchanged_external_set(self):
+        load_view(self.page)
+        data_url = "data:image/png;base64," + "Q" * 100
+        self.page.evaluate("chrome.storage.local.set({'blattam-bg-image-right': " + json.dumps(data_url) + "})")
+        self.page.wait_for_timeout(50)
+        assert self._rail_bg("right").startswith("url(") and data_url in self._rail_bg("right")
+        assert self.page.evaluate("document.getElementById('bg-right-preview').style.display") == "block"
+        # внешняя запись '' — снимает фон
+        self.page.evaluate("chrome.storage.local.set({'blattam-bg-image-right': ''})")
+        self.page.wait_for_timeout(50)
+        assert self._rail_bg("right") == "none"
+        assert self.page.evaluate("document.getElementById('bg-right-preview').style.display") == "none"
+
+    def test_theme_switch_keeps_image(self):
+        load_view(self.page)
+        self._open()
+        self._set_file("left")
+        self._set_file("right")
+        left = self.page.evaluate("chrome.storage.local._data['blattam-bg-image-left']")
+        right = self.page.evaluate("chrome.storage.local._data['blattam-bg-image-right']")
+        # переключение на dark с теми же данными — init применяет фоны реек
+        load_view(self.page, theme="dark", bg_left=left, bg_right=right)
+        assert self.page.evaluate("document.documentElement.dataset.theme") == "dark"
+        assert self._rail_bg("left").startswith("url(") and left in self._rail_bg("left")
+        assert self._rail_bg("right").startswith("url(") and right in self._rail_bg("right")
+        assert self.page.evaluate("document.getElementById('bg-left-preview').style.display") == "block"
+        assert self.page.evaluate("document.getElementById('bg-right-preview').style.display") == "block"
+
+    def test_i18n_en(self):
+        load_view(self.page, lang="en")
+        self._open()
+        titles = self._titles()
+        assert titles[5] == "Left rail background"
+        assert titles[6] == "Right rail background"
+        assert "Background" in titles and "Tab color" in titles
+
+    def test_no_pageerrors(self):
+        for theme in (None, "dark"):
+            load_view(self.page, theme=theme)
+            self._open()
+            self._open_pane("backgrounds")
+            self._set_file("left")
+            self._set_file("right")
+            self.page.locator("#bg-left-clear-btn").click()
+            self.page.locator("#bg-right-clear-btn").click()
+        assert self.page_errors == [], self.page_errors
+
+# ==========================================
+#  VIEW.JS: НАСТРОЙКИ (волна 2) — навигация: 6 разделов
+# ==========================================
+
+class TestSettingsNavRestructure:
+    """Волна 2: панель «Кастомизация» перераспределена на 6 разделов
+    (Внешний вид / Фоны / Общие / Экспериментальное / FAQ / О программе);
+    дефолтный раздел — «Внешний вид»."""
+
+    SECTIONS = ["appearance", "backgrounds", "general", "experimental", "faq", "about"]
+    RU_LABELS = ["Внешний вид", "Фоны", "Общие", "Экспериментальное", "FAQ", "О программе"]
+    EN_LABELS = ["Appearance", "Backgrounds", "General", "Experimental", "FAQ", "About"]
+    TITLES = ["Тема", "Цвета", "Размер и форма", "Шрифт", "Фон", "Фон левой рейки", "Фон правой рейки",
+              "Цвет вкладок", "Язык", "Экспериментальное", "Частые вопросы", "О программе"]
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self.page_errors = []
+        self._on_pageerror = lambda exc: self.page_errors.append(str(exc))
+        self.page.on("pageerror", self._on_pageerror)
+        yield
+        self.page.remove_listener("pageerror", self._on_pageerror)
+
+    def _open(self):
+        self.page.locator("#settings-btn").click()
+
+    def _open_pane(self, section):
+        self.page.locator("#settings-modal .settings-nav-item[data-section='" + section + "']").click()
+
+    def _pane_display(self, section):
+        return self.page.evaluate(
+            "document.getElementById('settings-pane-" + section + "').style.display")
+
+    def test_nav_six_items_ru_labels(self):
+        load_view(self.page)
+        self._open()
+        d = json.loads(self.page.evaluate("""(() => {
+          const items = [...document.querySelectorAll('#settings-modal .settings-nav-item')];
+          return JSON.stringify({
+            count: items.length,
+            sections: items.map(b => b.dataset.section),
+            labels: items.map(b => b.textContent.trim())
+          });
+        })()"""))
+        assert d["count"] == 6, d
+        assert d["sections"] == self.SECTIONS, d
+        assert d["labels"] == self.RU_LABELS, d
+
+    def test_default_pane_appearance(self):
+        for theme in (None, "dark"):
+            load_view(self.page, theme=theme)
+            self._open()
+            active = self.page.evaluate(
+                "document.querySelector('#settings-modal .settings-nav-item.active').dataset.section")
+            assert active == "appearance", (theme, active)
+            assert self._pane_display("appearance") != "none", theme
+            for sec in self.SECTIONS:
+                if sec != "appearance":
+                    assert self._pane_display(sec) == "none", (theme, sec)
+
+    def test_click_each_nav_switches_pane(self):
+        load_view(self.page)
+        self._open()
+        for sec in self.SECTIONS:
+            self._open_pane(sec)
+            for s_ in self.SECTIONS:
+                got = self._pane_display(s_)
+                want = "none" if s_ != sec else "visible"
+                assert (got == "none") == (want == "none"), (sec, s_, got)
+            active = self.page.evaluate(
+                "document.querySelector('#settings-modal .settings-nav-item.active').dataset.section")
+            assert active == sec, (sec, active)
+
+    def test_sections_live_in_their_panes(self):
+        load_view(self.page)
+        d = json.loads(self.page.evaluate("""(() => {
+          const inPane = (id) => {
+            const el = document.getElementById(id);
+            const pane = el ? el.closest('.settings-pane') : null;
+            return pane ? pane.id : 'missing';
+          };
+          return JSON.stringify({
+            colors: inPane('cust-colors-section'),
+            geo: inPane('cust-geo-section'),
+            font: inPane('cust-font-section'),
+            bg: inPane('bg-section'),
+            bgLeft: inPane('bg-left-section'),
+            bgRight: inPane('bg-right-section'),
+            tabColor: inPane('tab-color-section'),
+            lang: inPane('lang-section'),
+            qs: inPane('qs-section'),
+            oldPane: !!document.getElementById('settings-pane-customization'),
+            mainOrder: [...document.querySelectorAll('.settings-main .settings-pane')].map(p => p.id)
+          });
+        })()"""))
+        assert d["colors"] == "settings-pane-appearance", d
+        assert d["geo"] == "settings-pane-appearance", d
+        assert d["font"] == "settings-pane-appearance", d
+        assert d["bg"] == "settings-pane-backgrounds", d
+        assert d["bgLeft"] == "settings-pane-backgrounds", d
+        assert d["bgRight"] == "settings-pane-backgrounds", d
+        assert d["tabColor"] == "settings-pane-backgrounds", d
+        assert d["lang"] == "settings-pane-general", d
+        assert d["qs"] == "settings-pane-experimental", d
+        assert d["oldPane"] is False, d
+        assert d["mainOrder"] == ["settings-pane-appearance", "settings-pane-backgrounds",
+                                  "settings-pane-general", "settings-pane-experimental",
+                                  "settings-pane-faq", "settings-pane-about"], d
+
+    def test_section_titles_exact_order_both_themes(self):
+        for theme in (None, "dark"):
+            load_view(self.page, theme=theme)
+            self._open()
+            titles = json.loads(self.page.evaluate(
+                "JSON.stringify([...document.querySelectorAll('#settings-modal .settings-section-title')]"
+                ".map(el => el.textContent.trim()))"))
+            assert titles == self.TITLES, (theme, titles)
+
+    def test_faq_and_about_content_intact(self):
+        load_view(self.page)
+        self._open()
+        self._open_pane("faq")
+        assert self.page.evaluate("document.querySelectorAll('#settings-pane-faq .faq-item').length") == 5
+        assert "Что такое BlatTabs?" in self.page.evaluate("document.querySelector('#settings-pane-faq .faq-list').textContent")
+        self._open_pane("about")
+        assert self.page.evaluate("document.getElementById('about-version').textContent") == "1.0.0"
+        assert self.page.evaluate("!!document.querySelector('#settings-pane-about .about-text')")
+
+    def test_nav_labels_en(self):
+        load_view(self.page, lang="en")
+        self._open()
+        labels = json.loads(self.page.evaluate(
+            "JSON.stringify([...document.querySelectorAll('#settings-modal .settings-nav-item')]"
+            ".map(b => b.textContent.trim()))"))
+        assert labels == self.EN_LABELS, labels
+
+    def test_no_pageerrors_all_panes_both_themes(self):
+        for theme in (None, "dark"):
+            load_view(self.page, theme=theme)
+            self._open()
+            for sec in self.SECTIONS:
+                self._open_pane(sec)
+        assert self.page_errors == [], self.page_errors
+
+
+# ==========================================
+#  VIEW.JS: ТEMA В НАСТРОЙКАХ (blattam-theme, волна 3)
+# ==========================================
+
+class TestThemeInSettings:
+    """Переключатель темы — панель «Внешний вид» (rail-кнопка «Тема» удалена)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self.page_errors = []
+        self._on_pageerror = lambda exc: self.page_errors.append(str(exc))
+        self.page.on("pageerror", self._on_pageerror)
+        yield
+        self.page.remove_listener("pageerror", self._on_pageerror)
+
+    def _open(self):
+        self.page.locator("#settings-btn").click()
+        self.page.wait_for_timeout(100)
+
+    def _inject_real_styles(self):
+        # Харнес ставит только body.innerHTML — подгружаем настоящие стили
+        theme = load_file("theme.css")
+        html = load_file("view.html")
+        style = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate(
+            "(styles) => { var st = document.createElement('style'); st.textContent = styles; document.head.appendChild(st); }",
+            [theme + "\n" + style])
+
+    def test_rail_theme_button_gone(self):
+        load_view(self.page)
+        assert self.page.evaluate("!!document.getElementById('theme-btn')") is False
+
+    def test_dark_seed_buttons_sync_on_open(self):
+        load_view(self.page, theme="dark")
+        self._open()
+        d = json.loads(self.page.evaluate("""(() => {
+          const l = document.getElementById('theme-btn-light');
+          const d = document.getElementById('theme-btn-dark');
+          return JSON.stringify({
+            lightActive: l.classList.contains('active'),
+            darkActive: d.classList.contains('active')
+          });
+        })()"""))
+        assert d == {"lightActive": False, "darkActive": True}, d
+
+    def test_onchanged_external_set(self):
+        load_view(self.page)
+        self._open()
+        self.page.evaluate("chrome.storage.local.set({'blattam-theme': 'dark'})")
+        self.page.wait_for_timeout(50)
+        d = json.loads(self.page.evaluate("""(() => {
+          const l = document.getElementById('theme-btn-light');
+          const d = document.getElementById('theme-btn-dark');
+          return JSON.stringify({
+            theme: document.documentElement.dataset.theme,
+            lightActive: l.classList.contains('active'),
+            darkActive: d.classList.contains('active')
+          });
+        })()"""))
+        assert d == {"theme": "dark", "lightActive": False, "darkActive": True}, d
+
+    def test_palette_changes_with_real_styles(self):
+        for theme, body_bg in ((None, "rgb(255, 255, 255)"), ("dark", "rgb(31, 28, 27)")):
+            load_view(self.page, theme=theme)
+            self._inject_real_styles()
+            bg = self.page.evaluate("getComputedStyle(document.body).backgroundColor")
+            assert bg == body_bg, (theme, bg)
+
+    def test_i18n_en_theme_section(self):
+        load_view(self.page, lang="en")
+        self._open()
+        d = json.loads(self.page.evaluate("""(() => {
+          const h4 = document.querySelector('#theme-section h4');
+          return JSON.stringify({
+            h4: h4 ? h4.textContent.trim() : null,
+            light: document.getElementById('theme-btn-light').textContent.trim(),
+            dark: document.getElementById('theme-btn-dark').textContent.trim()
+          });
+        })()"""))
+        assert d == {"h4": "Theme", "light": "Light", "dark": "Dark"}, d
+
+    def test_click_both_buttons_no_pageerrors(self):
+        load_view(self.page)
+        self._open()
+        self.page.locator("#theme-btn-dark").click()
+        self.page.locator("#theme-btn-light").click()
+        self.page.keyboard.press("Escape")
+        self.page.wait_for_timeout(100)
+        assert self.page_errors == []
+        assert self.page.evaluate("document.documentElement.dataset.theme") == "light"
+
+class TestRailWidths:
+    """Волна 4: ширина боковых реек — слайдеры в «Размер и форма»
+    (токены --rail-left-w/--rail-right-w, blattam-custom-theme).
+    computed gridTemplateColumns — resolved-длины треков (220px 870px 190px на 1280)."""
+
+    TABS = [{"name": f"Вкладка {i}", "url": f"https://example.com/{i}"} for i in range(1, 3)]
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self.page_errors = []
+        self._on_pageerror = lambda exc: self.page_errors.append(str(exc))
+        self.page.on("pageerror", self._on_pageerror)
+        self.page.set_viewport_size({"width": 1280, "height": 900})
+        yield
+        self.page.remove_listener("pageerror", self._on_pageerror)
+
+    def _inject_css(self):
+        # реальный CSS (theme.css + <style> view.html) — для computed-style проверок
+        theme = load_file("theme.css")
+        html = load_file("view.html")
+        style = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate(
+            "(() => { const st = document.createElement('style'); st.textContent = "
+            + json.dumps(theme + style)
+            + "; (document.head || document.documentElement).appendChild(st); })()")
+
+    def _load(self, **kw):
+        load_view(self.page, tabs=self.TABS, **kw)
+        self._inject_css()
+        self.page.wait_for_timeout(120)
+
+    def _grid(self):
+        return self.page.evaluate(
+            "getComputedStyle(document.querySelector('.workspace')).gridTemplateColumns")
+
+    def _stored(self):
+        return self.page.evaluate("chrome.storage.local._data['blattam-custom-theme']")
+
+    def _set_geo(self, cid, val):
+        self.page.evaluate(
+            "(() => { const i = document.getElementById('cust-geo-' + " + json.dumps(cid)
+            + "); i.value = " + json.dumps(str(val))
+            + "; i.dispatchEvent(new Event('input', {bubbles: true})); })()")
+
+    def _open(self):
+        # открытие настроек — ре-применение applyCustomTheme (актуальные
+        # значения слайдеров из токенов темы, view.js @ openSettings)
+        self.page.locator("#settings-btn").click()
+
+    def test_defaults_grid_and_controls(self):
+        self._load()
+        assert self._grid() == "220px 870px 190px"
+        self._open()
+        assert self.page.evaluate("document.getElementById('cust-geo-railleft').value") == "220"
+        assert self.page.evaluate("document.getElementById('cust-geo-railright').value") == "190"
+        assert self.page.evaluate("document.getElementById('cust-geo-railleft-val').textContent") == "220px"
+        assert self.page.evaluate("document.getElementById('cust-geo-railright-val').textContent") == "190px"
+        assert self.page.evaluate(
+            "document.querySelector('[data-cust-reset=\"railleft\"]').style.display") == "none"
+        assert self.page.evaluate(
+            "document.querySelector('[data-cust-reset=\"railright\"]').style.display") == "none"
+        assert self._stored() is None
+        assert self.page_errors == []
+
+    def test_left_rail_set_live(self):
+        self._load()
+        self._open()
+        self._set_geo("railleft", 260)
+        grid = self._grid()
+        assert grid == "260px 830px 190px", grid
+        assert self._stored() == {"--rail-left-w": "260px"}
+        assert self.page.evaluate(
+            "document.querySelector('[data-cust-reset=\"railleft\"]').style.display") != "none"
+        assert self.page.evaluate("document.getElementById('cust-geo-railleft-val').textContent") == "260px"
+
+    def test_right_rail_set_live(self):
+        self._load()
+        self._open()
+        self._set_geo("railright", 240)
+        grid = self._grid()
+        assert grid == "220px 820px 240px", grid
+        assert self._stored() == {"--rail-right-w": "240px"}
+
+    def test_per_row_reset_left(self):
+        self._load(custom_theme={"--rail-left-w": "260px"})
+        assert self._grid() == "260px 830px 190px"
+        self._open()
+        self.page.locator('[data-cust-reset="railleft"]').click()
+        assert self._stored() is None
+        assert self._grid() == "220px 870px 190px"
+        assert self.page.evaluate(
+            "document.querySelector('[data-cust-reset=\"railleft\"]').style.display") == "none"
+
+    def test_reset_all_geometry(self):
+        self._load(custom_theme={"--rail-left-w": "260px", "--rail-right-w": "240px"})
+        self._open()
+        self.page.locator("#cust-geo-reset-all").click()
+        assert self._stored() is None
+        assert self._grid() == "220px 870px 190px"
+        assert self.page.evaluate("document.getElementById('cust-geo-railleft-val').textContent") == "220px"
+        assert self.page.evaluate("document.getElementById('cust-geo-railright-val').textContent") == "190px"
+
+    def test_persist_across_reload(self):
+        self._load(custom_theme={"--rail-left-w": "280px", "--rail-right-w": "250px"})
+        assert self._grid() == "280px 750px 250px"
+        assert self.page.evaluate("document.getElementById('cust-geo-railleft').value") == "280"
+        assert self.page.evaluate("document.getElementById('cust-geo-railright').value") == "250"
+
+    def test_themes_and_i18n_en(self):
+        self._load(theme="dark")
+        assert self._grid() == "220px 870px 190px"
+        self._load(lang="en")
+        assert self._grid() == "220px 870px 190px"
+        assert self.page.evaluate(
+            "document.querySelector('[data-i18n=\"cust_railleft_w\"]').textContent") == "Left rail width"
+        assert self.page.evaluate(
+            "document.querySelector('[data-i18n=\"cust_railright_w\"]').textContent") == "Right rail width"

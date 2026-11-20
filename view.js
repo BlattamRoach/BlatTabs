@@ -3,17 +3,33 @@
 // по умолчанию светлая. Применяем сохранённую тему ДО первого рендера
 // (loadData() вызывается в конце файла) — чтобы страница не мигала.
 
-const themeBtn = document.getElementById('theme-btn');
-const themeGlyph = themeBtn.querySelector('.glyph');
-
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
-  if (themeGlyph) themeGlyph.textContent = theme === 'dark' ? '\u2600\uFE0F' : '\uD83C\uDF19';
 }
 
 chrome.storage.local.get(['blattam-theme'], (result) => {
   applyTheme(result['blattam-theme'] === 'dark' ? 'dark' : 'light');
+  applyThemeButtons(); // активная кнопка в настройках — под сохранённую тему
 });
+
+// «Тема» в настройках: Светлая/Тёмная (blattam-theme, local) — переключатель
+// переехал из левой рейки в панель «Внешний вид»
+function applyThemeButtons() {
+  const cur = document.documentElement.dataset.theme;
+  const l = document.getElementById('theme-btn-light');
+  const d = document.getElementById('theme-btn-dark');
+  if (l) l.classList.toggle('active', cur !== 'dark');
+  if (d) d.classList.toggle('active', cur === 'dark');
+}
+function setTheme(theme) {
+  applyTheme(theme);
+  applyThemeButtons();
+  chrome.storage.local.set({ 'blattam-theme': theme });
+}
+const themeBtnLight = document.getElementById('theme-btn-light');
+const themeBtnDark = document.getElementById('theme-btn-dark');
+if (themeBtnLight) themeBtnLight.addEventListener('click', () => setTheme('light'));
+if (themeBtnDark) themeBtnDark.addEventListener('click', () => setTheme('dark'));
 
 // === Фон (кастомная картинка-фон) ===
 // blattam-bg-image — data URL (большой ключ — только chrome.storage.local;
@@ -48,6 +64,37 @@ function applyBackgroundImage(dataUrl) {
 
 chrome.storage.local.get(['blattam-bg-image'], (result) => {
   applyBackgroundImage(result['blattam-bg-image'] || '');
+});
+
+// === Фоны боковых реек (левая/правая) ===
+// blattam-bg-image-left / blattam-bg-image-right — data URL (как blattam-bg-image:
+// только chrome.storage.local, лимит ~4 МБ). Применяем на #rail-left / #rail-right
+// (cover/center/fixed) там же, где тему и фон — ДО первого рендера (без «вспышки»).
+function applyRailBackgroundImage(which, dataUrl) {
+  const el = document.getElementById('rail-' + which);
+  if (el) {
+    if (dataUrl) {
+      el.style.backgroundImage = 'url("' + dataUrl + '")';
+      el.style.backgroundSize = 'cover';
+      el.style.backgroundPosition = 'center';
+      el.style.backgroundAttachment = 'fixed';
+    } else {
+      ['background-image', 'background-size', 'background-position', 'background-attachment']
+        .forEach((prop) => el.style.removeProperty(prop));
+    }
+  }
+  const preview = document.getElementById('bg-' + which + '-preview');
+  const clearBtn = document.getElementById('bg-' + which + '-clear-btn');
+  if (preview) {
+    preview.style.display = dataUrl ? 'block' : 'none';
+    if (dataUrl) preview.src = dataUrl;
+  }
+  if (clearBtn) clearBtn.style.display = dataUrl ? '' : 'none';
+}
+
+chrome.storage.local.get(['blattam-bg-image-left', 'blattam-bg-image-right'], (result) => {
+  applyRailBackgroundImage('left', result['blattam-bg-image-left'] || '');
+  applyRailBackgroundImage('right', result['blattam-bg-image-right'] || '');
 });
 // Быстрый поиск (экспериментальный): blattam-quick-search (local), по умолчанию off.
 let quickSearchOn = false;
@@ -127,7 +174,9 @@ const CUST_GEO = [
   { token: '--card-radius', id: 'radius' },
   { token: '--card-gap', id: 'gap' },
   { token: '--card-min', id: 'width' },
-  { token: '--card-name-size', id: 'fontsize' }
+  { token: '--card-name-size', id: 'fontsize' },
+  { token: '--rail-left-w', id: 'railleft' },
+  { token: '--rail-right-w', id: 'railright' }
 ];
 const CUST_FONTS = {
   serif: "'Georgia', 'Times New Roman', serif",
@@ -212,12 +261,6 @@ function saveCustomTheme() {
 chrome.storage.local.get(['blattam-custom-theme'], (result) => {
   applyCustomTheme(result['blattam-custom-theme'] || null);
 });
-themeBtn.addEventListener('click', () => {
-  const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
-  applyTheme(next);
-  chrome.storage.local.set({ 'blattam-theme': next });
-});
-
 const createGroupBtn = document.getElementById('create-group-btn');
 if (createGroupBtn) createGroupBtn.addEventListener('click', createGroupInActiveSpace);
 
@@ -695,7 +738,7 @@ const settingsBtn = document.getElementById('settings-btn');
 function openSettingsModal() {
   settingsModal.classList.add('open');
   setModalOpen('settings');
-  setSettingsSection('customization'); // при каждом открытии — «Кастомизация»
+  setSettingsSection('appearance'); // при каждом открытии — «Внешний вид»
   // пикер «Цвет вкладок» показывает актуальное значение (из local-хранилища)
   chrome.storage.local.get(['blattam-tab-color'], (r) => {
     applyTabCardColor(r['blattam-tab-color'] || '');
@@ -722,19 +765,19 @@ document.addEventListener('keydown', (e) => {
   if (settingsModal.classList.contains('open') && e.key === 'Escape') closeSettingsModal();
 });
 
-// Двухпанное окно: слева навигация разделов («Кастомизация»/«FAQ» — кнопки
+// Двухпанное окно: слева навигация разделов («Внешний вид»/«Фоны»/«Общие»/«Экспериментальное»/«FAQ»/«О программе» — кнопки
 // .settings-nav-item), справа — контент; виден только активный
-// (#settings-pane-customization / #settings-pane-faq, display:none у неактивной).
+// (#settings-pane-appearance и др. — display:none у неактивной).
 // Состояние — module-переменная по id раздела (переживает перерисовку, идемпотентна);
 // клик по навигации модалку НЕ закрывает — close-по-фону скоуплен на сам оверлей
 // (e.target === settingsModal), а клик по пункту — только по внутренней кнопке.
-let settingsSection = 'customization';
+let settingsSection = 'appearance';
 const settingsNavItems = [...settingsModal.querySelectorAll('.settings-nav-item')];
 function setSettingsSection(id) {
-  if (!settingsNavItems.some((b) => b.dataset.section === id)) id = 'customization';
+  if (!settingsNavItems.some((b) => b.dataset.section === id)) id = 'appearance';
   settingsSection = id;
   settingsNavItems.forEach((b) => b.classList.toggle('active', b.dataset.section === id));
-  ['customization', 'faq', 'about'].forEach((s) => {
+  ['appearance', 'backgrounds', 'general', 'experimental', 'faq', 'about'].forEach((s) => {
     const pane = document.getElementById('settings-pane-' + s);
     if (pane) pane.style.display = (s === id) ? '' : 'none';
   });
@@ -770,6 +813,40 @@ bgFileInput.addEventListener('change', (e) => {
 bgClearBtn.addEventListener('click', () => {
   chrome.storage.local.remove('blattam-bg-image');
   applyBackgroundImage('');
+});
+
+// «Фон левой/правой рейки» в настройках: картинка → data URL →
+// blattam-bg-image-left / blattam-bg-image-right (local), тот же паттерн FileReader.
+[['blattam-bg-image-left', 'left'], ['blattam-bg-image-right', 'right']].forEach((pair) => {
+  const key = pair[0];
+  const which = pair[1];
+  const fileBtn = document.getElementById('bg-' + which + '-file-btn');
+  const fileInput = document.getElementById('bg-' + which + '-file-input');
+  const clearBtn = document.getElementById('bg-' + which + '-clear-btn');
+
+  fileBtn.addEventListener('click', () => fileInput.click());
+
+  fileInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    e.target.value = ''; // сброс input — тот же файл можно выбрать повторно
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const dataUrl = String(event.target.result || '');
+      if (dataUrl.length > 4000000) {
+        alert(t('bg_too_big'));
+        return;
+      }
+      chrome.storage.local.set({ [key]: dataUrl });
+      applyRailBackgroundImage(which, dataUrl);
+    };
+    reader.readAsDataURL(file);
+  });
+
+  clearBtn.addEventListener('click', () => {
+    chrome.storage.local.remove(key);
+    applyRailBackgroundImage(which, '');
+  });
 });
 
 // «Цвет вкладок» в настройках: пикер → blattam-tab-color (local), live-применение.
@@ -1331,8 +1408,8 @@ function reorderSpaces(fromId, toId, side) {
   chrome.storage.sync.set({ 'blattam-spaces': allSpaces });
 }
 
-// «Создать группу» — кнопка .rail-item в левой рейке (#create-group-btn,
-// под переключателем темы): открывает модалку создания группы; работает
+// «Создать группу» — кнопка .rail-item в левой рейке (#create-group-btn —
+// ПЕРВАЯ строка #rail-controls): открывает модалку создания группы; работает
 // и с пустым пространством. Пустое имя → «Группа N».
 // Группа создаётся в активном пространстве.
 function createGroupInActiveSpace() {
@@ -4074,6 +4151,19 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     // перерисовка карточек не нужна.
     if (changes['blattam-bg-image']) {
       applyBackgroundImage(changes['blattam-bg-image'].newValue || '');
+    }
+    // «Тема» (blattam-theme): внешняя запись (другое окно) — применяем тему
+    // и синхронизируем кнопки настроек; идемпотентно, перерисовка не нужна.
+    if (changes['blattam-theme']) {
+      applyTheme(changes['blattam-theme'].newValue || 'light');
+      applyThemeButtons();
+    }
+    // «Фоны боковых реек»: применяем/снимаем картинку как у основного фона.
+    if (changes['blattam-bg-image-left']) {
+      applyRailBackgroundImage('left', changes['blattam-bg-image-left'].newValue || '');
+    }
+    if (changes['blattam-bg-image-right']) {
+      applyRailBackgroundImage('right', changes['blattam-bg-image-right'].newValue || '');
     }
     // «Цвет вкладок» (blattam-tab-color): применяем/снимаем кастомный цвет;
     // идемпотентно (инлайн-стиль documentElement), перерисовка карточек не нужна.

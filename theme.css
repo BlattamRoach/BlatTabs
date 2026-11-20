@@ -74,6 +74,8 @@
   --card-radius: 8px;
   --card-header-padding: 8px 10px;
   --card-name-size: 11.5px;
+  --rail-left-w: 220px;      /* ширина левой рейки (кастомизируемый, «Размер и форма») */
+  --rail-right-w: 190px;     /* ширина правой рейки (кастомизируемый, «Размер и форма») */
 
   /* Шрифты */
   --font-ui: 'Geist', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
@@ -142,4 +144,8 @@
   --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.50), 0 2px 2px rgba(0, 0, 0, 0.30);
   --shadow-xl: 0 6px 18px rgba(0, 0, 0, 0.55);
   --overlay: rgba(0, 0, 0, 0.55);
+
+  /* Ширина боковых реек (кастомизируемый, «Размер и форма») */
+  --rail-left-w: 220px;
+  --rail-right-w: 190px;
 }
