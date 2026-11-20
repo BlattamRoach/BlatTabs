@@ -535,6 +535,20 @@
     #github-modal .gh-btn.primary:hover { opacity: .88; }
     #github-modal .modal-close { position: absolute; top: 14px; right: 14px; width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; border: 0; border-radius: 6px; background: var(--bg); color: var(--text-muted); box-shadow: 0 0 0 1px var(--line); font-size: 13px; line-height: 1; cursor: pointer; transition: background .1s, color .1s; }
     #github-modal .modal-close:hover { background: var(--hover); color: var(--text); }
+    /* Модалка корзины (удалённые вкладки) — размер по образцу #settings-modal;
+       список .trash-row скроллится внутри; только токены (var(--…)) — обе темы */
+    #trash-modal .modal { min-width: 560px; max-width: 640px; width: min(640px, calc(100vw - 24px)); min-height: 300px; max-height: 70vh; padding: 22px 20px; position: relative; display: flex; flex-direction: column; }
+    #trash-modal .modal h3 { font-size: 15px; margin-bottom: 16px; }
+    #trash-modal .modal-close { position: absolute; top: 14px; right: 14px; width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; border: 0; border-radius: 6px; background: var(--bg); color: var(--text-muted); box-shadow: 0 0 0 1px var(--line); font-size: 13px; line-height: 1; cursor: pointer; transition: background .1s, color .1s; }
+    #trash-modal .modal-close:hover { background: var(--hover); color: var(--text); }
+    #trash-modal .trash-empty { flex: 1 1 auto; display: flex; align-items: center; justify-content: center; font: 400 13px/1.4 var(--font-ui); color: var(--text-faint); }
+    #trash-modal .trash-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+    #trash-modal .trash-row { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 6px; background: var(--bg); box-shadow: inset 0 0 0 1px var(--line); }
+    #trash-modal .trash-row-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+    #trash-modal .trash-row-name { font: 500 12.5px/1.3 var(--font-ui); color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #trash-modal .trash-row-url { font: 400 10.5px/1.3 var(--font-mono); color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #trash-modal .trash-row-date { flex: none; font: 400 10.5px/1.3 var(--font-mono); color: var(--text-faint); white-space: nowrap; }
+    #trash-modal .trash-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
     #settings-modal .settings-section-title {
       font-size: 11px; font-weight: 600; letter-spacing: .4px; text-transform: uppercase;
       color: var(--text-muted); margin: 0 0 12px;
@@ -645,6 +659,11 @@
         <button class="rail-item" id="settings-btn" data-i18n-title="settings_title" title="Настройки">
           <span class="ico"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>
           <span class="lbl"><span class="t" data-i18n="settings_title">Настройки</span><span class="s" data-i18n="settings_sub">Параметры</span></span>
+          <span class="go">→</span>
+        </button>
+        <button class="rail-item" id="trash-btn" data-i18n-title="trash_title" title="Корзина — удалённые вкладки">
+          <span class="ico"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg></span>
+          <span class="lbl"><span class="t" data-i18n="trash_label">Корзина</span><span class="s" data-i18n="trash_sub">Удалённые вкладки</span></span>
           <span class="go">→</span>
         </button>
       </div>
@@ -948,6 +967,21 @@
       </section>
           </div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: корзина (удалённые вкладки) — открывается по клику на #trash-btn
+       в левой рейке; закрытие — ✕, клик по затемнённому фону, Escape -->
+  <div class="modal-overlay" id="trash-modal">
+    <div class="modal">
+      <button class="modal-close" id="trash-close" data-i18n-title="settings_close_title" data-i18n-aria="settings_close_title" title="Закрыть" aria-label="Закрыть">✕</button>
+      <h3 data-i18n="trash_title">Корзина — удалённые вкладки</h3>
+      <div class="trash-empty" id="trash-empty" data-i18n="trash_empty">Корзина пуста</div>
+      <div class="trash-list" id="trash-list"></div>
+      <div class="trash-actions">
+        <button class="modal-btn primary" id="trash-restore-all" data-i18n="trash_restore_all">Вернуть все</button>
+        <button class="modal-btn ghost" id="trash-clear" data-i18n="trash_clear">Очистить корзину</button>
       </div>
     </div>
   </div>

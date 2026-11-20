@@ -169,7 +169,19 @@ var I18N = {
     save_tab: 'Сохранить вкладку',
     space_colon: 'Пространство:',
     popup_new_space: '+ Новое пространство',
-    saved_msg: '✓ Вкладка сохранена!'
+    saved_msg: '✓ Вкладка сохранена!',
+    trash_title: 'Корзина — удалённые вкладки',
+    trash_label: 'Корзина',
+    trash_sub: 'Удалённые вкладки',
+    trash_count_sub: '{n} в корзине',
+    trash_empty: 'Корзина пуста',
+    trash_restore: 'Вернуть',
+    trash_restore_all: 'Вернуть все',
+    trash_permanent: 'Удалить навсегда',
+    trash_permanent_confirm: 'Удалить «{name}» безвозвратно?',
+    trash_clear: 'Очистить корзину',
+    trash_clear_confirm: 'Безвозвратно удалить все вкладки из корзины ({n} шт.)?',
+    trash_deleted_on: 'Удалено: {when}'
   },
   en: {
     page_title: 'BlatTabs — tabs',
@@ -337,7 +349,19 @@ var I18N = {
     save_tab: 'Save tab',
     space_colon: 'Space:',
     popup_new_space: '+ New space',
-    saved_msg: '✓ Tab saved!'
+    saved_msg: '✓ Tab saved!',
+    trash_title: 'Trash — deleted tabs',
+    trash_label: 'Trash',
+    trash_sub: 'Deleted tabs',
+    trash_count_sub: '{n} in trash',
+    trash_empty: 'Trash is empty',
+    trash_restore: 'Restore',
+    trash_restore_all: 'Restore all',
+    trash_permanent: 'Delete forever',
+    trash_permanent_confirm: 'Permanently delete "{name}"?',
+    trash_clear: 'Clear trash',
+    trash_clear_confirm: 'Permanently delete all {n} tabs from trash?',
+    trash_deleted_on: 'Deleted: {when}'
   }
 };
 
