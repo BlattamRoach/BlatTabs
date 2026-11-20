@@ -9,7 +9,8 @@
   "permissions": [
     "tabs",
     "storage",
-    "identity"
+    "identity",
+    "alarms"
   ],
   "host_permissions": [
     "https://github.com/*",

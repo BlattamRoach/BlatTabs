@@ -4848,7 +4848,6 @@ loadLang().then(function () {
   if (!slot) return;
   const label = slot.querySelector('.a-t');
   const sub = slot.querySelector('.a-s');
-  const tag = slot.querySelector('.tag');
   const devRow = document.getElementById('account-device');
   const devCodeEl = document.getElementById('account-device-code');
   const devCopyBtn = document.getElementById('account-device-copy');
@@ -4861,24 +4860,32 @@ loadLang().then(function () {
     if (devCodeEl) devCodeEl.textContent = '';
   }
 
-  function renderAccount(user) {
+  function renderAccount(user, subOverride) {
     if (user) {
-      label.textContent = 'GitHub: ' + user.login;
-      sub.textContent = t('account_connected_sub');
-      if (tag) { tag.textContent = '✓'; }
+      label.textContent = user.login ? 'GitHub: ' + user.login : 'GitHub';
+      sub.textContent = subOverride || t('account_connected_sub');
       hideDeviceCode();
     } else {
       label.textContent = t('account_label');
-      sub.textContent = t('account_connect_sub');
-      if (tag) { tag.textContent = t('account_tag'); }
+      sub.textContent = subOverride || t('account_connect_sub');
     }
   }
 
   function refreshAccount() {
-    chrome.storage.local.get('github-token', (r) => {
+    chrome.storage.local.get(['github-token', 'blattam-github-login'], (r) => {
       if (!r['github-token']) { renderAccount(null); return; }
       chrome.runtime.sendMessage({ action: 'verify-github' }, (res) => {
-        renderAccount(res && res.success ? res.user : null);
+        if (res && res.success) {
+          chrome.storage.local.set({ 'blattam-github-login': res.user.login });
+          renderAccount(res.user);
+          return;
+        }
+        // Токен есть, но GitHub API недоступен/ответ не успешный:
+        // кэшированный логин → «подключено»; без кэша → «подключено, проверяем»
+        // (токен из GitHub действителен — недоступен только API из этой сети)
+        if (r['blattam-github-login']) renderAccount({ login: r['blattam-github-login'] });
+        else if (res && res.token_present) renderAccount({}, t('account_verifying'));
+        else renderAccount(null, t('account_verify_error'));
       });
     });
   }
@@ -4887,12 +4894,49 @@ loadLang().then(function () {
   // запрашивает код и начинает поллинг; мы открываем страницу ввода кода
   // обычной вкладкой и показываем код в подписи. Успех придёт сам
   // (storage.onChanged → refreshAccount).
+  let devPollTimer = null;
+  function stopDevicePolling() {
+    if (devPollTimer) { clearInterval(devPollTimer); devPollTimer = null; }
+  }
+  // Поллинг ведёт СТРАНИЦА (service worker умирает; живая страница — нет).
+  // Каждое сообщение будит SW, он делает один шаг поллинга и сохраняет
+  // состояние. Успех/ошибка — в ответе; токен появится в storage →
+  // onChanged → refreshAccount (уже есть ниже).
+  function startDevicePolling(intervalS, expiresAt) {
+    stopDevicePolling();
+    const ms = Math.max(1, intervalS || 5) * 1000;
+    devPollTimer = setInterval(function () {
+      if (expiresAt && Date.now() > expiresAt) {
+        stopDevicePolling();
+        hideDeviceCode();
+        refreshAccount();
+        return;
+      }
+      chrome.runtime.sendMessage({ action: 'device-flow-poll' }, (res) => {
+        if (!res) return;
+        if (res.connected) { stopDevicePolling(); return; }
+        if (res.slow_down) {
+          // GitHub просит паузу — ждём указанный интервал, потом возобновляем
+          setAccountSub(t('account_slow_down'));
+          stopDevicePolling();
+          setTimeout(function () { startDevicePolling(intervalS, expiresAt); },
+                     res.wait_ms || 30000);
+          return;
+        }
+        if (res.inactive) {
+          stopDevicePolling();
+          if (res.error) setAccountSub(res.error);
+          else refreshAccount();
+        }
+      });
+    }, ms);
+  }
   function startDeviceFlowLogin() {
-    if (sub) sub.textContent = t('account_device_starting');
+    setAccountSub(t('account_device_starting'));
     chrome.runtime.sendMessage({ action: 'device-flow-start' }, (res) => {
       if (!res) {
         chrome.storage.local.get('github-auth-error', (r) => {
-          if (sub) sub.textContent = r['github-auth-error'] || t('account_sync_error');
+          setAccountSub(r['github-auth-error'] || t('account_sync_error'));
         });
         return;
       }
@@ -4900,10 +4944,13 @@ loadLang().then(function () {
       // Страница ввода кода — verification_uri_complete: код уже подставлен
       // (без него страница требует ввести код руками)
       chrome.tabs.create({ url: (res.verification_uri_complete || res.verification_uri), active: true });
-      if (sub) sub.textContent = t('account_device_hint');
+      setAccountSub(t('account_device_hint'));
       showDeviceCode(res.user_code);
-      // Код живёт до 5 минут — потом возвращаем подпись к обычному виду
-      setTimeout(function () { hideDeviceCode(); refreshAccount(); }, 300000);
+      startDevicePolling(res.interval, res.expires_at);
+      // Код живёт до expires_at (GitHub даёт ~15 минут) — потом возвращаем
+      // подпись к обычному виду
+      setTimeout(function () { hideDeviceCode(); refreshAccount(); },
+                 Math.max(10000, (res.expires_at || Date.now() + 300000) - Date.now()));
     });
   }
 
@@ -4928,7 +4975,7 @@ loadLang().then(function () {
       const code = params.get('code');
       const error = params.get('error');
       if (!code) {
-        if (sub) sub.textContent = error ? 'GitHub: ' + error : t('account_sync_error');
+        setAccountSub(error ? 'GitHub: ' + error : t('account_sync_error'));
         return;
       }
       chrome.runtime.sendMessage({ action: 'oauth-exchange', code, redirectUri }, (token) => {
@@ -4936,7 +4983,7 @@ loadLang().then(function () {
           refreshAccount(); // токен в storage → подпись «GitHub: <login>»
         } else {
           chrome.storage.local.get('github-auth-error', (r) => {
-            if (sub) sub.textContent = r['github-auth-error'] || t('account_sync_error');
+            setAccountSub(r['github-auth-error'] || t('account_sync_error'));
           });
         }
       });
@@ -4944,21 +4991,105 @@ loadLang().then(function () {
   }
 
   slot.addEventListener('click', () => {
-    chrome.storage.local.get('github-token', (r) => {
-      if (r['github-token']) {
-        // Подключён: синхронизация (pull+push), потом обновить подпись
-        chrome.runtime.sendMessage({ action: 'sync-now' }, (res) => {
-          if (sub) {
-            sub.textContent = (res && (res.pulled || res.pushed)) ? t('account_sync_done') : t('account_sync_error');
-            setTimeout(refreshAccount, 3000);
-          }
-        });
-      } else {
-        // Не подключён: OAuth-поток (окно GitHub); токен сохранится в
-        // storage → onChanged ниже сам обновит подпись
-        startGitHubLogin();
+    openGitHubModal();
+  });
+
+  // === Модалка GitHub: полная панель аккаунта (подключение/синхронизация) —
+  // перенесена из popup. Открывается по клику на слот аккаунта; рейка
+  // показывает только текущее состояние.
+  const ghModal = document.getElementById('github-modal');
+  const ghStatus = document.getElementById('github-modal-status');
+  const ghConnect = document.getElementById('github-connect-btn');
+  const ghSync = document.getElementById('github-sync-btn');
+  const ghClear = document.getElementById('github-clear-btn');
+  const ghDisconnect = document.getElementById('github-disconnect-btn');
+  const ghClose = document.getElementById('github-modal-close');
+
+  function ghStatusSet(text) {
+    if (ghStatus) ghStatus.textContent = text;
+  }
+  // Статус пишется и в рейку (.a-s), и в модалку (если открыта)
+  function setAccountSub(text) {
+    if (sub) sub.textContent = text;
+    ghStatusSet(text);
+  }
+
+  function renderGitHubModal() {
+    if (!ghModal || !ghModal.classList.contains('open')) return;
+    chrome.storage.local.get(['github-token', 'blattam-github-login', 'github-auth-error'], (r) => {
+      if (!r['github-token']) {
+        if (ghConnect) ghConnect.style.display = '';
+        if (ghSync) ghSync.style.display = 'none';
+        if (ghClear) ghClear.style.display = 'none';
+        if (ghDisconnect) ghDisconnect.style.display = 'none';
+        ghStatusSet(r['github-auth-error'] || t('github_not_connected'));
+        return;
       }
+      if (ghConnect) ghConnect.style.display = 'none';
+      if (ghSync) ghSync.style.display = '';
+      if (ghClear) ghClear.style.display = '';
+      if (ghDisconnect) ghDisconnect.style.display = '';
+      chrome.runtime.sendMessage({ action: 'verify-github' }, (res) => {
+        let name = null;
+        if (res && res.success) {
+          name = res.user.login;
+          chrome.storage.local.set({ 'blattam-github-login': name });
+        } else if (r['blattam-github-login']) {
+          name = r['blattam-github-login'];
+        } else if (res && res.token_present) {
+          ghStatusSet(t('account_verifying'));
+          return;
+        } else {
+          ghStatusSet(t('account_verify_error'));
+          return;
+        }
+        chrome.runtime.sendMessage({ action: 'check-sync-status' }, (st) => {
+          const map = { synced: t('github_synced'), ahead: t('github_local_ahead'), behind: t('github_remote_ahead') };
+          ghStatusSet('GitHub: ' + name + ' · ' + (map[st] || t('github_status_unknown')));
+        });
+      });
     });
+  }
+
+  function openGitHubModal() {
+    ghModal.classList.add('open');
+    setModalOpen('github');
+    renderGitHubModal();
+  }
+
+  function closeGitHubModal() {
+    ghModal.classList.remove('open');
+    setModalOpen(null);
+  }
+
+  ghClose.addEventListener('click', closeGitHubModal);
+  ghModal.addEventListener('click', (e) => {
+    if (e.target === ghModal) closeGitHubModal();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (ghModal.classList.contains('open') && e.key === 'Escape') closeGitHubModal();
+  });
+
+  ghConnect.addEventListener('click', () => startGitHubLogin());
+
+  ghSync.addEventListener('click', () => {
+    chrome.runtime.sendMessage({ action: 'sync-now' }, (res) => {
+      ghStatusSet((res && (res.pulled || res.pushed)) ? t('account_sync_done') : t('account_sync_error'));
+      setTimeout(renderGitHubModal, 3000);
+    });
+  });
+
+  ghClear.addEventListener('click', () => {
+    if (!confirm(t('github_clear_confirm'))) return;
+    chrome.runtime.sendMessage({ action: 'clear-cloud' }, () => {
+      ghStatusSet(t('github_cleared'));
+      setTimeout(renderGitHubModal, 3000);
+    });
+  });
+
+  ghDisconnect.addEventListener('click', () => {
+    // токен исчезнет из storage → onChanged ниже перерисует рейку и модалку
+    chrome.runtime.sendMessage({ action: 'disconnect-github' });
   });
 
   // Копирование кода в буфер: клик — navigator.clipboard.writeText,
@@ -4984,7 +5115,7 @@ loadLang().then(function () {
 
   // Слот обновляется, когда токен появляется/исчезает (вход/выход из popup или отсюда)
   chrome.storage.onChanged.addListener((changes, areaName) => {
-    if (areaName === 'local' && changes['github-token']) refreshAccount();
+    if (areaName === 'local' && changes['github-token']) { refreshAccount(); renderGitHubModal(); }
   });
 
   refreshAccount();
