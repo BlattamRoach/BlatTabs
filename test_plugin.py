@@ -48,7 +48,7 @@ var chrome = {
     // reference would make onChanged's oldValue === newValue
     get: function(keys, callback) {
       var self = this;
-      var pick = function(k) { return (k === 'blattam-tabs') ? self.local._data : self._data; };
+      var pick = function(k) { return (k === 'blattam-tabs' || k === 'blattam-trash') ? self.local._data : self._data; };
       var result = {};
       if (typeof keys === 'string') {
         result[keys] = cloneVal(pick(keys)[keys]);
@@ -65,7 +65,7 @@ var chrome = {
       var self = this;
       var syncData = {}, localData = {};
       for (var k in data) {
-        if (k === 'blattam-tabs') localData[k] = data[k];
+        if (k === 'blattam-tabs' || k === 'blattam-trash') localData[k] = data[k];
         else syncData[k] = data[k];
       }
       self._setStore(self.local._data, localData, 'local');
@@ -77,7 +77,7 @@ var chrome = {
       var self = this;
       var arr = Array.isArray(keys) ? keys : [keys];
       var syncKeys = [], localKeys = [];
-      arr.forEach(function(k) { (k === 'blattam-tabs' ? localKeys : syncKeys).push(k); });
+      arr.forEach(function(k) { (k === 'blattam-tabs' || k === 'blattam-trash' ? localKeys : syncKeys).push(k); });
       self._removeStore(self.local._data, localKeys, 'local');
       self._removeStore(self._data, syncKeys, 'sync');
       if (callback) callback();
@@ -510,14 +510,18 @@ POPUP_DOM = body_dom("popup.html")
 def load_view(pg, tabs=None, spaces=None, groups=None, folders=None,
               last_space=None, theme=None, confirm=False, browser_tabs=None,
               bg=None, tab_color=None, lang=None, quick_search=None,
-              custom_theme=None):
+              custom_theme=None, trash=None):
     """about:blank + mock + данные + DOM view.html + view.js.
 
     browser_tabs — список открытых вкладок браузера (chrome.tabs._tabs):
-    зеркало в правой рейке view (blattam-browser-tabs)."""
+    зеркало в правой рейке view (blattam-browser-tabs).
+    trash — записи корзины (chrome.storage.local blattam-trash):
+    объект вкладки + deletedAt (мс)."""
     init = []
     if tabs is not None:
         init.append("chrome.storage.local._data['blattam-tabs'] = " + json.dumps(tabs, ensure_ascii=False) + ";")
+    if trash is not None:
+        init.append("chrome.storage.local._data['blattam-trash'] = " + json.dumps(trash, ensure_ascii=False) + ";")
     if browser_tabs is not None:
         init.append("chrome.tabs._tabs = " + json.dumps(browser_tabs, ensure_ascii=False) + ";")
     if spaces is not None:
@@ -2936,7 +2940,8 @@ class TestViewCards:
         assert tabs[0]["name"] == "KeepMe"
 
     def test_delete_card(self):
-        load_view(self.page, confirm=True, tabs=[
+        # ✕ на карточке — БЕЗ confirm: вкладка уходит в корзину (blattam-trash)
+        load_view(self.page, tabs=[
             {"name": "A", "url": "https://a.com"},
             {"name": "B", "url": "https://b.com"},
         ])
@@ -2944,6 +2949,10 @@ class TestViewCards:
         tabs = read_storage_raw(self.page, "blattam-tabs")
         assert len(tabs) == 1 and tabs[0]["name"] == "B"
         assert self.page.evaluate("document.querySelectorAll('.tab-card').length") == 1
+        trash = read_storage_raw(self.page, "blattam-trash")
+        assert len(trash) == 1, trash
+        assert trash[0]["url"] == "https://a.com" and trash[0]["name"] == "A"
+        assert trash[0].get("deletedAt", 0) > 0
 
 
 # ==========================================
@@ -3068,18 +3077,23 @@ class TestKeyboardNav:
         assert msg["action"] == "open-one" and msg["url"] == "https://a.com"
 
     def test_delete_removes_active(self):
-        load_view(self.page, confirm=True, tabs=self.TABS)
+        # Delete — БЕЗ confirm: активная вкладка уходит в корзину
+        load_view(self.page, tabs=self.TABS)
         self._key("ArrowDown")
         self._key("Delete")
         tabs = read_storage_raw(self.page, "blattam-tabs")
         assert [t["name"] for t in tabs] == ["B", "C"]
         assert self._active_names() == []  # карточка исчезла
+        trash = read_storage_raw(self.page, "blattam-trash")
+        assert [t["url"] for t in trash] == ["https://a.com"]
 
     def test_backspace_removes_active(self):
-        load_view(self.page, confirm=True, tabs=self.TABS)
+        # Backspace — БЕЗ confirm: активная вкладка уходит в корзину
+        load_view(self.page, tabs=self.TABS)
         self._key("ArrowDown")
         self._key("Backspace")
         assert [t["name"] for t in read_storage_raw(self.page, "blattam-tabs")] == ["B", "C"]
+        assert [t["url"] for t in read_storage_raw(self.page, "blattam-trash")] == ["https://a.com"]
 
     def test_esc_resets_search_selection_active(self):
         load_view(self.page, tabs=self.TABS)
@@ -9027,9 +9041,9 @@ class TestEmptyGroupAutoCollapse:
         assert self._collapsed() is False
 
     def test_last_tab_deleted_collapses_group(self):
-        # ✕ на карточке удаляет единственную вкладку группы — группа
-        # сворачивается: ▸ + «0 вкладок», слота нет, вкладки пустые
-        load_view(self.page, spaces=self.SP, groups=[dict(self.G1)], confirm=True,
+        # ✕ на карточке: единственная вкладка группы уходит в корзину —
+        # группа сворачивается: ▸ + «0 вкладок», слота нет, вкладки пустые
+        load_view(self.page, spaces=self.SP, groups=[dict(self.G1)],
                   tabs=[{"name": "D1", "url": "https://d1.com",
                          "spaceId": "sp1", "groupId": "g1"}])
         self.page.evaluate("document.querySelector('.tab-card .tab-remove').click()")
@@ -9039,6 +9053,8 @@ class TestEmptyGroupAutoCollapse:
         assert self.page.evaluate("document.querySelector('.gbar .gcount').textContent") == "0 вкладок"
         assert self._collapsed() is True
         assert read_storage_raw(self.page, "blattam-tabs") == []
+        trash = read_storage_raw(self.page, "blattam-trash")
+        assert len(trash) == 1 and trash[0]["url"] == "https://d1.com", trash
 
     def test_fresh_empty_group_renders_collapsed(self):
         # Пустая группа без членов (свежесозданная) — свёрнутый вид:
@@ -9743,73 +9759,83 @@ class TestBulkDeleteSelection:
         assert d["count"] == "1 выбрано", d
 
     def test_bulk_delete_removes_selected_only(self):
-        load_view(self.page, tabs=self.TABS4, confirm=True)
+        # Без confirm: выделенные уходят в корзину (blattam-trash),
+        # confirm не вызывается ни разу
+        load_view(self.page, tabs=self.TABS4)
+        self._confirm_recorder(True)
         self._select_first(3)
         self.page.evaluate("document.getElementById('delete-selected-btn').click()")
-        self.page.wait_for_timeout(50)
+        self.page.wait_for_timeout(100)
         tabs = read_storage_raw(self.page, "blattam-tabs")
         assert [t["url"] for t in tabs] == ["https://d.com"]
         assert self.page.evaluate("document.querySelectorAll('.tab-card').length") == 1
-        d = json.loads(self.page.evaluate("""(() => {
-          const bar = document.getElementById('selection-bar');
-          return JSON.stringify({
-            barHidden: bar.classList.contains('hidden'),
-            count: document.getElementById('selection-count').textContent,
-            checked: document.querySelectorAll('.tab-select:checked').length
-          });
-        })()"""))
-        assert d["barHidden"] is True, d
-        assert d["count"] == "0 выбрано", d
-        assert d["checked"] == 0, d
-
-    def test_confirm_cancel_keeps_tabs_and_selection(self):
-        load_view(self.page, tabs=self.TABS4)
-        self._confirm_recorder(False)
-        self._select_first(2)
-        self.page.evaluate("document.getElementById('delete-selected-btn').click()")
-        self.page.wait_for_timeout(50)
-        tabs = read_storage_raw(self.page, "blattam-tabs")
-        assert [t["url"] for t in tabs] == [t["url"] for t in self.TABS4]
+        trash = read_storage_raw(self.page, "blattam-trash")
+        assert [t["url"] for t in trash] == ["https://a.com", "https://b.com", "https://c.com"], trash
+        assert all(t.get("deletedAt", 0) > 0 for t in trash)
         d = json.loads(self.page.evaluate("""(() => {
           const bar = document.getElementById('selection-bar');
           return JSON.stringify({
             barHidden: bar.classList.contains('hidden'),
             count: document.getElementById('selection-count').textContent,
             checked: document.querySelectorAll('.tab-select:checked').length,
-            msg: window.__msgs[0]
+            confirms: window.__msgs.length
           });
         })()"""))
-        assert d["barHidden"] is False, d
-        assert d["count"] == "2 выбрано", d
-        assert d["checked"] == 2, d
-        assert d["msg"] == "Удалить 2 вкладки?", d
+        assert d["barHidden"] is True, d
+        assert d["count"] == "0 выбрано", d
+        assert d["checked"] == 0, d
+        assert d["confirms"] == 0, d
 
-    def test_confirm_plural_forms(self):
-        cases = [
-            (1, "Удалить 1 вкладку?"),
-            (2, "Удалить 2 вкладки?"),
-            (4, "Удалить 4 вкладки?"),
-            (5, "Удалить 5 вкладок?"),
-            (11, "Удалить 11 вкладок?"),
-        ]
-        for n, expected in cases:
+    def test_bulk_delete_no_confirm_moves_to_trash(self):
+        # Удаление выделенных БЕЗ confirm (возврат — через корзину):
+        # confirm не вызывается даже при «отказе» — вкладки в корзине,
+        # выбор снят
+        load_view(self.page, tabs=self.TABS4)
+        self._confirm_recorder(False)
+        self._select_first(2)
+        self.page.evaluate("document.getElementById('delete-selected-btn').click()")
+        self.page.wait_for_timeout(100)
+        tabs = read_storage_raw(self.page, "blattam-tabs")
+        assert [t["url"] for t in tabs] == ["https://c.com", "https://d.com"]
+        trash = read_storage_raw(self.page, "blattam-trash")
+        assert [t["url"] for t in trash] == ["https://a.com", "https://b.com"], trash
+        d = json.loads(self.page.evaluate("""(() => {
+          const bar = document.getElementById('selection-bar');
+          return JSON.stringify({
+            barHidden: bar.classList.contains('hidden'),
+            count: document.getElementById('selection-count').textContent,
+            checked: document.querySelectorAll('.tab-select:checked').length,
+            confirms: window.__msgs.length
+          });
+        })()"""))
+        assert d["barHidden"] is True, d
+        assert d["count"] == "0 выбрано", d
+        assert d["checked"] == 0, d
+        assert d["confirms"] == 0, d
+
+    def test_bulk_delete_various_n_all_to_trash(self):
+        # Массовое удаление без confirm для разных N: все N уходят в корзину
+        # (blattam-trash), confirm не вызывается, сетка пуста, выбор снят
+        for n in (1, 2, 4, 5, 11):
             tabs = [{"name": f"T{i}", "url": f"https://t{i}.com"} for i in range(n)]
             load_view(self.page, tabs=tabs)
             self._confirm_recorder(True)
             self.page.evaluate("document.querySelectorAll('.tab-select').forEach(c => c.click())")
             self.page.evaluate("document.getElementById('delete-selected-btn').click()")
-            self.page.wait_for_timeout(50)
+            self.page.wait_for_timeout(100)
             d = json.loads(self.page.evaluate("""(() => {
               return JSON.stringify({
-                msg: window.__msgs[0],
+                confirms: window.__msgs.length,
                 cards: document.querySelectorAll('.tab-card').length,
                 barHidden: document.getElementById('selection-bar').classList.contains('hidden')
               });
             })()"""))
-            assert d["msg"] == expected, (n, d)
+            assert d["confirms"] == 0, (n, d)
             assert d["cards"] == 0, (n, d)
             assert d["barHidden"] is True, (n, d)
             assert read_storage_raw(self.page, "blattam-tabs") == []
+            trash = read_storage_raw(self.page, "blattam-trash")
+            assert len(trash) == n, (n, trash)
 
     def test_unselected_tabs_in_same_group_survive(self):
         tabs = [
@@ -11447,7 +11473,7 @@ class TestRailLayout:
             assert d["right"]["shadow"] == "none", (theme, d)
 
     def test_left_rail_contents(self):
-        # 5 hover-reveal-строк (Тема/Создать группу/Экспорт/Импорт/Настройки)
+        # 6 hover-reveal-строк (Тема/Создать группу/Экспорт/Импорт/Настройки/Корзина)
         # в #rail-controls; все кнопки — в левой рейке; #import-input скрыт
         load_view(self.page, tabs=self.TABS)
         self._inject_real_styles()
@@ -11471,8 +11497,8 @@ class TestRailLayout:
               && document.getElementById('github-modal').nextElementSibling.id === 'import-input'
           });
         })()"""))
-        assert d["items"] == 5, d
-        assert d["titles"] == ["Тема", "Создать группу", "Экспорт", "Импорт", "Настройки"], d
+        assert d["items"] == 6, d
+        assert d["titles"] == ["Тема", "Создать группу", "Экспорт", "Импорт", "Настройки", "Корзина"], d
         assert d["themeInRail"] and d["exportInRail"] and d["importInRail"], d
         assert d["searchInRail"] and d["brandFirst"], d
         assert d["settingsExists"], d
@@ -18314,9 +18340,10 @@ class TestI18nDynamic:
                 assert d["loose"] == "Ungrouped", d
                 assert d["loose_title"] == "Select all ungrouped tabs", d
 
-    def test_confirm_delete_tab_both_langs(self):
-        for lang, expected in (("en", 'Delete tab "MyTab"?'),
-                               (None, 'Удалить вкладку "MyTab"?')):
+    def test_card_delete_to_trash_both_langs(self):
+        # ✕ на карточке: БЕЗ confirm в обеих локалях — вкладка уходит в
+        # корзину (blattam-trash), сетка пустая
+        for lang in ("en", None):
             kw = {"lang": lang} if lang else {}
             load_view(self.page, spaces=[{"id": "sp1", "name": "S"}],
                       tabs=[{"name": "MyTab", "url": "http://mytab.example.com", "spaceId": "sp1"}], **kw)
@@ -18330,11 +18357,15 @@ class TestI18nDynamic:
             self.page.wait_for_timeout(100)
             d = json.loads(self.page.evaluate(
                 "JSON.stringify({ msg: window.__confirmMsg, cards: document.querySelectorAll('.tab-card').length })"))
-            assert d["msg"] == expected, d
-            assert d["cards"] == 1, d
+            assert d["msg"] is None, d
+            assert d["cards"] == 0, d
+            trash = read_storage_raw(self.page, "blattam-trash")
+            assert len(trash) == 1 and trash[0]["url"] == "http://mytab.example.com", trash
 
-    def test_confirm_bulk_delete_both_langs(self):
-        for lang, expected in (("en", "Delete 3 tabs?"), (None, "Удалить 3 вкладки?")):
+    def test_bulk_delete_to_trash_both_langs(self):
+        # Массовое удаление: БЕЗ confirm в обеих локалях — все выделенные в
+        # корзине (blattam-trash), сетка пустая
+        for lang in ("en", None):
             kw = {"lang": lang} if lang else {}
             tabs = [{"name": "T%d" % i, "url": "http://x%d.example.com" % i, "spaceId": "sp1"}
                     for i in range(1, 4)]
@@ -18350,8 +18381,10 @@ class TestI18nDynamic:
             self.page.wait_for_timeout(100)
             d = json.loads(self.page.evaluate(
                 "JSON.stringify({ msg: window.__confirmMsg, cards: document.querySelectorAll('.tab-card').length })"))
-            assert d["msg"] == expected, d
-            assert d["cards"] == 3, d
+            assert d["msg"] is None, d
+            assert d["cards"] == 0, d
+            trash = read_storage_raw(self.page, "blattam-trash")
+            assert len(trash) == 3, trash
 
     def test_bg_default_names_en(self):
         self._bg(lang="en")
@@ -20627,3 +20660,296 @@ class TestPopupGitHubPanelRemoved:
         assert d["sync"] is False, d
         assert d["clear"] is False, d
         assert d["status"] is False, d
+
+# ==========================================
+# Корзина (blattam-trash): удаление вкладок БЕЗ confirm — вкладки уходят в
+# корзину, открывается кнопкой «Корзина» в левой рейке (под «Настройками»),
+# из модалки #trash-modal: просмотр, «Вернуть», «Вернуть все»,
+# «Удалить навсегда» (confirm), «Очистить корзину» (confirm)
+# ==========================================
+class TestTrash:
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    TABS = [
+        {"name": "A", "url": "https://a.com"},
+        {"name": "B", "url": "https://b.com"},
+        {"name": "C", "url": "https://c.com"},
+    ]
+
+    def _confirm_recorder(self, ret):
+        self.page.evaluate("""(ret) => {
+          window.__msgs = [];
+          window.confirm = (m) => { window.__msgs.push(m); return ret; };
+        }""", ret)
+
+    def _key(self, key):
+        self.page.evaluate(f"""(() => {{
+          document.dispatchEvent(new KeyboardEvent('keydown', {{key: '{key}', bubbles: true, cancelable: true}}));
+        }})()""")
+
+    def test_single_delete_to_trash_no_confirm(self):
+        # ✕ на карточке: БЕЗ confirm, вкладка в blattam-trash с deletedAt
+        load_view(self.page, tabs=self.TABS)
+        self.page.wait_for_timeout(150)
+        self._confirm_recorder(True)
+        self.page.evaluate("document.querySelector('.tab-remove').click()")
+        self.page.wait_for_timeout(100)
+        tabs = read_storage_raw(self.page, "blattam-tabs")
+        assert [t["name"] for t in tabs] == ["B", "C"]
+        trash = read_storage_raw(self.page, "blattam-trash")
+        assert len(trash) == 1 and trash[0]["url"] == "https://a.com", trash
+        assert trash[0].get("deletedAt", 0) > 0
+        d = json.loads(self.page.evaluate(
+            "JSON.stringify({confirms: window.__msgs.length, cards: document.querySelectorAll('.tab-card').length})"))
+        assert d["confirms"] == 0, d
+        assert d["cards"] == 2, d
+
+    def test_bulk_delete_to_trash_no_confirm(self):
+        load_view(self.page, tabs=self.TABS)
+        self.page.wait_for_timeout(150)
+        self._confirm_recorder(True)
+        self.page.evaluate("document.querySelectorAll('.tab-select').forEach(cb => cb.click())")
+        self.page.evaluate("document.getElementById('delete-selected-btn').click()")
+        self.page.wait_for_timeout(100)
+        assert read_storage_raw(self.page, "blattam-tabs") == []
+        trash = read_storage_raw(self.page, "blattam-trash")
+        assert [t["url"] for t in trash] == ["https://a.com", "https://b.com", "https://c.com"], trash
+        assert all(t.get("deletedAt", 0) > 0 for t in trash)
+        d = json.loads(self.page.evaluate(
+            "JSON.stringify({confirms: window.__msgs.length, cards: document.querySelectorAll('.tab-card').length})"))
+        assert d["confirms"] == 0, d
+        assert d["cards"] == 0, d
+
+    def test_keyboard_delete_to_trash(self):
+        load_view(self.page, tabs=self.TABS)
+        self.page.wait_for_timeout(150)
+        self._key("ArrowDown")
+        self._key("Delete")
+        self.page.wait_for_timeout(100)
+        assert [t["name"] for t in read_storage_raw(self.page, "blattam-tabs")] == ["B", "C"]
+        trash = read_storage_raw(self.page, "blattam-trash")
+        assert [t["url"] for t in trash] == ["https://a.com"], trash
+
+    def test_trash_btn_in_rail_after_settings(self):
+        load_view(self.page, tabs=self.TABS)
+        self.page.wait_for_timeout(150)
+        d = json.loads(self.page.evaluate("""(() => {
+          const ctrl = document.getElementById('rail-controls');
+          const kids = [...ctrl.children].map(el => el.id);
+          return JSON.stringify({
+            adjacent: kids.indexOf('trash-btn') === kids.indexOf('settings-btn') + 1,
+            label: document.querySelector('#trash-btn .t').textContent
+          });
+        })()"""))
+        assert d["adjacent"] is True, d
+        assert d["label"] == "Корзина", d
+
+    def test_open_modal_shows_entries_and_count(self):
+        trash = [
+            {"name": "T1", "url": "https://t1.com", "deletedAt": 1795000000000},
+            {"name": "T2", "url": "https://t2.com", "deletedAt": 1795000001000},
+        ]
+        load_view(self.page, tabs=[], trash=trash)
+        self.page.wait_for_timeout(150)
+        self.page.evaluate("document.getElementById('trash-btn').click()")
+        self.page.wait_for_timeout(150)
+        d = json.loads(self.page.evaluate("""(() => {
+          const m = document.getElementById('trash-modal');
+          const rows = document.querySelectorAll('#trash-list .trash-row');
+          return JSON.stringify({
+            open: m.classList.contains('open'),
+            rows: rows.length,
+            name: rows.length ? rows[0].querySelector('.trash-row-name').textContent : null,
+            url: rows.length ? rows[0].querySelector('.trash-row-url').textContent : null,
+            date: rows.length ? rows[0].querySelector('.trash-row-date').textContent : null,
+            sub: document.querySelector('#trash-btn .s').textContent
+          });
+        })()"""))
+        assert d["open"] is True, d
+        assert d["rows"] == 2, d
+        assert d["name"] == "T1" and d["url"] == "https://t1.com", d
+        assert d["date"].startswith("Удалено: "), d
+        assert d["sub"] == "2 в корзине", d
+
+    def test_empty_trash_state(self):
+        load_view(self.page, tabs=self.TABS)
+        self.page.wait_for_timeout(150)
+        self.page.evaluate("document.getElementById('trash-btn').click()")
+        self.page.wait_for_timeout(150)
+        d = json.loads(self.page.evaluate("""(() => {
+          const empty = document.getElementById('trash-empty');
+          const list = document.getElementById('trash-list');
+          return JSON.stringify({
+            open: document.getElementById('trash-modal').classList.contains('open'),
+            emptyVisible: empty.style.display !== 'none',
+            listHidden: list.style.display === 'none',
+            sub: document.querySelector('#trash-btn .s').textContent
+          });
+        })()"""))
+        assert d["open"] is True, d
+        assert d["emptyVisible"] is True, d
+        assert d["listHidden"] is True, d
+        assert d["sub"] == "Удалённые вкладки", d
+
+    def test_restore_single_tab(self):
+        tabs = [{"name": "Keep", "url": "https://k.com", "spaceId": "sp1"}]
+        trash = [{"name": "Rest", "url": "https://r.com", "spaceId": "sp1", "deletedAt": 123}]
+        load_view(self.page, spaces=[{"id": "sp1", "name": "S"}], tabs=tabs, trash=trash)
+        self.page.wait_for_timeout(150)
+        self.page.evaluate("document.getElementById('trash-btn').click()")
+        self.page.wait_for_timeout(150)
+        self.page.evaluate("document.querySelector('#trash-list .trash-row button').click()")
+        self.page.wait_for_timeout(150)
+        assert read_storage_raw(self.page, "blattam-trash") == []
+        tabs2 = read_storage_raw(self.page, "blattam-tabs")
+        rec = [t for t in tabs2 if t["url"] == "https://r.com"]
+        assert len(rec) == 1, tabs2
+        assert rec[0]["name"] == "Rest" and rec[0]["spaceId"] == "sp1", rec
+        assert "deletedAt" not in rec[0], rec
+        assert self.page.evaluate("document.querySelectorAll('.tab-card').length") == 2
+
+    def test_restore_missing_space_falls_back_to_first(self):
+        trash = [{"name": "Gone", "url": "https://g.com", "spaceId": "no-such", "groupId": "no-g", "deletedAt": 1}]
+        load_view(self.page, spaces=[{"id": "sp1", "name": "S"}], tabs=[], trash=trash)
+        self.page.wait_for_timeout(150)
+        self.page.evaluate("document.getElementById('trash-btn').click()")
+        self.page.wait_for_timeout(150)
+        self.page.evaluate("document.querySelector('#trash-list .trash-row button').click()")
+        self.page.wait_for_timeout(150)
+        assert read_storage_raw(self.page, "blattam-trash") == []
+        tabs2 = read_storage_raw(self.page, "blattam-tabs")
+        assert len(tabs2) == 1, tabs2
+        assert tabs2[0]["spaceId"] == "sp1", tabs2
+        assert not tabs2[0].get("groupId"), tabs2
+
+    def test_restore_all(self):
+        trash = [
+            {"name": "T1", "url": "https://t1.com", "deletedAt": 1},
+            {"name": "T2", "url": "https://t2.com", "deletedAt": 2},
+        ]
+        load_view(self.page, tabs=[], trash=trash)
+        self.page.wait_for_timeout(150)
+        self.page.evaluate("document.getElementById('trash-btn').click()")
+        self.page.wait_for_timeout(150)
+        self.page.evaluate("document.getElementById('trash-restore-all').click()")
+        self.page.wait_for_timeout(150)
+        assert read_storage_raw(self.page, "blattam-trash") == []
+        urls = [t["url"] for t in read_storage_raw(self.page, "blattam-tabs")]
+        assert urls == ["https://t1.com", "https://t2.com"], urls
+        d = json.loads(self.page.evaluate("""(() => {
+          const empty = document.getElementById('trash-empty');
+          return JSON.stringify({
+            emptyVisible: empty.style.display !== 'none',
+            sub: document.querySelector('#trash-btn .s').textContent
+          });
+        })()"""))
+        assert d["emptyVisible"] is True, d
+        assert d["sub"] == "Удалённые вкладки", d
+
+    def test_delete_forever_confirm(self):
+        trash = [{"name": "T1", "url": "https://t1.com", "deletedAt": 1}]
+        load_view(self.page, tabs=[], trash=trash)
+        self.page.wait_for_timeout(150)
+        self._confirm_recorder(True)
+        self.page.evaluate("document.getElementById('trash-btn').click()")
+        self.page.wait_for_timeout(150)
+        self.page.evaluate("document.querySelectorAll('#trash-list .trash-row button')[1].click()")
+        self.page.wait_for_timeout(150)
+        assert read_storage_raw(self.page, "blattam-trash") == []
+        assert read_storage_raw(self.page, "blattam-tabs") == []
+        d = json.loads(self.page.evaluate(
+            "JSON.stringify({confirms: window.__msgs.length, msg: window.__msgs[0]})"))
+        assert d["confirms"] == 1, d
+        assert "безвозвратно" in d["msg"], d
+
+    def test_delete_forever_cancel_keeps(self):
+        trash = [{"name": "T1", "url": "https://t1.com", "deletedAt": 1}]
+        load_view(self.page, tabs=[], trash=trash)
+        self.page.wait_for_timeout(150)
+        self._confirm_recorder(False)
+        self.page.evaluate("document.getElementById('trash-btn').click()")
+        self.page.wait_for_timeout(150)
+        self.page.evaluate("document.querySelectorAll('#trash-list .trash-row button')[1].click()")
+        self.page.wait_for_timeout(150)
+        trash2 = read_storage_raw(self.page, "blattam-trash")
+        assert len(trash2) == 1 and trash2[0]["url"] == "https://t1.com", trash2
+        assert self.page.evaluate("window.__msgs.length") == 1
+
+    def test_clear_trash_confirm(self):
+        trash = [{"name": "T1", "url": "https://t1.com", "deletedAt": 1},
+                 {"name": "T2", "url": "https://t2.com", "deletedAt": 2}]
+        load_view(self.page, tabs=[], trash=trash)
+        self.page.wait_for_timeout(150)
+        self._confirm_recorder(True)
+        self.page.evaluate("document.getElementById('trash-btn').click()")
+        self.page.wait_for_timeout(150)
+        self.page.evaluate("document.getElementById('trash-clear').click()")
+        self.page.wait_for_timeout(150)
+        assert read_storage_raw(self.page, "blattam-trash") == []
+        assert self.page.evaluate("window.__msgs.length") == 1
+
+    def test_clear_trash_cancel(self):
+        trash = [{"name": "T1", "url": "https://t1.com", "deletedAt": 1}]
+        load_view(self.page, tabs=[], trash=trash)
+        self.page.wait_for_timeout(150)
+        self._confirm_recorder(False)
+        self.page.evaluate("document.getElementById('trash-btn').click()")
+        self.page.wait_for_timeout(150)
+        self.page.evaluate("document.getElementById('trash-clear').click()")
+        self.page.wait_for_timeout(150)
+        trash2 = read_storage_raw(self.page, "blattam-trash")
+        assert len(trash2) == 1, trash2
+
+    def test_dedup_same_url_bulk(self):
+        tabs = [
+            {"name": "D1", "url": "https://dup.com"},
+            {"name": "D2", "url": "https://dup.com"},
+        ]
+        load_view(self.page, tabs=tabs)
+        self.page.wait_for_timeout(150)
+        self.page.evaluate("document.querySelectorAll('.tab-select').forEach(cb => cb.click())")
+        self.page.evaluate("document.getElementById('delete-selected-btn').click()")
+        self.page.wait_for_timeout(100)
+        trash = read_storage_raw(self.page, "blattam-trash")
+        assert len(trash) == 1, trash
+        assert trash[0]["url"] == "https://dup.com"
+        assert read_storage_raw(self.page, "blattam-tabs") == []
+
+    def test_trash_count_sublabel(self):
+        load_view(self.page, tabs=self.TABS[:2])
+        self.page.wait_for_timeout(150)
+        assert self.page.evaluate("document.querySelector('#trash-btn .s').textContent") == "Удалённые вкладки"
+        self.page.evaluate("""(() => {
+          while (document.querySelector('.tab-remove')) document.querySelector('.tab-remove').click();
+        })()""")
+        self.page.wait_for_timeout(150)
+        assert self.page.evaluate("document.querySelector('#trash-btn .s').textContent") == "2 в корзине"
+
+    def test_trash_onchanged_updates_count(self):
+        load_view(self.page, tabs=self.TABS)
+        self.page.wait_for_timeout(150)
+        assert self.page.evaluate("document.querySelector('#trash-btn .s').textContent") == "Удалённые вкладки"
+        self.page.evaluate("""(() => {
+          chrome.storage._fire({'blattam-trash': {newValue: [
+            {name: 'X', url: 'https://x.com', deletedAt: 1},
+            {name: 'Y', url: 'https://y.com', deletedAt: 2}
+          ], oldValue: []}}, 'local');
+        })()""")
+        self.page.wait_for_timeout(100)
+        assert self.page.evaluate("document.querySelector('#trash-btn .s').textContent") == "2 в корзине"
+
+    def test_trash_i18n_keys_both_langs(self):
+        load_view(self.page, tabs=self.TABS)
+        self.page.wait_for_timeout(150)
+        d = json.loads(self.page.evaluate("""JSON.stringify({
+          ru_label: I18N.ru.trash_label, en_label: I18N.en.trash_label,
+          ru_empty: I18N.ru.trash_empty, en_empty: I18N.en.trash_empty,
+          ru_restore: I18N.ru.trash_restore, en_restore: I18N.en.trash_restore,
+          keys_equal: Object.keys(I18N.ru).sort().join('|') === Object.keys(I18N.en).sort().join('|')
+        })"""))
+        assert d["ru_label"] == "Корзина" and d["en_label"] == "Trash", d
+        assert d["ru_empty"] == "Корзина пуста" and d["en_empty"] == "Trash is empty", d
+        assert d["ru_restore"] == "Вернуть" and d["en_restore"] == "Restore", d
+        assert d["keys_equal"] is True, d

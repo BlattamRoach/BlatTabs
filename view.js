@@ -977,14 +977,7 @@ function pluralVkladok(n) {
   return t('plural_tabs_many');
 }
 
-// Винительный падеж для «Удалить N …?» (в английском падежей нет)
-function pluralVkladki(n) {
-  if (I18N_LANG === 'en') return (n === 1) ? t('plural_tab_acc') : t('plural_tabs_acc_many');
-  const a = Math.abs(n) % 100, d = a % 10;
-  if (d === 1 && a !== 11) return t('plural_tab_acc');
-  if (d > 1 && d < 5 && (a < 11 || a > 14)) return t('plural_tabs_acc_few');
-  return t('plural_tabs_acc_many');
-}
+
 
 // Защита hover-кнопок от drag, «проглотившего» клик: на draggable-родителе
 // (шапка группы / карточка) нажатие + движение >~5px запускает drag родителем
@@ -1353,6 +1346,205 @@ function createGroupInActiveSpace() {
 }
 
 
+// === Корзина (blattam-trash, chrome.storage.local) ===
+// Удаление вкладки больше не навсегда: вкладка уходит в корзину (массив
+// записей = полный объект вкладки + поле deletedAt) и может быть возвращена.
+// Confirm при удалении вкладок НЕТ (возврат — через корзину); confirm
+// остались только для удаления пространства/группы и безвозвратных
+// операций корзины («Удалить навсегда» / «Очистить корзину»).
+
+let trashTabs = []; // записи blattam-trash в памяти (синхронизация — onChanged)
+
+// Прочитать корзину из local: на старте и при открытии модалки (список
+// всегда актуален) + обновить счётчик рейки и открытую модалку
+function loadTrash() {
+  chrome.storage.local.get(['blattam-trash'], (r) => {
+    trashTabs = Array.isArray(r['blattam-trash']) ? r['blattam-trash'] : [];
+    updateTrashCount();
+    if (trashModal && trashModal.classList.contains('open')) renderTrashList();
+  });
+}
+
+// Отправить вкладки в корзину: убрать из allTabs, дописать записи с
+// deletedAt в blattam-trash (дедупликация по url — уже в корзине не
+// дублируем), ОДНОЙ записью положить оба ключа в storage, снять выбор
+// удалённых, перерисовать сетку. Вызывается из трёх точек удаления:
+// ✕ на карточке, «✕ Удалить» (выделенные), клавиша Delete/Backspace.
+function sendTabsToTrash(tabs) {
+  if (!tabs || tabs.length === 0) return;
+  const urls = new Set(tabs.map(t => t.url));
+  const now = Date.now();
+  const inTrash = new Set(trashTabs.map(x => x.url));
+  const seen = new Set();
+  for (const t of tabs) {
+    if (inTrash.has(t.url) || seen.has(t.url)) continue; // дедупликация по url
+    seen.add(t.url);
+    const rec = Object.assign({}, t);
+    delete rec.deletedAt;
+    rec.deletedAt = now;
+    trashTabs.push(rec);
+  }
+  allTabs = allTabs.filter(t => !urls.has(t.url));
+  for (const u of selectedUrls) if (urls.has(u)) selectedUrls.delete(u);
+  chrome.storage.local.set({ 'blattam-tabs': allTabs, 'blattam-trash': trashTabs });
+  // onChanged (blattam-trash) обновит счётчик/модалку; сетку рендерим сразу
+  renderTabs(searchInput.value);
+}
+
+// Вернуть вкладки из корзины: поле deletedAt удаляется, объект возвращается
+// в blattam-tabs (spaceId/groupId сохраняются; если пространство/группы
+// больше нет — вкладка возвращается как «свежая»: в первое пространство,
+// без группы — как при обычном добавлении)
+function restoreFromTrash(records) {
+  if (!records || records.length === 0) return;
+  const urls = new Set(records.map(r => r.url));
+  const restored = records.map(r => {
+    const rec = Object.assign({}, r);
+    delete rec.deletedAt;
+    if (!allSpaces.some(s => s.id === rec.spaceId)) {
+      rec.spaceId = allSpaces.length ? allSpaces[0].id : undefined;
+    }
+    if (rec.groupId != null && !allGroups.some(g => g.id === rec.groupId)) rec.groupId = null;
+    return rec;
+  });
+  trashTabs = trashTabs.filter(x => !urls.has(x.url));
+  allTabs = allTabs.filter(t => !urls.has(t.url)); // страховка от дублей по url
+  allTabs = allTabs.concat(restored);
+  chrome.storage.local.set({ 'blattam-tabs': allTabs, 'blattam-trash': trashTabs });
+  if (trashModal && trashModal.classList.contains('open')) renderTrashList();
+}
+
+// «Удалить навсегда»: убрать записи из корзины (безвозвратно). Вызывается
+// только после confirm (одна запись — trash_permanent_confirm, все —
+// trash_clear_confirm)
+function deleteFromTrash(records) {
+  if (!records || records.length === 0) return;
+  const urls = new Set(records.map(r => r.url));
+  trashTabs = trashTabs.filter(x => !urls.has(x.url));
+  chrome.storage.local.set({ 'blattam-trash': trashTabs });
+  if (trashModal && trashModal.classList.contains('open')) renderTrashList();
+}
+
+// === Модалка: корзина (удалённые вкладки) ===
+// Открытие — кнопка «Корзина» в левой рейке (#trash-btn). Закрытие — ✕,
+// клик по затемнённому фону (как у модалки пространств) и Escape.
+// setModalOpen('trash') делает isAnyModalOpen() истинным, поэтому глобальный
+// keydown не перехватывает клавиши, пока модалка открыта.
+const trashModal = document.getElementById('trash-modal');
+const trashCloseBtn = document.getElementById('trash-close');
+const trashBtn = document.getElementById('trash-btn');
+const trashList = document.getElementById('trash-list');
+const trashEmpty = document.getElementById('trash-empty');
+const trashRestoreAllBtn = document.getElementById('trash-restore-all');
+const trashClearBtn = document.getElementById('trash-clear');
+
+// Счётчик в подписи кнопки рейки: 0 → «Удалённые вкладки» (trash_sub),
+// N>0 → «N в корзине» (trash_count_sub). Вызывается на старте, в
+// renderTabs, по onChanged blattam-trash и после операций корзины.
+function updateTrashCount() {
+  const sub = trashBtn && trashBtn.querySelector('.s');
+  if (!sub) return;
+  sub.textContent = trashTabs.length === 0 ? t('trash_sub') : t('trash_count_sub', { n: trashTabs.length });
+}
+
+// Дата удаления: «20 ноя, 17:22» (Intl.DateTimeFormat, ru-RU / en-US
+// по текущему языку)
+function formatTrashDate(ts) {
+  try {
+    const dtf = new Intl.DateTimeFormat(I18N_LANG === 'en' ? 'en-US' : 'ru-RU',
+      { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+    return dtf.format(new Date(ts));
+  } catch (err) {
+    return String(ts);
+  }
+}
+
+// Рендер списка корзины: строка .trash-row = имя + url (truncate по CSS)
+// + дата удаления + «Вернуть» + «Удалить навсегда» (confirm)
+function renderTrashList() {
+  if (!trashList) return;
+  trashList.innerHTML = '';
+  const empty = trashTabs.length === 0;
+  if (trashEmpty) trashEmpty.style.display = empty ? '' : 'none';
+  trashList.style.display = empty ? 'none' : '';
+  for (const rec of trashTabs) {
+    const row = document.createElement('div');
+    row.className = 'trash-row';
+
+    const main = document.createElement('div');
+    main.className = 'trash-row-main';
+    const nameEl = document.createElement('span');
+    nameEl.className = 'trash-row-name';
+    nameEl.textContent = rec.name || rec.url || t('untitled');
+    nameEl.title = rec.url || '';
+    const urlEl = document.createElement('span');
+    urlEl.className = 'trash-row-url';
+    urlEl.textContent = rec.url || '';
+    main.appendChild(nameEl);
+    main.appendChild(urlEl);
+
+    const dateEl = document.createElement('span');
+    dateEl.className = 'trash-row-date';
+    dateEl.textContent = t('trash_deleted_on', { when: formatTrashDate(rec.deletedAt) });
+
+    const restoreBtn = document.createElement('button');
+    restoreBtn.className = 'modal-btn primary';
+    restoreBtn.textContent = t('trash_restore');
+    restoreBtn.addEventListener('click', () => restoreFromTrash([rec]));
+
+    const permBtn = document.createElement('button');
+    permBtn.className = 'modal-btn ghost';
+    permBtn.textContent = t('trash_permanent');
+    permBtn.addEventListener('click', () => {
+      if (confirm(t('trash_permanent_confirm', { name: rec.name || rec.url }))) {
+        deleteFromTrash([rec]);
+      }
+    });
+
+    row.appendChild(main);
+    row.appendChild(dateEl);
+    row.appendChild(restoreBtn);
+    row.appendChild(permBtn);
+    trashList.appendChild(row);
+  }
+}
+
+function openTrashModal() {
+  if (!trashModal) return;
+  trashModal.classList.add('open');
+  setModalOpen('trash');
+  loadTrash(); // список актуален в момент открытия
+}
+
+function closeTrashModal() {
+  if (trashModal) trashModal.classList.remove('open');
+  setModalOpen(null);
+}
+
+if (trashBtn) trashBtn.addEventListener('click', openTrashModal);
+if (trashCloseBtn) trashCloseBtn.addEventListener('click', closeTrashModal);
+if (trashModal) {
+  trashModal.addEventListener('click', (e) => {
+    if (e.target === trashModal) closeTrashModal();
+  });
+  // Escape — закрыть (отдельный слушатель: глобальный keydown байлит при открытой модалке)
+  document.addEventListener('keydown', (e) => {
+    if (trashModal.classList.contains('open') && e.key === 'Escape') closeTrashModal();
+  });
+}
+
+// «Вернуть все» — без confirm, все записи обратно в blattam-tabs
+if (trashRestoreAllBtn) trashRestoreAllBtn.addEventListener('click', () => {
+  restoreFromTrash(trashTabs.slice());
+});
+// «Очистить корзину» — confirm trash_clear_confirm; пустая корзина — no-op
+if (trashClearBtn) trashClearBtn.addEventListener('click', () => {
+  if (trashTabs.length === 0) return;
+  if (confirm(t('trash_clear_confirm', { n: trashTabs.length }))) {
+    deleteFromTrash(trashTabs.slice());
+  }
+});
+
 // === Карточки вкладок ===
 
 // Переместить вкладку: spaceId (в новое пространство, groupId очищается)
@@ -1395,11 +1587,8 @@ function appendCard(tab) {
   deleteBtn.textContent = '\u2715';
   deleteBtn.addEventListener('click', (e) => {
     e.stopPropagation();
-    if (confirm(t('delete_tab_confirm', { name: tab.name }))) {
-      allTabs.splice(allTabs.indexOf(tab), 1);
-      chrome.storage.local.set({ 'blattam-tabs': allTabs });
-      renderTabs(searchInput.value);
-    }
+    // Без confirm: вкладка уходит в корзину (blattam-trash) — можно вернуть
+    sendTabsToTrash([tab]);
   });
 
   // Кнопка редактирования (hover-контрол, снизу-справа) — клик СРАЗУ открывает
@@ -1536,6 +1725,8 @@ function visibleTabs(filter = '') {
 
 function renderTabs(filter = '') {
   tabsList.innerHTML = '';
+  // Счётчик корзины в подписи рейки (не зависит от списка — все ветки)
+  updateTrashCount();
   // Перерисовка во время перетаскивания уносит заглушку (и заменяет карточку) —
   // сбрасываем ссылку, чтобы ghost-slot не «воскрес» после dragend
   if (dragGhostSlot && !dragGhostSlot.isConnected) dragGhostSlot = null;
@@ -3693,17 +3884,12 @@ clearSelectionBtn.addEventListener('click', () => {
   renderTabs(searchInput.value);
 });
 
-// «Удалить» — массовое удаление выделенных вкладок: один confirm
-// (русские множественные формы), одна запись в storage, выбор снимается.
-// Пустой выбор — no-op; отмена — ничего не меняется.
+// «Удалить» — массовое удаление выделенных вкладок: ВСЕ выделенные уходят
+// в корзину (blattam-trash) БЕЗ confirm (возврат — через корзину), одна
+// запись в storage, выбор снимается. Пустой выбор — no-op.
 deleteSelectedBtn.addEventListener('click', () => {
   if (selectedUrls.size === 0) return;
-  const n = selectedUrls.size;
-  if (!confirm(t('delete_tabs_confirm', { n: n, plural: pluralVkladki(n) }))) return;
-  allTabs = allTabs.filter(t => !selectedUrls.has(t.url));
-  chrome.storage.local.set({ 'blattam-tabs': allTabs });
-  selectedUrls.clear();
-  renderTabs(searchInput.value);
+  sendTabsToTrash(allTabs.filter(t => selectedUrls.has(t.url)));
 });
 
 // «Сбросить фильтры» — в состоянии «ничего не найдено»
@@ -3753,10 +3939,8 @@ function deleteActiveTab() {
   const f = visibleTabs(searchInput.value);
   const tab = f.find(t => t.url === activeUrl);
   if (!tab) return;
-  if (!confirm(t('delete_tab_confirm', { name: tab.name }))) return;
-  allTabs.splice(allTabs.indexOf(tab), 1);
-  chrome.storage.local.set({ 'blattam-tabs': allTabs });
-  renderTabs(searchInput.value); // onChanged-обработчик обнулит activeUrl, если карточки не осталось
+  // Без confirm: вкладка уходит в корзину (blattam-trash)
+  sendTabsToTrash([tab]); // onChanged-обработчик обнулит activeUrl, если карточки не осталось
 }
 
 // Быстрый поиск: вспышка большой буквы в центре + потемнение окна.
@@ -3867,6 +4051,14 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
       allTabs = newTabs;
       if (!sameUrlSet) selectedUrls.clear(); // набор вкладок изменился — сброс выбора
       renderTabs(searchInput.value);
+    }
+    // «Корзина» (blattam-trash): записываем состояние, обновляем счётчик
+    // рейки и открытую модалку. Сетку перерисовывает ветка blattam-tabs
+    // (одна запись меняет оба ключа) — здесь только корзина.
+    if (changes['blattam-trash']) {
+      trashTabs = changes['blattam-trash'].newValue || [];
+      updateTrashCount();
+      if (trashModal && trashModal.classList.contains('open')) renderTrashList();
     }
     // Зеркало открытых вкладок (blattam-browser-tabs) — перерисовка рейки.
     // В драге рейки не перерисовываем (заглушка уйдёт из DOM) — dragend
@@ -4836,6 +5028,7 @@ loadLang().then(function () {
   updateLangButtons();
   loadData();
   loadBrowserTabs();
+  loadTrash(); // корзина: состояние + счётчик рейки
 });
 
 // === Аккаунт (левая рейка, низ): GitHub — вход и синхронизация ===
