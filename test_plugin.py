@@ -170,6 +170,13 @@ var chrome = {
   commands: {
     onCommand: { _listeners: [], addListener: function(fn) { this._listeners.push(fn); } }
   },
+  alarms: {
+    created: [],
+    cleared: [],
+    create: function(name, info) { this.created.push({ name: name, info: info || null }); return Promise.resolve(); },
+    clear: function(name) { this.cleared.push(name); return Promise.resolve(true); },
+    onAlarm: { _listeners: [], addListener: function(fn) { this._listeners.push(fn); } }
+  },
   runtime: {
     messagesSent: [],
     onMessage: { _listeners: [] },
@@ -11460,8 +11467,8 @@ class TestRailLayout:
             searchFirst: rail.firstElementChild ? rail.firstElementChild.contains(document.getElementById('search')) : false,
             brandFirst: rail.firstElementChild && rail.firstElementChild.className === 'rail-brand',
             importInDom: !!inp, importDisplay: cs ? cs.display : null,
-            inputAfterWorkspace: !!document.querySelector('.workspace').nextElementSibling
-              && document.querySelector('.workspace').nextElementSibling.id === 'import-input'
+            inputAfterWorkspace: !!document.getElementById('github-modal').nextElementSibling
+              && document.getElementById('github-modal').nextElementSibling.id === 'import-input'
           });
         })()"""))
         assert d["items"] == 5, d
@@ -19750,9 +19757,10 @@ class TestCustomTheme:
         self.page.wait_for_timeout(100)
         assert self.page_errors == []
 class TestAccountDeviceCode:
-    """GitHub Device Flow: код в карточке аккаунта — КОПИРУЕМЫЙ.
+    """GitHub Device Flow: строка кода — ВНУТРИ модалки #github-modal.
 
-    Код показывается строкой ПОД кнопкой аккаунта (#account-device):
+    Код показывается строкой #account-device ВНУТРИ модалки #github-modal
+    (открывается кликом по карточке аккаунта в рейке; кнопка Подключить):
     выделяемый текст (user-select: text — внутри <button> в Chrome текст
     не выделяется) + кнопка копирования (navigator.clipboard). Вкладка
     открывается по verification_uri_complete — страница с подставленным
@@ -19769,10 +19777,20 @@ class TestAccountDeviceCode:
           window.__deviceRes = {
             user_code: uc,
             verification_uri: 'https://github.com/login/device',
-            verification_uri_complete: 'https://github.com/login/device#' + uc
+            verification_uri_complete: 'https://github.com/login/device#' + uc,
+            interval: 5,
+            expires_at: Date.now() + 900000
           };
           const orig = chrome.runtime.sendMessage.bind(chrome.runtime);
           chrome.runtime.sendMessage = function (msg, cb) {
+            if (msg && msg.action === 'device-flow-poll') {
+              if (window.__pollResponder) {
+                const r = window.__pollResponder(msg);
+                if (cb) cb(r);
+                return Promise.resolve(r);
+              }
+              return Promise.resolve(undefined);
+            }
             if (msg && msg.action === 'device-flow-start') {
               if (cb) cb(window.__deviceRes);
               return Promise.resolve(window.__deviceRes);
@@ -19806,6 +19824,7 @@ class TestAccountDeviceCode:
         self._install_flow_mocks()
         self.page.click("#account-slot")
         self.page.wait_for_timeout(100)
+        self.page.click("#github-connect-btn")
 
     def _device_state(self):
         return json.loads(self.page.evaluate("""(() => JSON.stringify({
@@ -19814,7 +19833,7 @@ class TestAccountDeviceCode:
           code: document.getElementById('account-device-code').textContent,
           codeUserSelect: getComputedStyle(document.getElementById('account-device-code')).userSelect,
           sub: document.querySelector('#account-slot .a-s').textContent,
-          codeInButton: !!document.getElementById('account-device-code').closest('#account-slot'),
+          codeInModal: !!document.getElementById('account-device-code').closest('#github-modal'),
           lastTab: (chrome.tabs.createdTabs.length ? chrome.tabs.createdTabs[chrome.tabs.createdTabs.length - 1].url : null)
         }))()"""))
 
@@ -19833,9 +19852,9 @@ class TestAccountDeviceCode:
         assert d["rowDisplay"] != "none", d
         assert d["code"] == "ABCD-1234", d
         # Ядро фикса: текст КОДА ВЫДЕЛЯЕМЫЙ (внутри кнопки Chrome не выделяет)
-        # и код живёт НЕ внутри #account-slot
+        # и строка кода живёт ВНУТРИ модалки #github-modal
         assert d["codeUserSelect"] == "text", d
-        assert d["codeInButton"] is False, d
+        assert d["codeInModal"] is True, d
         assert d["sub"] == "Введите код в открытой вкладке", d
 
     def test_tab_opens_prefilled_device_page(self):
@@ -19883,6 +19902,7 @@ class TestAccountDeviceCode:
         self._install_flow_mocks()
         self.page.click("#account-slot")
         self.page.wait_for_timeout(100)
+        self.page.click("#github-connect-btn")
         d = json.loads(self.page.evaluate("""(() => JSON.stringify({
           sub: document.querySelector('#account-slot .a-s').textContent,
           copyTitle: document.getElementById('account-device-copy').title,
@@ -19891,3 +19911,719 @@ class TestAccountDeviceCode:
         assert d["sub"] == "Enter the code in the opened tab", d
         assert d["copyTitle"] == "Copy", d
         assert d["codeTitle"] == "Code for github.com/login/device", d
+
+# ==========================================
+#  VIEW.JS: DEVICE FLOW — ПОЛЛИНГ СО СТРАНИЦЫ
+# ==========================================
+
+class TestDeviceFlowPolling:
+    """Поллинг device flow ведёт СТРАНИЦА (view.js): каждое сообщение
+    device-flow-poll будит service worker, он делает один шаг поллинга и
+    возвращает результат; успех/финальная ошибка останавливают интервал,
+    токен в storage → refreshAccount (storage.onChanged)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    def _install_flow_mocks(self, user_code="ABCD-1234"):
+        TestAccountDeviceCode._install_flow_mocks(self, user_code)
+
+    def _start_flow(self, short=True):
+        load_view(self.page)
+        self.page.wait_for_timeout(150)
+        self._install_flow_mocks()
+        if short:
+            self.page.evaluate("window.__deviceRes.interval = 1")
+        self.page.click("#account-slot")
+        self.page.wait_for_timeout(100)
+        self.page.click("#github-connect-btn")
+
+    def test_view_polls_while_pending(self):
+        self._start_flow()
+        self.page.evaluate("""() => {
+          window.__pollCalls = [];
+          window.__pollResponder = (m) => {
+            window.__pollCalls.push(m);
+            return { ok: true, connected: false, pending: true };
+          };
+        }""")
+        self.page.wait_for_timeout(2500)
+        n = self.page.evaluate("window.__pollCalls.length")
+        assert n >= 2, n
+
+    def test_success_stops_polling_and_connects(self):
+        self._start_flow()
+        self.page.evaluate("""() => {
+          window.__pollCalls = [];
+          let n = 0;
+          window.__pollResponder = (m) => {
+            window.__pollCalls.push(m);
+            n += 1;
+            if (n === 1) return { ok: true, connected: false, pending: true };
+            chrome.storage.local.set({ 'github-token': 'mock-token' });
+            return { ok: true, connected: true };
+          };
+          const orig = chrome.runtime.sendMessage.bind(chrome.runtime);
+          chrome.runtime.sendMessage = function (msg, cb) {
+            if (msg && msg.action === 'verify-github') {
+              const r = { success: true, user: { login: 'roach' } };
+              if (cb) cb(r);
+              return Promise.resolve(r);
+            }
+            return orig(msg, cb);
+          };
+        }""")
+        label = ""
+        for _ in range(30):
+            label = self.page.evaluate("document.querySelector('#account-slot .a-t').textContent")
+            if label == "GitHub: roach":
+                break
+            self.page.wait_for_timeout(200)
+        assert label == "GitHub: roach", label
+        d = json.loads(self.page.evaluate("""JSON.stringify({
+          rowHidden: document.getElementById('account-device').hidden,
+          sub: document.querySelector('#account-slot .a-s').textContent,
+          calls: window.__pollCalls.length
+        })"""))
+        assert d["rowHidden"] is True, d
+        assert d["sub"] == "Синхронизация через GitHub", d
+        assert d["calls"] == 2, d
+        self.page.wait_for_timeout(2500)
+        assert self.page.evaluate("window.__pollCalls.length") == 2
+
+    def test_inactive_stops_polling(self):
+        self._start_flow()
+        self.page.evaluate("""() => {
+          window.__pollCalls = [];
+          window.__pollResponder = (m) => {
+            window.__pollCalls.push(m);
+            return { ok: true, connected: false, inactive: true };
+          };
+        }""")
+        self.page.wait_for_timeout(3000)
+        n1 = self.page.evaluate("window.__pollCalls.length")
+        self.page.wait_for_timeout(1500)
+        n2 = self.page.evaluate("window.__pollCalls.length")
+        assert n1 >= 1 and n1 == n2, (n1, n2)
+        sub = self.page.evaluate("document.querySelector('#account-slot .a-s').textContent")
+        assert sub == "Нажмите, чтобы войти в GitHub", sub
+    def test_final_error_shown_in_sub(self):
+        self._start_flow()
+        self.page.evaluate("""() => {
+          window.__pollCalls = [];
+          window.__pollResponder = (m) => {
+            window.__pollCalls.push(m);
+            return { ok: true, connected: false, inactive: true, error: 'access_denied' };
+          };
+        }""")
+        self.page.wait_for_timeout(2500)
+        sub = self.page.evaluate("document.querySelector('#account-slot .a-s').textContent")
+        assert sub == "access_denied", sub
+        n1 = self.page.evaluate("window.__pollCalls.length")
+        self.page.wait_for_timeout(1500)
+        assert self.page.evaluate("window.__pollCalls.length") == n1, (n1,)
+
+    def test_expired_flow_stops_polling(self):
+        load_view(self.page)
+        self.page.wait_for_timeout(150)
+        self._install_flow_mocks()
+        self.page.evaluate("""() => {
+          window.__deviceRes.interval = 1;
+          window.__deviceRes.expires_at = Date.now() + 1200;
+          window.__pollCalls = [];
+          window.__pollResponder = (m) => {
+            window.__pollCalls.push(m);
+            return { ok: true, connected: false, pending: true };
+          };
+        }""")
+        self.page.click("#account-slot")
+        self.page.click("#github-connect-btn")
+        self.page.wait_for_timeout(4100)
+        n1 = self.page.evaluate("window.__pollCalls.length")
+        assert n1 <= 2, n1
+        self.page.wait_for_timeout(1500)
+        assert self.page.evaluate("window.__pollCalls.length") == n1, (n1,)
+        assert self.page.evaluate("document.getElementById('account-device').hidden") is True
+
+
+
+    def test_slow_down_pauses_and_resumes(self):
+        self._start_flow(short=True)
+        self.page.evaluate("""() => {
+          window.__pollCalls = [];
+          let n = 0;
+          window.__pollResponder = (m) => {
+            window.__pollCalls.push(m);
+            n += 1;
+            if (n === 1) return { ok: true, connected: false, pending: true, slow_down: true, wait_ms: 1200 };
+            return { ok: true, connected: false, pending: true };
+          };
+        }""")
+        self.page.wait_for_timeout(1500)
+        d = json.loads(self.page.evaluate("""JSON.stringify({
+          sub: document.querySelector('#account-slot .a-s').textContent,
+          calls: window.__pollCalls.length
+        })"""))
+        assert d["sub"] == "GitHub просит подождать — продолжим автоматически", d
+        assert d["calls"] == 1, d
+        self.page.wait_for_timeout(2500)
+        n2 = self.page.evaluate("window.__pollCalls.length")
+        assert n2 >= 2, n2
+
+    def test_verify_fail_falls_back_to_cached_login(self):
+        load_view(self.page)
+        self.page.wait_for_timeout(150)
+        self.page.evaluate("""() => {
+          const orig = chrome.runtime.sendMessage.bind(chrome.runtime);
+          chrome.runtime.sendMessage = function (msg, cb) {
+            if (msg && msg.action === 'verify-github') {
+              const r = { success: false, token_present: true };
+              if (cb) cb(r);
+              return Promise.resolve(r);
+            }
+            return orig(msg, cb);
+          };
+          chrome.storage.local.set({ 'github-token': 't', 'blattam-github-login': 'roach' });
+        }""")
+        label = ""
+        for _ in range(10):
+            label = self.page.evaluate("document.querySelector('#account-slot .a-t').textContent")
+            if label == "GitHub: roach":
+                break
+            self.page.wait_for_timeout(200)
+        assert label == "GitHub: roach", label
+
+    def test_verify_fail_no_cache_shows_verifying(self):
+        load_view(self.page)
+        self.page.wait_for_timeout(150)
+        self.page.evaluate("""() => {
+          const orig = chrome.runtime.sendMessage.bind(chrome.runtime);
+          chrome.runtime.sendMessage = function (msg, cb) {
+            if (msg && msg.action === 'verify-github') {
+              const r = { success: false, token_present: true };
+              if (cb) cb(r);
+              return Promise.resolve(r);
+            }
+            return orig(msg, cb);
+          };
+          chrome.storage.local.set({ 'github-token': 't' });
+        }""")
+        d = {}
+        for _ in range(10):
+            d = json.loads(self.page.evaluate("""JSON.stringify({
+              label: document.querySelector('#account-slot .a-t').textContent,
+              sub: document.querySelector('#account-slot .a-s').textContent
+            })"""))
+            if d["sub"] == "Подключено · проверяем аккаунт…":
+                break
+            self.page.wait_for_timeout(200)
+        assert d["label"] == "GitHub", d
+        assert d["sub"] == "Подключено · проверяем аккаунт…", d
+
+    def test_verify_fail_no_token_present_shows_error(self):
+        load_view(self.page)
+        self.page.wait_for_timeout(150)
+        self.page.evaluate("""() => {
+          const orig = chrome.runtime.sendMessage.bind(chrome.runtime);
+          chrome.runtime.sendMessage = function (msg, cb) {
+            if (msg && msg.action === 'verify-github') {
+              const r = { success: false };
+              if (cb) cb(r);
+              return Promise.resolve(r);
+            }
+            return orig(msg, cb);
+          };
+          chrome.storage.local.set({ 'github-token': 't' });
+        }""")
+        sub = ""
+        for _ in range(10):
+            sub = self.page.evaluate("document.querySelector('#account-slot .a-s').textContent")
+            if sub == "GitHub недоступен — проверьте сеть":
+                break
+            self.page.wait_for_timeout(200)
+        assert sub == "GitHub недоступен — проверьте сеть", sub
+
+
+class TestGithubModal:
+    """GitHub-модалка #github-modal (newtab): панель аккаунта, перенесённая
+    из popup. Открывается по клику на карточку аккаунта (левая рейка);
+    закрытие — ✕ / Escape / клик по фону. Состояния: не подключён
+    (кнопка Подключить) / подключён (логин + sync-статус +
+    Синхронизировать/Очистить/Отключить). Строка кода Device Flow — в модалке."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self._errors = []
+        page.on("pageerror", self._on_err)
+        yield
+        assert not self._errors, self._errors
+        page.remove_listener("pageerror", self._on_err)
+
+    def _on_err(self, err):
+        self._errors.append(str(err))
+
+    def _inject_real_styles(self):
+        theme = load_file("theme.css")
+        html = load_file("view.html")
+        style = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate(
+            "(styles) => { var st = document.createElement('style'); st.textContent = styles; document.head.appendChild(st); }",
+            [theme + "\n" + style])
+
+    def _load(self):
+        load_view(self.page)
+        self.page.wait_for_timeout(120)
+        self._inject_real_styles()
+        self.page.wait_for_timeout(50)
+
+    def _modal_state(self):
+        return json.loads(self.page.evaluate("""JSON.stringify({
+          open: document.getElementById('github-modal').classList.contains('open'),
+          display: getComputedStyle(document.getElementById('github-modal')).display,
+          connect: getComputedStyle(document.getElementById('github-connect-btn')).display,
+          sync: getComputedStyle(document.getElementById('github-sync-btn')).display,
+          clear: getComputedStyle(document.getElementById('github-clear-btn')).display,
+          disconnect: getComputedStyle(document.getElementById('github-disconnect-btn')).display,
+          status: document.getElementById('github-modal-status').textContent
+        })"""))
+
+    def _install_flow_mocks(self, user_code="ABCD-1234"):
+        """device-flow-start → фиксированный ответ; auth-окно «падает»
+        (lastError) → путь device flow; getManifest — с oauth2.
+        (копия TestAccountDeviceCode._install_flow_mocks)"""
+        self.page.evaluate("""(uc) => {
+          window.__deviceRes = {
+            user_code: uc,
+            verification_uri: 'https://github.com/login/device',
+            verification_uri_complete: 'https://github.com/login/device#' + uc,
+            interval: 5,
+            expires_at: Date.now() + 900000
+          };
+          const orig = chrome.runtime.sendMessage.bind(chrome.runtime);
+          chrome.runtime.sendMessage = function (msg, cb) {
+            if (msg && msg.action === 'device-flow-poll') {
+              if (window.__pollResponder) {
+                const r = window.__pollResponder(msg);
+                if (cb) cb(r);
+                return Promise.resolve(r);
+              }
+              return Promise.resolve(undefined);
+            }
+            if (msg && msg.action === 'device-flow-start') {
+              if (cb) cb(window.__deviceRes);
+              return Promise.resolve(window.__deviceRes);
+            }
+            return orig(msg, cb);
+          };
+          chrome.identity = {
+            launchWebAuthFlow: function (opts, cb) {
+              chrome.runtime.lastError = { message: 'mock: auth window failed' };
+              if (cb) cb();
+              return Promise.resolve(undefined);
+            }
+          };
+          const origManifest = chrome.runtime.getManifest.bind(chrome.runtime);
+          chrome.runtime.getManifest = function () {
+            return Object.assign({}, origManifest(), { oauth2: { client_id: 'mock-client' } });
+          };
+        }""", user_code)
+
+    def _mock_connected(self, status="synced"):
+        """Токен + verify-github успех + check-sync-status → «подключено»"""
+        self.page.evaluate("""(st) => {
+          const orig = chrome.runtime.sendMessage.bind(chrome.runtime);
+          chrome.runtime.sendMessage = function (msg, cb) {
+            if (msg && msg.action === 'verify-github') {
+              const r = { success: true, user: { login: 'roach' } };
+              if (cb) cb(r);
+              return Promise.resolve(r);
+            }
+            if (msg && msg.action === 'check-sync-status') {
+              if (cb) cb(st);
+              return Promise.resolve(st);
+            }
+            return orig(msg, cb);
+          };
+          chrome.storage.local.set({ 'github-token': 't' });
+        }""", status)
+
+    def _open_modal(self):
+        self.page.click("#account-slot")
+        self.page.wait_for_timeout(150)
+
+    def test_modal_hidden_by_default(self):
+        self._load()
+        d = self._modal_state()
+        assert d["open"] is False, d
+        assert d["display"] == "none", d
+
+    def test_slot_click_opens_modal(self):
+        self._load()
+        self.page.click("#account-slot")
+        self.page.wait_for_timeout(150)
+        d = self._modal_state()
+        assert d["open"] is True, d
+        assert d["display"] == "flex", d
+
+    def test_not_connected_buttons_and_status(self):
+        self._load()
+        self._open_modal()
+        d = self._modal_state()
+        assert d["connect"] != "none", d
+        assert d["sync"] == "none", d
+        assert d["clear"] == "none", d
+        assert d["disconnect"] == "none", d
+        assert d["status"] == "Не подключён", d
+
+    def test_connect_starts_device_flow(self):
+        self._load()
+        self._install_flow_mocks()
+        self._open_modal()
+        self.page.click("#github-connect-btn")
+        self.page.wait_for_timeout(250)
+        d = json.loads(self.page.evaluate("""JSON.stringify({
+          status: document.getElementById('github-modal-status').textContent,
+          rowInModal: !!document.getElementById('account-device').closest('#github-modal'),
+          rowHidden: document.getElementById('account-device').hidden,
+          code: document.getElementById('account-device-code').textContent,
+          lastTab: (chrome.tabs.createdTabs.length ? chrome.tabs.createdTabs[chrome.tabs.createdTabs.length - 1].url : null)
+        })"""))
+        assert d["rowInModal"] is True, d
+        assert d["rowHidden"] is False, d
+        assert d["code"] == "ABCD-1234", d
+        assert d["lastTab"] == "https://github.com/login/device#ABCD-1234", d
+        assert d["status"] == "Введите код в открытой вкладке", d
+
+    def test_connected_buttons_and_status(self):
+        self._load()
+        self._mock_connected("synced")
+        self._open_modal()
+        self.page.wait_for_timeout(200)
+        d = self._modal_state()
+        assert d["connect"] == "none", d
+        assert d["sync"] != "none", d
+        assert d["clear"] != "none", d
+        assert d["disconnect"] != "none", d
+        assert d["status"].startswith("GitHub: roach"), d
+        assert "✅" in d["status"], d
+
+    def test_sync_now(self):
+        self._load()
+        self._mock_connected("synced")
+        self._open_modal()
+        self.page.wait_for_timeout(100)
+        self.page.evaluate("""() => {
+          window.__syncMsgs = [];
+          const orig = chrome.runtime.sendMessage.bind(chrome.runtime);
+          chrome.runtime.sendMessage = function (msg, cb) {
+            if (msg && msg.action === 'sync-now') {
+              window.__syncMsgs.push(msg.action);
+              if (cb) cb({ pushed: true });
+              return Promise.resolve({ pushed: true });
+            }
+            return orig(msg, cb);
+          };
+        }""")
+        self.page.click("#github-sync-btn")
+        self.page.wait_for_timeout(200)
+        d = json.loads(self.page.evaluate("""JSON.stringify({
+          msgs: window.__syncMsgs,
+          status: document.getElementById('github-modal-status').textContent
+        })"""))
+        assert d["msgs"] == ["sync-now"], d
+        assert d["status"] == "Синхронизировано", d
+
+    def test_disconnect_returns_to_not_connected(self):
+        self._load()
+        self._mock_connected("synced")
+        self._open_modal()
+        self.page.wait_for_timeout(200)
+        self.page.evaluate("""() => {
+          const orig = chrome.runtime.sendMessage.bind(chrome.runtime);
+          chrome.runtime.sendMessage = function (msg, cb) {
+            if (msg && msg.action === 'disconnect-github') {
+              chrome.storage.local.remove('github-token');
+              if (cb) cb({ ok: true });
+              return Promise.resolve({ ok: true });
+            }
+            return orig(msg, cb);
+          };
+        }""")
+        self.page.click("#github-disconnect-btn")
+        d = None
+        for _ in range(10):
+            d = self._modal_state()
+            if d["status"] == "Не подключён":
+                break
+            self.page.wait_for_timeout(200)
+        assert d["connect"] != "none", d
+        assert d["sync"] == "none", d
+        assert d["status"] == "Не подключён", d
+
+    def test_clear_cloud_with_confirm(self):
+        self._load()
+        self._mock_connected("synced")
+        self._open_modal()
+        self.page.wait_for_timeout(200)
+        self.page.evaluate("""() => {
+          window.confirm = () => true;
+          window.__clearMsgs = [];
+          const orig = chrome.runtime.sendMessage.bind(chrome.runtime);
+          chrome.runtime.sendMessage = function (msg, cb) {
+            if (msg && msg.action === 'clear-cloud') {
+              window.__clearMsgs.push(msg.action);
+              if (cb) cb({ ok: true });
+              return Promise.resolve({ ok: true });
+            }
+            return orig(msg, cb);
+          };
+        }""")
+        self.page.click("#github-clear-btn")
+        self.page.wait_for_timeout(200)
+        d = json.loads(self.page.evaluate("""JSON.stringify({
+          msgs: window.__clearMsgs,
+          status: document.getElementById('github-modal-status').textContent
+        })"""))
+        assert d["msgs"] == ["clear-cloud"], d
+        assert d["status"] == "🧹 Облачные данные очищены", d
+
+    def test_close_esc_closebtn_overlay(self):
+        self._load()
+        # Escape
+        self._open_modal()
+        assert self._modal_state()["open"] is True, "не открылась"
+        self.page.keyboard.press("Escape")
+        self.page.wait_for_timeout(100)
+        assert self._modal_state()["open"] is False, "Escape не закрыл"
+        # ✕
+        self._open_modal()
+        self.page.click("#github-modal-close")
+        self.page.wait_for_timeout(100)
+        assert self._modal_state()["open"] is False, "крестик не закрыл"
+        # клик по фону (левый край оверлея, вне .modal)
+        self._open_modal()
+        p = json.loads(self.page.evaluate("""JSON.stringify((() => {
+          const m = document.querySelector('#github-modal .modal');
+          const r = m.getBoundingClientRect();
+          return { x: 10, y: r.top };
+        })())"""))
+        self.page.mouse.click(p["x"], p["y"])
+        self.page.wait_for_timeout(100)
+        assert self._modal_state()["open"] is False, "клик по фону не закрыл"
+
+    def test_en_locale(self):
+        self._load()
+        self.page.evaluate("""() => {
+          chrome.storage.local.set({ 'blattam-lang': 'en' });
+          switchLanguage('en');
+        }""")
+        self.page.wait_for_timeout(100)
+        self._open_modal()
+        d = self._modal_state()
+        assert d["status"] == "Not connected", d
+        assert self.page.evaluate("document.getElementById('github-connect-btn').textContent") == "Connect GitHub", d
+        assert self.page.evaluate("document.querySelector('#github-modal h3').textContent") == "GitHub", d
+# ==========================================
+#  BACKGROUND.JS: DEVICE FLOW — ПОЛЛИНГ + ALARM
+# ==========================================
+
+class TestDeviceFlowBackground:
+    """background.js: состояние device flow персистится в storage
+    (github-device-flow); device-flow-poll — один шаг поллинга; страховка —
+    alarm blattam-device-poll (30 c). Выживает смерть MV3 service worker."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        page.goto("about:blank")
+        page.evaluate(MOCK_CHROME)
+
+    def _install_fetch_mock(self, token_res=None):
+        self.page.evaluate("""(tr) => {
+          window.__fetchCalls = [];
+          window.__deviceCodeRes = { device_code: 'DC-1', user_code: 'ABCD-1234', verification_uri: 'https://github.com/login/device', verification_uri_complete: 'https://github.com/login/device#ABCD-1234', interval: 5, expires_in: 900 };
+          window.__tokenRes = tr || { error: 'authorization_pending' };
+          window.fetch = async function (url, opts) {
+            window.__fetchCalls.push(String(url));
+            let body;
+            if (String(url).indexOf('/login/device/code') !== -1) body = window.__deviceCodeRes;
+            else if (String(url).indexOf('/login/oauth/access_token') !== -1) body = window.__tokenRes;
+            else body = { ok: false };
+            return { json: async () => body, ok: true, status: 200 };
+          };
+        }""", token_res or {"error": "authorization_pending"})
+
+    def _load_bg(self):
+        self.page.evaluate(load_file("background.js") + "; 'loaded'")
+        self.page.evaluate("""() => {
+          const orig = chrome.runtime.getManifest.bind(chrome.runtime);
+          chrome.runtime.getManifest = function () {
+            return Object.assign({}, orig(), { oauth2: { client_id: 'mock-client' } });
+          };
+        }""")
+    def test_start_stores_state_and_alarm(self):
+        self._install_fetch_mock()
+        self._load_bg()
+        res = call_msg(self.page, "device-flow-start")
+        assert res["user_code"] == "ABCD-1234", res
+        assert res["interval"] == 5, res
+        assert res["expires_at"] > self.page.evaluate("Date.now()"), res
+        state = read_local(self.page, "github-device-flow")
+        assert state is not None and state["device_code"] == "DC-1", state
+        created = json.loads(self.page.evaluate("JSON.stringify(chrome.alarms.created)"))
+        assert any(a["name"] == "blattam-device-poll"
+                   and (a["info"] or {}).get("periodInMinutes") == 0.5
+                   for a in created), created
+
+    def test_poll_pending_keeps_state(self):
+        self._install_fetch_mock({"error": "authorization_pending"})
+        self._load_bg()
+        call_msg(self.page, "device-flow-start")
+        res = call_msg(self.page, "device-flow-poll")
+        assert res == {"ok": True, "connected": False, "pending": True}, res
+        state = read_local(self.page, "github-device-flow")
+        assert state is not None and state["device_code"] == "DC-1", state
+        assert read_local(self.page, "github-token") is None
+
+    def test_poll_success_stores_token_and_cleans(self):
+        self._install_fetch_mock({"access_token": "gh-mock-token"})
+        self._load_bg()
+        call_msg(self.page, "device-flow-start")
+        res = call_msg(self.page, "device-flow-poll")
+        assert res.get("connected") is True, res
+        assert read_local(self.page, "github-token") == "gh-mock-token"
+        assert read_local(self.page, "github-device-flow") is None
+        cleared = json.loads(self.page.evaluate("JSON.stringify(chrome.alarms.cleared)"))
+        assert "blattam-device-poll" in cleared, cleared
+
+    def test_poll_final_error_sets_auth_error(self):
+        self._install_fetch_mock({"error": "access_denied",
+                                  "error_description": "The user denied the request"})
+        self._load_bg()
+        call_msg(self.page, "device-flow-start")
+        res = call_msg(self.page, "device-flow-poll")
+        assert res.get("connected") is False and res.get("inactive") is True, res
+        assert res.get("error") == "The user denied the request", res
+        assert read_local(self.page, "github-auth-error") == "The user denied the request"
+        assert read_local(self.page, "github-device-flow") is None
+
+    def test_poll_http_error_not_final(self):
+        self.page.evaluate("""() => {
+          window.__fetchCalls = [];
+          window.__deviceCodeRes = { device_code: 'DC-1', user_code: 'ABCD-1234', verification_uri: 'https://github.com/login/device', verification_uri_complete: 'https://github.com/login/device#ABCD-1234', interval: 5, expires_in: 900 };
+          window.fetch = async function (url, opts) {
+            window.__fetchCalls.push(String(url));
+            if (String(url).indexOf('/login/device/code') !== -1) {
+              return { json: async () => window.__deviceCodeRes, ok: true, status: 200 };
+            }
+            return { json: async () => ({ message: 'rate limited' }), ok: false, status: 429 };
+          };
+        }""")
+        self._load_bg()
+        call_msg(self.page, "device-flow-start")
+        res = call_msg(self.page, "device-flow-poll")
+        assert res == {"ok": True, "connected": False, "pending": True, "network": True}, res
+        state = read_local(self.page, "github-device-flow")
+        assert state is not None and state["device_code"] == "DC-1", state
+        assert read_local(self.page, "github-auth-error") is None
+
+    def test_poll_without_state_is_inactive(self):
+        self._install_fetch_mock()
+        self._load_bg()
+        res = call_msg(self.page, "device-flow-poll")
+        assert res == {"ok": True, "connected": False, "inactive": True}, res
+        calls = json.loads(self.page.evaluate("JSON.stringify(window.__fetchCalls)"))
+        assert not any("/login/oauth/access_token" in u for u in calls), calls
+
+    def test_alarm_triggers_poll(self):
+        self._install_fetch_mock({"access_token": "gh-alarm-token"})
+        self._load_bg()
+        call_msg(self.page, "device-flow-start")
+        self.page.evaluate("chrome.alarms.onAlarm._listeners[0]({name: 'blattam-device-poll'})")
+        self.page.wait_for_timeout(200)
+        assert read_local(self.page, "github-token") == "gh-alarm-token"
+        assert read_local(self.page, "github-device-flow") is None
+
+    def test_disconnect_clears_flow_state(self):
+        self._install_fetch_mock()
+        self._load_bg()
+        call_msg(self.page, "device-flow-start")
+        assert read_local(self.page, "github-device-flow") is not None
+        res = call_msg(self.page, "disconnect-github")
+        assert res is True, res
+        assert read_local(self.page, "github-device-flow") is None
+        cleared = json.loads(self.page.evaluate("JSON.stringify(chrome.alarms.cleared)"))
+        assert "blattam-device-poll" in cleared, cleared
+
+    def test_poll_slow_down_persists_wait(self):
+        self._install_fetch_mock({"error": "slow_down", "interval": 525,
+                                  "error_description": "Too many requests have been made in the same timeframe."})
+        self._load_bg()
+        call_msg(self.page, "device-flow-start")
+        res = call_msg(self.page, "device-flow-poll")
+        assert res.get("slow_down") is True, res
+        assert res.get("wait_ms") == 525000, res
+        state = read_local(self.page, "github-device-flow")
+        now = self.page.evaluate("Date.now()")
+        assert state is not None and state.get("slow_down_until") and state["slow_down_until"] > now, state
+
+    def test_poll_during_slow_down_skips_fetch(self):
+        self._install_fetch_mock({"error": "slow_down", "interval": 525,
+                                  "error_description": "Too many requests have been made in the same timeframe."})
+        self._load_bg()
+        call_msg(self.page, "device-flow-start")
+        call_msg(self.page, "device-flow-poll")
+        before = self.page.evaluate("window.__fetchCalls.filter(u => u.indexOf('/login/oauth/access_token') !== -1).length")
+        res = call_msg(self.page, "device-flow-poll")
+        after = self.page.evaluate("window.__fetchCalls.filter(u => u.indexOf('/login/oauth/access_token') !== -1).length")
+        assert res.get("slow_down") is True, res
+        assert res.get("wait_ms") is not None and res["wait_ms"] < 525000, res
+        assert after == before, (before, after)
+    def test_poll_after_slow_down_window_polls(self):
+        self._install_fetch_mock({"error": "authorization_pending"})
+        self._load_bg()
+        call_msg(self.page, "device-flow-start")
+        self.page.evaluate("""() => {
+          const s = chrome.storage.local._data['github-device-flow'];
+          s.slow_down_until = Date.now() - 1000;
+        }""")
+        res = call_msg(self.page, "device-flow-poll")
+        assert res.get("pending") is True, res
+        assert not res.get("slow_down"), res
+        calls = self.page.evaluate("window.__fetchCalls.filter(u => u.indexOf('/login/oauth/access_token') !== -1).length")
+        assert calls == 1, calls
+        state = read_local(self.page, "github-device-flow")
+        assert state is not None and "slow_down_until" not in state, state
+
+    def test_start_reuses_active_flow(self):
+        self._install_fetch_mock()
+        self._load_bg()
+        r1 = call_msg(self.page, "device-flow-start")
+        r2 = call_msg(self.page, "device-flow-start")
+        assert r1["user_code"] == r2["user_code"] == "ABCD-1234", (r1, r2)
+        codes = self.page.evaluate("window.__fetchCalls.filter(u => u.indexOf('/login/device/code') !== -1).length")
+        assert codes == 1, codes
+
+class TestPopupGitHubPanelRemoved:
+    """GitHub-панель (Connect/Sync/Clear) перенесена из popup в модалку
+    #github-modal на странице newtab — в popup.html её больше нет."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    def test_github_panel_gone(self):
+        load_popup(self.page)
+        self.page.wait_for_timeout(150)
+        d = json.loads(self.page.evaluate("""JSON.stringify({
+          connect: !!document.getElementById('github-connect'),
+          sync: !!document.getElementById('github-sync'),
+          clear: !!document.getElementById('github-clear'),
+          status: !!document.getElementById('github-status')
+        })"""))
+        assert d["connect"] is False, d
+        assert d["sync"] is False, d
+        assert d["clear"] is False, d
+        assert d["status"] is False, d

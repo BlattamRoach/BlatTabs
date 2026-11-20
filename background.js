@@ -13,6 +13,27 @@ async function getGitHubToken() {
   return storage['github-token'] || null;
 }
 
+// api.github.com нестабилен из сети пользователя (2 IPv4, один «чёрный») —
+// 3 попытки с паузой для ВСЕХ запросов к API (verify + gist-операции);
+// каждая попытка ограничена 10 c (AbortController) — иначе verify вёл
+// карточку ~минуту (3 попытки × зависший до 20 с запрос).
+async function fetchGitHub(url, opts, tries) {
+  tries = tries || 3;
+  for (let i = 0; i < tries; i++) {
+    const timeoutMs = (typeof self !== 'undefined' && self.__fetchTimeoutMs) || 10000;
+    const ctrl = new AbortController();
+    const timer = setTimeout(function () { ctrl.abort(); }, timeoutMs);
+    try {
+      return await fetch(url, Object.assign({}, opts, { signal: ctrl.signal }));
+    } catch (e) {
+      if (i === tries - 1) throw e;
+      await new Promise((r) => setTimeout(r, 1500 * (i + 1)));
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+}
+
 // Обмен OAuth code на access token (POST github.com/login/oauth/access_token).
 async function exchangeGitHubCode(code, redirectUri) {
   const clientId = chrome.runtime.getManifest().oauth2.client_id;
@@ -36,42 +57,80 @@ async function exchangeGitHubCode(code, redirectUri) {
 // 2) пользователь вводит user_code на github.com/login/device (открываем вкладкой)
 // 3) поллинг POST access_token (grant_type=device_code): authorization_pending →
 //    ждём; slow_down → +5с; success → токен в storage (view обновится по onChanged)
-let deviceFlowTimer = null;
+// Поллинг MESSAGE-DRIVEN + ALARMS, а не рекурсивный setTimeout:
+// MV3 service worker умирает через ~30 с простоя, и pending setTimeout
+// гибнет вместе с ним (ввести код пользователю нужно 30–90 с).
+// Состояние персистится в storage (github-device-flow): любое
+// пробуждение (сообщение из view.js или аларм) продолжает поллинг
+// из storage.
+const DEVICE_FLOW_KEY = 'github-device-flow';
+const DEVICE_ALARM = 'blattam-device-poll';
 
-function deviceFlowPoll(data, intervalS) {
-  if (deviceFlowTimer) clearTimeout(deviceFlowTimer);
-  const wait = Math.max(2, intervalS || 5) * 1000;
-  deviceFlowTimer = setTimeout(async () => {
-    try {
-      const clientId = chrome.runtime.getManifest().oauth2.client_id;
-      const resp = await fetch('https://github.com/login/oauth/access_token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-        body: JSON.stringify({
-          client_id: clientId,
-          device_code: data.device_code,
-          grant_type: 'urn:ietf:params:oauth:grant-type:device_code'
-        })
-      });
-      const result = await resp.json();
-      if (result.access_token) {
-        await chrome.storage.local.set({ 'github-token': result.access_token });
-        await chrome.storage.local.remove('github-auth-error');
-        return; // view/popup обновятся по storage.onChanged
-      }
-      if (result.error === 'authorization_pending') deviceFlowPoll(data, intervalS);
-      else if (result.error === 'slow_down') deviceFlowPoll(data, (intervalS || 5) + 5);
-      else {
-        await chrome.storage.local.set({ 'github-auth-error': result.error_description || result.error || 'device flow failed' });
-      }
-    } catch (e) {
-      // Сеть недоступна — повторим позже (кожив живёт до 5 минут)
-      deviceFlowPoll(data, (intervalS || 5) + 5);
+async function deviceFlowPollOnce(state) {
+  try {
+    const clientId = chrome.runtime.getManifest().oauth2.client_id;
+    const resp = await fetch('https://github.com/login/oauth/access_token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({
+        client_id: clientId,
+        device_code: state.device_code,
+        grant_type: 'urn:ietf:params:oauth:grant-type:device_code'
+      })
+    });
+    const result = await resp.json();
+    if (!resp.ok || (result.access_token === undefined && !result.error)) {
+      // Нестандартный ответ (например 429 rate limit) — НЕ финальная ошибка:
+      // повторим на следующем шаге
+      return { connected: false, pending: true, network: true };
     }
-  }, wait);
+    if (result.access_token) {
+      await chrome.storage.local.set({ 'github-token': result.access_token });
+      await chrome.storage.local.remove('github-auth-error');
+      await chrome.storage.local.remove(DEVICE_FLOW_KEY);
+      chrome.alarms.clear(DEVICE_ALARM);
+      return { connected: true };
+    }
+    if (result.error === 'authorization_pending') {
+      // Лимит снят — чистим паузу
+      if (state.slow_down_until) {
+        delete state.slow_down_until;
+        await chrome.storage.local.set({ [DEVICE_FLOW_KEY]: state });
+      }
+      return { connected: false, pending: true };
+    }
+    if (result.error === 'slow_down') {
+      // GitHub просит паузу (interval в секундах) — персистим и ждём
+      const waitMs = Math.max(30, result.interval || 5) * 1000;
+      state.slow_down_until = Date.now() + waitMs;
+      await chrome.storage.local.set({ [DEVICE_FLOW_KEY]: state });
+      return { connected: false, pending: true, slow_down: true, wait_ms: waitMs };
+    }
+    // expired_token / access_denied / прочее — финальная ошибка
+    await chrome.storage.local.set({ 'github-auth-error': result.error_description || result.error || 'device flow failed' });
+    await chrome.storage.local.remove(DEVICE_FLOW_KEY);
+    chrome.alarms.clear(DEVICE_ALARM);
+    return { connected: false, inactive: true, error: result.error_description || result.error || 'device flow failed' };
+  } catch (e) {
+    // Сеть недоступна — повторим при следующем сообщении/аларме
+    return { connected: false, pending: true, network: true };
+  }
 }
-
 async function deviceFlowStart() {
+  // REUSE: активный неистёкший код переиспользуем — каждый новый код
+  // давит на rate-limit (slow_down) сильнее
+  const existingState = await chrome.storage.local.get(DEVICE_FLOW_KEY);
+  const existing = existingState[DEVICE_FLOW_KEY];
+  if (existing && Date.now() < existing.expires_at) {
+    chrome.alarms.create(DEVICE_ALARM, { periodInMinutes: 0.5 });
+    return {
+      user_code: existing.user_code,
+      verification_uri: existing.verification_uri || 'https://github.com/login/device',
+      verification_uri_complete: existing.verification_uri_complete || '',
+      interval: existing.interval || 5,
+      expires_at: existing.expires_at
+    };
+  }
   const clientId = chrome.runtime.getManifest().oauth2.client_id;
   const resp = await fetch('https://github.com/login/device/code', {
     method: 'POST',
@@ -80,9 +139,42 @@ async function deviceFlowStart() {
   });
   const data = await resp.json();
   if (!data.device_code) throw new Error(data.error_description || data.error || 'device flow failed');
-  deviceFlowPoll(data, data.interval || 5);
-  return { user_code: data.user_code, verification_uri: data.verification_uri || 'https://github.com/login/device', verification_uri_complete: data.verification_uri_complete || '' };
+  const expiresAt = Date.now() + (data.expires_in || 900) * 1000;
+  await chrome.storage.local.set({
+    [DEVICE_FLOW_KEY]: {
+      device_code: data.device_code,
+      user_code: data.user_code,
+      interval: data.interval || 5,
+      verification_uri: data.verification_uri || 'https://github.com/login/device',
+      verification_uri_complete: data.verification_uri_complete || '',
+      expires_at: expiresAt
+    }
+  });
+  chrome.alarms.create(DEVICE_ALARM, { periodInMinutes: 0.5 });
+  return {
+    user_code: data.user_code,
+    verification_uri: data.verification_uri || 'https://github.com/login/device',
+    verification_uri_complete: data.verification_uri_complete || '',
+    interval: data.interval || 5,
+    expires_at: expiresAt
+  };
 }
+
+// Страховка, когда страница view закрыта: аларм каждые 30 с будит SW и
+// делает один шаг поллинга (состояние в storage).
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name !== DEVICE_ALARM) return;
+  chrome.storage.local.get(DEVICE_FLOW_KEY).then((r) => {
+    const state = r[DEVICE_FLOW_KEY];
+    if (!state || Date.now() > state.expires_at) {
+      chrome.storage.local.remove(DEVICE_FLOW_KEY);
+      chrome.alarms.clear(DEVICE_ALARM);
+      return;
+    }
+    if (state.slow_down_until && Date.now() < state.slow_down_until) return;
+    deviceFlowPollOnce(state);
+  });
+});
 
 // Отключение: сбрасываем кэш identity + локальный токен (Gist остаётся).
 async function disconnectGitHub() {
@@ -91,6 +183,9 @@ async function disconnectGitHub() {
     if (t) chrome.identity.removeCachedAuthToken({ token: t });
   });
   await chrome.storage.local.remove('github-token');
+  await chrome.storage.local.remove('blattam-github-login');
+  await chrome.storage.local.remove(DEVICE_FLOW_KEY);
+  chrome.alarms.clear(DEVICE_ALARM);
   return true;
 }
 
@@ -99,7 +194,7 @@ async function verifyGitHubToken() {
   if (!token) return null;
 
   try {
-    const response = await fetch('https://api.github.com/user', {
+    const response = await fetchGitHub('https://api.github.com/user', {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (response.ok) {
@@ -381,7 +476,7 @@ async function pushToGitHub() {
   const method = gistId ? 'PUT' : 'POST';
   
   try {
-    const response = await fetch(url, {
+    const response = await fetchGitHub(url, {
       method: method,
       headers: { 
         Authorization: `Bearer ${token}`,
@@ -415,7 +510,7 @@ async function pullFromGitHub() {
 
 
   try {
-    const response = await fetch(`https://api.github.com/gists/${gistId}`, {
+    const response = await fetchGitHub(`https://api.github.com/gists/${gistId}`, {
       headers: { Authorization: `Bearer ${token}` }
     });
     if (!response.ok) throw new Error('Fetch failed');
@@ -741,12 +836,37 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         });
       return p;
     }
+    case 'device-flow-poll': {
+      const p = (async () => {
+        const r = await chrome.storage.local.get(DEVICE_FLOW_KEY);
+        const state = r[DEVICE_FLOW_KEY];
+        if (!state) return { ok: true, connected: false, inactive: true };
+        if (Date.now() > state.expires_at) {
+          await chrome.storage.local.remove(DEVICE_FLOW_KEY);
+          chrome.alarms.clear(DEVICE_ALARM);
+          return { ok: true, connected: false, inactive: true };
+        }
+        if (state.slow_down_until && Date.now() < state.slow_down_until) {
+          // Пауза GitHub — fetch не делаем (не давим на лимит)
+          return { ok: true, connected: false, pending: true, slow_down: true,
+                   wait_ms: state.slow_down_until - Date.now() };
+        }
+        const res = await deviceFlowPollOnce(state);
+        return { ok: true, ...res };
+      })();
+      return p;
+    }
     case 'disconnect-github': {
       const p = disconnectGitHub().then((res) => { sendResponse(res); return res; });
       return p;
     }
     case 'verify-github': {
-      const p = verifyGitHubToken().then((user) => { sendResponse(user ? { success: true, user } : { success: false } ); return user; });
+      const p = (async () => {
+        const user = await verifyGitHubToken();
+        if (user) return { success: true, user };
+        // Токен есть, но API недоступен (сеть) — view покажет кэшированный логин
+        return (await getGitHubToken()) ? { success: false, token_present: true } : { success: false };
+      })().then((res) => { sendResponse(res); return res; });
       return p;
     }
     case 'clear-cloud': {
@@ -761,7 +881,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (!token || !gistId) return 'disconnected';
         
         try {
-          const response = await fetch(`https://api.github.com/gists/${gistId}`, { headers: { Authorization: `token ${token}` } });
+          const response = await fetchGitHub(`https://api.github.com/gists/${gistId}`, { headers: { Authorization: `token ${token}` } });
           const remoteData = await response.json();
           const remotePayload = JSON.parse(remoteData.files['sync.json'].content);
           const local = await getSyncPayload();
@@ -800,7 +920,7 @@ async function clearCloudData() {
   if (!token || !gistId) return false;
 
   try {
-    await fetch(`https://api.github.com/gists/${gistId}`, {
+    await fetchGitHub(`https://api.github.com/gists/${gistId}`, {
       method: 'PATCH',
       headers: { 
         Authorization: `token ${token}`,

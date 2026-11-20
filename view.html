@@ -525,6 +525,16 @@
       cursor: pointer; transition: background .1s, color .1s;
     }
     #settings-modal .modal-close:hover { background: var(--hover); color: var(--text); }
+    /* GitHub-модалка: аккаунт (подключение/синхронизация) — одна колонка
+       полноширинных кнопок; база .modal + крестик как у настроек. Только токены */
+    #github-modal .modal { width: 340px; max-width: calc(100vw - 24px); position: relative; }
+    #github-modal .gh-status { margin: 0 0 12px; font: 400 13px/1.4 var(--font-ui); color: var(--text-soft); word-break: break-word; }
+    #github-modal .gh-btn { display: block; width: 100%; margin-top: 8px; padding: 9px 10px; border: 0; border-radius: 6px; background: var(--bg); color: var(--text-soft); box-shadow: inset 0 0 0 1px var(--line); font: 500 12.5px/1 var(--font-ui); cursor: pointer; transition: background .1s, opacity .1s; }
+    #github-modal .gh-btn:hover { background: var(--hover); }
+    #github-modal .gh-btn.primary { background: var(--ink); color: var(--on-ink); box-shadow: none; }
+    #github-modal .gh-btn.primary:hover { opacity: .88; }
+    #github-modal .modal-close { position: absolute; top: 14px; right: 14px; width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; border: 0; border-radius: 6px; background: var(--bg); color: var(--text-muted); box-shadow: 0 0 0 1px var(--line); font-size: 13px; line-height: 1; cursor: pointer; transition: background .1s, color .1s; }
+    #github-modal .modal-close:hover { background: var(--hover); color: var(--text); }
     #settings-modal .settings-section-title {
       font-size: 11px; font-weight: 600; letter-spacing: .4px; text-transform: uppercase;
       color: var(--text-muted); margin: 0 0 12px;
@@ -578,7 +588,7 @@
       .rail-left .rail-brand { display: none; }
       .rail-item .lbl, .rail-item .go { display: none; }
       .rail-item { justify-content: center; padding: 9px 6px; }
-      .rail-accounts .a-txt, .rail-accounts .tag { display: none; }
+      .rail-accounts .a-txt { display: none; }
       .rail-accounts .slot { justify-content: center; }
       .main { padding-left: 16px; padding-right: 16px; }
     }
@@ -648,14 +658,9 @@
           </span>
           <span class="a-txt">
             <span class="a-t" data-i18n="account_label">Аккаунт</span>
-            <span class="a-s" data-i18n="account_sub">Скоро · синхронизация</span>
+            <span class="a-s" data-i18n="account_connect_sub">Нажмите, чтобы войти в GitHub</span>
           </span>
-          <span class="tag" data-i18n="account_tag">скоро</span>
         </button>
-        <div class="account-device" id="account-device" hidden>
-          <span class="account-device-code" id="account-device-code" data-i18n-title="account_device_code_title" title="Код для github.com/login/device"></span>
-          <button class="account-device-copy" id="account-device-copy" type="button" data-i18n-title="account_copy" title="Копировать">⧉</button>
-        </div>
       </div>
     </aside>
 
@@ -699,6 +704,23 @@
     </aside>
   </div>
 
+  <!-- GitHub: аккаунт (подключение/синхронизация) — перенесено из popup;
+       открывается по клику на карточку аккаунта в левой рейке -->
+  <div class="modal-overlay" id="github-modal">
+    <div class="modal">
+      <button class="modal-close" id="github-modal-close" data-i18n-title="settings_close_title" data-i18n-aria="settings_close_title" title="Закрыть" aria-label="Закрыть">✕</button>
+      <h3 data-i18n="github_h3">GitHub</h3>
+      <p class="gh-status" id="github-modal-status" data-i18n="github_not_connected">Не подключён</p>
+      <div class="account-device" id="account-device" hidden>
+        <span class="account-device-code" id="account-device-code" data-i18n-title="account_device_code_title" title="Код для github.com/login/device"></span>
+        <button class="account-device-copy" id="account-device-copy" type="button" data-i18n-title="account_copy" title="Копировать">⧉</button>
+      </div>
+      <button class="gh-btn primary" id="github-connect-btn" data-i18n="github_connect">Подключить GitHub</button>
+      <button class="gh-btn primary" id="github-sync-btn" data-i18n="github_sync">Синхронизировать</button>
+      <button class="gh-btn" id="github-clear-btn" data-i18n="github_clear">Очистить облачные данные</button>
+      <button class="gh-btn" id="github-disconnect-btn" data-i18n="github_disconnect">Отключить</button>
+    </div>
+  </div>
   <input type="file" id="import-input" accept=".json" style="display:none;">
   <input type="file" id="bg-file-input" accept="image/*" style="display:none;">
 
