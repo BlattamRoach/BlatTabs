@@ -463,70 +463,77 @@ async function applySyncPayload(payload) {
 
 async function pushToGitHub() {
   const token = await getGitHubToken();
-  if (!token) return 0;
-
+  if (!token) return { ok: false, error: 'no-token' };
 
   const payload = await getSyncPayload();
   const jsonString = JSON.stringify(payload, null, 2);
-  
-  const storage = await chrome.storage.local.get(GIST_ID_KEY);
-  const gistId = storage[GIST_ID_KEY];
-  
-  const url = `https://api.github.com/gists${gistId ? '/' + gistId : ''}`;
-  const method = gistId ? 'PUT' : 'POST';
-  
-  try {
-    const response = await fetchGitHub(url, {
-      method: method,
-      headers: { 
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        description: 'BlatTabs Sync Data',
-        public: false,
-        files: { 'sync.json': { content: jsonString } }
-      })
-    });
 
-    if (!response.ok) throw new Error(`GitHub API error: ${response.statusText}`);
+  const storage = await chrome.storage.local.get(GIST_ID_KEY);
+  let gistId = storage[GIST_ID_KEY];
+
+  let url = `https://api.github.com/gists${gistId ? '/' + gistId : ''}`;
+  let method = gistId ? 'PUT' : 'POST';
+  const body = JSON.stringify({
+    description: 'BlatTabs Sync Data',
+    public: false,
+    files: { 'sync.json': { content: jsonString } }
+  });
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    'Content-Type': 'application/json'
+  };
+
+  try {
+    let response = await fetchGitHub(url, { method: method, headers: headers, body: body });
+
+    // Мёртвый gist (удалён / создан другим аккаунтом): PUT → 404 ВЕЧНО.
+    // Снимаем мёртвый id и пересоздаем gist POST-ом (один повтор).
+    if (response.status === 404 && method === 'PUT' && gistId) {
+      await chrome.storage.local.remove(GIST_ID_KEY);
+      gistId = null;
+      url = 'https://api.github.com/gists';
+      method = 'POST';
+      response = await fetchGitHub(url, { method: method, headers: headers, body: body });
+    }
+
+    if (!response.ok) return { ok: false, error: 'api ' + response.status };
     const data = await response.json();
-    
+
     if (!gistId) {
       await chrome.storage.local.set({ [GIST_ID_KEY]: data.id });
     }
   } catch (e) {
     console.error('pushToGitHub failed:', e);
-    return 0;
+    return { ok: false, error: (e && e.name === 'TypeError') ? 'network' : 'bad-payload' };
   }
-  return 1;
+  return { ok: true, pushed: true };
 }
 
 async function pullFromGitHub() {
   const token = await getGitHubToken();
+  if (!token) return { ok: false, error: 'no-token' };
   const storage = await chrome.storage.local.get(GIST_ID_KEY);
   const gistId = storage[GIST_ID_KEY];
-  if (!token || !gistId) return 0;
-
+  if (!gistId) return { ok: true, pulled: false }; // в облаке ещё ничего — не ошибка
 
   try {
     const response = await fetchGitHub(`https://api.github.com/gists/${gistId}`, {
       headers: { Authorization: `Bearer ${token}` }
     });
-    if (!response.ok) throw new Error('Fetch failed');
+    if (response.status === 404) return { ok: true, pulled: false }; // gist пропал — push пересоздаст
+    if (!response.ok) return { ok: false, error: 'api ' + response.status };
     const data = await response.json();
-    
 
     const remotePayload = JSON.parse(data.files['sync.json'].content);
     const localTabs = await loadTabs();
     const mergedTabs = await mergeTabs(localTabs, remotePayload.tabs || []);
     const finalPayload = { ...remotePayload, tabs: mergedTabs, updatedAt: Date.now() };
     await applySyncPayload(finalPayload);
+    return { ok: true, pulled: true };
   } catch (e) {
     console.error('pullFromGitHub failed:', e);
-    return 0;
+    return { ok: false, error: (e && e.name === 'TypeError') ? 'network' : 'bad-payload' };
   }
-  return 1;
 }
 
 // Debounced Sync Trigger
@@ -899,9 +906,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
     case 'sync-now': {
       const p = (async () => {
-        const pulled = await pullFromGitHub();
-        const pushed = await pushToGitHub();
-        return { pulled, pushed };
+        const pull = await pullFromGitHub();
+        const push = await pushToGitHub();
+        return { pulled: !!(pull && pull.pulled), pushed: !!(push && push.ok),
+                 error: (push && !push.ok && push.error) || (pull && !pull.ok && pull.error) || null };
       })().then(res => { sendResponse(res); return res; });
       return p;
     }
