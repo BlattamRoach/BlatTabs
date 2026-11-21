@@ -739,6 +739,7 @@ function openSettingsModal() {
   settingsModal.classList.add('open');
   setModalOpen('settings');
   setSettingsSection('appearance'); // при каждом открытии — «Внешний вид»
+  renderPresetList();
   // пикер «Цвет вкладок» показывает актуальное значение (из local-хранилища)
   chrome.storage.local.get(['blattam-tab-color'], (r) => {
     applyTabCardColor(r['blattam-tab-color'] || '');
@@ -765,7 +766,7 @@ document.addEventListener('keydown', (e) => {
   if (settingsModal.classList.contains('open') && e.key === 'Escape') closeSettingsModal();
 });
 
-// Двухпанное окно: слева навигация разделов («Внешний вид»/«Фоны»/«Общие»/«Экспериментальное»/«FAQ»/«О программе» — кнопки
+// Двухпанное окно: слева навигация разделов («Внешний вид»/«Общие»/«Экспериментальное»/«FAQ»/«О программе» — кнопки
 // .settings-nav-item), справа — контент; виден только активный
 // (#settings-pane-appearance и др. — display:none у неактивной).
 // Состояние — module-переменная по id раздела (переживает перерисовку, идемпотентна);
@@ -777,7 +778,7 @@ function setSettingsSection(id) {
   if (!settingsNavItems.some((b) => b.dataset.section === id)) id = 'appearance';
   settingsSection = id;
   settingsNavItems.forEach((b) => b.classList.toggle('active', b.dataset.section === id));
-  ['appearance', 'backgrounds', 'general', 'experimental', 'faq', 'about'].forEach((s) => {
+  ['appearance', 'general', 'experimental', 'faq', 'about'].forEach((s) => {
     const pane = document.getElementById('settings-pane-' + s);
     if (pane) pane.style.display = (s === id) ? '' : 'none';
   });
@@ -785,6 +786,119 @@ function setSettingsSection(id) {
 settingsNavItems.forEach((btn) => {
   btn.addEventListener('click', () => setSettingsSection(btn.dataset.section));
 });
+
+// «Пресеты» — профили внешнего вида (blattam-presets + blattam-active-preset, local).
+// Пресет — снапшот шести ключей: тема / кастомные цвета-геометрия / три фона / цвет вкладок.
+// Активный пресет сбрасывается, когда вид поменяли вручную (сравнение значений).
+const PRESET_KEYS = ['blattam-theme', 'blattam-custom-theme', 'blattam-bg-image', 'blattam-bg-image-left', 'blattam-bg-image-right', 'blattam-tab-color'];
+function presetCollectData(r) {
+  return {
+    theme: r['blattam-theme'] || null,
+    customTheme: r['blattam-custom-theme'] || null,
+    bgImage: r['blattam-bg-image'] || null,
+    bgImageLeft: r['blattam-bg-image-left'] || null,
+    bgImageRight: r['blattam-bg-image-right'] || null,
+    tabColor: r['blattam-tab-color'] || null
+  };
+}
+
+function presetWriteData(data, done) {
+  const map = { theme: 'blattam-theme', customTheme: 'blattam-custom-theme', bgImage: 'blattam-bg-image', bgImageLeft: 'blattam-bg-image-left', bgImageRight: 'blattam-bg-image-right', tabColor: 'blattam-tab-color' };
+  const set = {}; const rm = [];
+  Object.keys(map).forEach((f) => {
+    const v = (data || {})[f];
+    const empty = (v === null || v === undefined) || (f === 'customTheme' && typeof v === 'object' && Object.keys(v).length === 0);
+    if (empty) rm.push(map[f]); else set[map[f]] = v;
+  });
+  if (!rm.length) { chrome.storage.local.set(set, done); return; }
+  if (!Object.keys(set).length) { chrome.storage.local.remove(rm, done); return; }
+  chrome.storage.local.set(set, () => chrome.storage.local.remove(rm, done));
+}
+
+function renderPresetList() {
+  const list = document.getElementById('preset-list');
+  if (!list) return;
+  chrome.storage.local.get(['blattam-presets', 'blattam-active-preset'], (r) => {
+    const presets = r['blattam-presets'] || [];
+    const activeId = r['blattam-active-preset'];
+    list.innerHTML = '';
+    if (!presets.length) {
+      const empty = document.createElement('div');
+      empty.className = 'preset-empty';
+      empty.textContent = t('preset_empty');
+      list.appendChild(empty);
+      return;
+    }
+    presets.forEach((p) => {
+      const row = document.createElement('div');
+      row.className = 'preset-row' + (p.id === activeId ? ' active' : '');
+      const name = document.createElement('span');
+      name.className = 'preset-name';
+      name.textContent = p.name || t('preset_default_name', { n: 1 });
+      row.appendChild(name);
+      if (p.id === activeId) {
+        const badge = document.createElement('span');
+        badge.className = 'preset-badge';
+        badge.textContent = t('preset_active');
+        row.appendChild(badge);
+      }
+      const applyBtn = document.createElement('button');
+      applyBtn.className = 'btn btn-ghost preset-apply';
+      applyBtn.textContent = t('preset_apply');
+      applyBtn.addEventListener('click', () => applyPreset(p.id));
+      row.appendChild(applyBtn);
+      const delBtn = document.createElement('button');
+      delBtn.className = 'btn btn-ghost preset-del';
+      delBtn.textContent = t('preset_delete');
+      delBtn.addEventListener('click', () => deletePreset(p.id));
+      row.appendChild(delBtn);
+      list.appendChild(row);
+    });
+  });
+}
+
+function savePresetAsNew() {
+  const nameEl = document.getElementById('preset-name-input');
+  chrome.storage.local.get(PRESET_KEYS.concat(['blattam-presets']), (r) => {
+    const presets = r['blattam-presets'] || [];
+    const name = (nameEl.value || '').trim() || t('preset_default_name', { n: presets.length + 1 });
+    const preset = { id: genId('p'), name: name, createdAt: Date.now(), data: presetCollectData(r) };
+    presets.push(preset);
+    chrome.storage.local.set({ 'blattam-presets': presets, 'blattam-active-preset': preset.id });
+    nameEl.value = '';
+  });
+}
+function applyPreset(id) {
+  chrome.storage.local.get(['blattam-presets'], (r) => {
+    const p = (r['blattam-presets'] || []).find((x) => x.id === id);
+    if (!p) return;
+    presetWriteData(p.data, () => {
+      chrome.storage.local.set({ 'blattam-active-preset': id });
+    });
+  });
+}
+function deletePreset(id) {
+  chrome.storage.local.get(['blattam-presets', 'blattam-active-preset'], (r) => {
+    const presets = (r['blattam-presets'] || []).filter((x) => x.id !== id);
+    if (r['blattam-active-preset'] === id) {
+      chrome.storage.local.set({ 'blattam-presets': presets }, () => chrome.storage.local.remove('blattam-active-preset'));
+    } else {
+      chrome.storage.local.set({ 'blattam-presets': presets });
+    }
+  });
+}
+function syncActivePreset() {
+  chrome.storage.local.get(PRESET_KEYS.concat(['blattam-active-preset', 'blattam-presets']), (r) => {
+    const activeId = r['blattam-active-preset'];
+    if (!activeId) return;
+    const p = (r['blattam-presets'] || []).find((x) => x.id === activeId);
+    if (!p) { chrome.storage.local.remove('blattam-active-preset'); return; }
+    const same = JSON.stringify(presetCollectData(r)) === JSON.stringify(p.data || {});
+    if (!same) chrome.storage.local.remove('blattam-active-preset');
+  });
+}
+const presetSaveBtn = document.getElementById('preset-save-btn');
+presetSaveBtn.addEventListener('click', savePresetAsNew);
 
 // «Фон» в настройках: картинка → data URL → blattam-bg-image (local).
 const bgFileBtn = document.getElementById('bg-file-btn');
@@ -1548,6 +1662,27 @@ function renderTrashList() {
     const row = document.createElement('div');
     row.className = 'trash-row';
 
+    const favEl = document.createElement('span');
+    favEl.className = 'trash-row-fav';
+    const favLetter = (rec.name || rec.url || '?').trim().charAt(0).toUpperCase();
+    if (rec.favIconUrl) {
+      const img = document.createElement('img');
+      img.src = rec.favIconUrl;
+      img.alt = '';
+      img.addEventListener('error', () => {
+        const fb = document.createElement('span');
+        fb.className = 'trash-row-fav-fallback';
+        fb.textContent = favLetter;
+        favEl.replaceChildren(fb);
+      });
+      favEl.appendChild(img);
+    } else {
+      const fb = document.createElement('span');
+      fb.className = 'trash-row-fav-fallback';
+      fb.textContent = favLetter;
+      favEl.appendChild(fb);
+    }
+
     const main = document.createElement('div');
     main.className = 'trash-row-main';
     const nameEl = document.createElement('span');
@@ -1578,6 +1713,7 @@ function renderTrashList() {
       }
     });
 
+    row.appendChild(favEl);
     row.appendChild(main);
     row.appendChild(dateEl);
     row.appendChild(restoreBtn);
@@ -4175,6 +4311,13 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     if (changes['blattam-custom-theme']) {
       applyCustomTheme(changes['blattam-custom-theme'].newValue || null);
     }
+    // «Пресеты»: изменился любой из шести ключей внешнего вида — сверить активный
+    // (значения не совпали — снять «активен»); список/активный изменились — обновить;
+    // открытая модалка — перерисовать список.
+    if (PRESET_KEYS.some((k) => changes[k]) || changes['blattam-presets'] || changes['blattam-active-preset']) {
+      syncActivePreset();
+      if (settingsModal.classList.contains('open')) renderPresetList();
+    }
     return;
   }
   if (areaName !== 'sync') return;
@@ -5104,6 +5247,7 @@ function switchLanguage(lang) {
   renderSpaces();
   renderTabs(searchInput.value);
   updateSelectionBar();
+  renderPresetList();
 }
 
 (function () {
@@ -5157,6 +5301,9 @@ loadLang().then(function () {
   function refreshAccount() {
     chrome.storage.local.get(['github-token', 'blattam-github-login'], (r) => {
       if (!r['github-token']) { renderAccount(null); return; }
+      // Мгновенно — при токене + кэше логина, до verify-github:
+      // рейка не мигает «подключаем», успех verify перекроет свежим логином.
+      if (r['blattam-github-login']) renderAccount({ login: r['blattam-github-login'] });
       chrome.runtime.sendMessage({ action: 'verify-github' }, (res) => {
         if (res && res.success) {
           chrome.storage.local.set({ 'blattam-github-login': res.user.login });
@@ -5312,6 +5459,10 @@ loadLang().then(function () {
       if (ghSync) ghSync.style.display = '';
       if (ghClear) ghClear.style.display = '';
       if (ghDisconnect) ghDisconnect.style.display = '';
+      // Статус мгновенно «проверяем» — иначе до ответа verify-github
+      // (до ~35–70 с на плохой сети) виден «Не подключён» при видимой
+      // кнопке «Отключить». Финальный статус перекроет.
+      ghStatusSet(t('account_verifying'));
       chrome.runtime.sendMessage({ action: 'verify-github' }, (res) => {
         let name = null;
         if (res && res.success) {
@@ -5357,8 +5508,12 @@ loadLang().then(function () {
 
   ghSync.addEventListener('click', () => {
     chrome.runtime.sendMessage({ action: 'sync-now' }, (res) => {
-      ghStatusSet((res && (res.pulled || res.pushed)) ? t('account_sync_done') : t('account_sync_error'));
-      setTimeout(renderGitHubModal, 3000);
+      const ok = !!(res && (res.pulled || res.pushed));
+      ghStatusSet(ok ? t('account_sync_done')
+                     : ((res && res.error) ? t('account_sync_error_detail', { err: res.error })
+                                           : t('account_sync_error')));
+      // Ошибка остаётся видимой: renderGitHubModal НЕ затирает её.
+      if (ok) setTimeout(renderGitHubModal, 3000);
     });
   });
 

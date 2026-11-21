@@ -510,7 +510,8 @@ POPUP_DOM = body_dom("popup.html")
 def load_view(pg, tabs=None, spaces=None, groups=None, folders=None,
               last_space=None, theme=None, confirm=False, browser_tabs=None,
               bg=None, bg_left=None, bg_right=None, tab_color=None, lang=None,
-              quick_search=None, custom_theme=None, trash=None):
+              quick_search=None, custom_theme=None, trash=None,
+              presets=None, active_preset=None):
     """about:blank + mock + данные + DOM view.html + view.js.
 
     browser_tabs — список открытых вкладок браузера (chrome.tabs._tabs):
@@ -548,6 +549,10 @@ def load_view(pg, tabs=None, spaces=None, groups=None, folders=None,
         init.append("chrome.storage.local._data['blattam-quick-search'] = " + json.dumps(quick_search) + ";")
     if custom_theme is not None:
         init.append("chrome.storage.local._data['blattam-custom-theme'] = " + json.dumps(custom_theme, ensure_ascii=False) + ";")
+    if presets is not None:
+        init.append("chrome.storage.local._data['blattam-presets'] = " + json.dumps(presets, ensure_ascii=False) + ";")
+    if active_preset is not None:
+        init.append("chrome.storage.local._data['blattam-active-preset'] = " + json.dumps(active_preset) + ";")
     if confirm:
         init.append("window.confirm = () => true;")
     pg.goto("about:blank")
@@ -7121,14 +7126,16 @@ class TestDarkTheme:
           return JSON.stringify({
             sectionExists: !!sec,
             inAppearance: !!sec && pane.contains(sec),
-            firstSection: !!sec && pane.firstElementChild === sec,
+            presetSectionFirst: !!pane && pane.firstElementChild === document.getElementById('preset-section'),
+            themeAfterPreset: !!sec && !!sec.previousElementSibling && sec.previousElementSibling.id === 'preset-section',
             lightExists: !!light, darkExists: !!dark,
             lightActive: light ? light.classList.contains('active') : false,
             darkActive: dark ? dark.classList.contains('active') : false,
             railBtnGone: !document.getElementById('theme-btn')
           });
         })()"""))
-        assert d == {"sectionExists": True, "inAppearance": True, "firstSection": True,
+        assert d == {"sectionExists": True, "inAppearance": True, "presetSectionFirst": True,
+                     "themeAfterPreset": True,
                      "lightExists": True, "darkExists": True,
                      "lightActive": True, "darkActive": False,
                      "railBtnGone": True}, d
@@ -11861,7 +11868,7 @@ class TestLeftRailSearchAndCleanup:
 
     def test_edit_tab_modal_settings_size_tabname_tone(self):
         # Модалка редактирования вкладки: размер как у окна настроек
-        # (640×440 при 1280×900 — теперь шире, чем выше), поля 14px,
+        # (640×440 при 1280×900 — окно настроек шире: 980×720), поля 14px,
         # тон текста — как у .tab-name (--card-name), обе темы
         for theme in ("light", "dark"):
             self.page.set_viewport_size({"width": 1280, "height": 900})
@@ -11929,10 +11936,11 @@ class TestLeftRailSearchAndCleanup:
 
 #  VIEW.HTML: МОДАЛКА РЕДАКТИРОВАНИЯ ВКЛАДКИ — РАЗМЕР КАК У ОКНА НАСТРОЕК
 class TestEditModalSettingsSize:
-    """Модалка редактирования вкладки (#edit-tab-modal) — размер как у окна
-    настроек (#settings-modal): box rule зеркалит его (640×440 при 1280×900,
-    width min(640px, calc(100vw - 24px)) — резп.). Модалка пространств
-    (общая .modal) не тронута; тон полей --card-name сохранён."""
+    """Окно настроек (#settings-modal) — 980×720 при 1280×900 (width min(980px,
+    calc(100vw - 24px)), height min(720px, calc(100vh - 24px))). Модалка
+    редактирования вкладки (#edit-tab-modal) — свой размер 640×440
+    (min(640px, calc(100vw - 24px))). Модалка пространств (общая .modal)
+    не тронута; тон полей --card-name сохранён."""
 
     @pytest.fixture(autouse=True)
     def _setup(self, page):
@@ -11984,8 +11992,8 @@ class TestEditModalSettingsSize:
         self.page.wait_for_timeout(50)
         return r
 
-    def test_edit_modal_rect_matches_settings_at_1280(self):
-        # .modal модалки редактирования == .modal модалки настроек (w и h, ±1px)
+    def test_settings_modal_980x720_and_edit_stays_640(self):
+        # Окно настроек 980×720, edit-модалка остаётся 640×440 (±1px)
         for theme in ("light", "dark"):
             self.page.set_viewport_size({"width": 1280, "height": 900})
             load_view(self.page, tabs=self.TABS, theme=theme)
@@ -11993,14 +12001,14 @@ class TestEditModalSettingsSize:
             self.page.wait_for_timeout(120)
             settings = self._open_settings_measure_close()
             edit = self._open_edit_measure_close()
-            assert abs(settings["w"] - edit["w"]) <= 1, (theme, settings, edit)
-            assert abs(settings["h"] - edit["h"]) <= 1, (theme, settings, edit)
-            # Явный размер — как у настроек: 640×440
+            assert abs(settings["w"] - 980) <= 1, (theme, settings)
+            assert abs(settings["h"] - 720) <= 1, (theme, settings)
             assert abs(edit["w"] - 640) <= 1, (theme, edit)
-            assert edit["h"] >= 440 - 1, (theme, edit)
+            assert abs(edit["h"] - 440) <= 1, (theme, edit)
 
     def test_both_modals_equal_width_at_600px(self):
-        # Узкий вьюпорт (600px): обе — min(640px, 100vw-24) = 576px, равны
+        # Узкий вьюпорт (600px): обе — min(…, 100vw-24) = 576px, равны
+        # (настройки min(980px, …), edit min(640px, …))
         for theme in ("light", "dark"):
             self.page.set_viewport_size({"width": 600, "height": 900})
             load_view(self.page, tabs=self.TABS, theme=theme)
@@ -12945,7 +12953,7 @@ class TestSettingsBackground:
             titles = json.loads(self.page.evaluate(
                 "JSON.stringify([...document.querySelectorAll('#settings-modal .settings-section-title')]"
                 ".map(el => el.textContent.trim()))"))
-            assert titles == ["Тема", "Цвета", "Размер и форма", "Шрифт", "Фон", "Фон левой рейки", "Фон правой рейки", "Цвет вкладок", "Язык", "Экспериментальное", "Частые вопросы", "О программе"]
+            assert titles == ["Пресеты", "Тема", "Цвета", "Размер и форма", "Шрифт", "Фон", "Фон левой рейки", "Фон правой рейки", "Цвет вкладок", "Язык", "Экспериментальное", "Частые вопросы", "О программе"]
             assert self.page.evaluate("document.getElementById('bg-file-btn').textContent.trim()") == "Выбрать картинку"
             assert self.page.evaluate("document.getElementById('bg-clear-btn').textContent.trim()") == "Убрать"
             # скрытый input-файла рядом с #import-input
@@ -12988,7 +12996,6 @@ class TestSettingsBackground:
     def test_bg_clear_removes_background(self):
         load_view(self.page)
         self._open()
-        self._open_pane("backgrounds")
         self._set_file()
         assert self.page.evaluate("chrome.storage.local._data['blattam-bg-image']") is not None
         self.page.locator("#bg-clear-btn").click()
@@ -13041,7 +13048,6 @@ class TestSettingsBackground:
     def test_bg_flow_no_page_errors(self):
         load_view(self.page)
         self._open()
-        self._open_pane("backgrounds")
         self._set_file()
         self.page.locator("#bg-clear-btn").click()
         data_url = "data:image/png;base64," + "Q" * 100
@@ -13117,7 +13123,7 @@ class TestSettingsTabColor:
             titles = json.loads(self.page.evaluate(
                 "JSON.stringify([...document.querySelectorAll('#settings-modal .settings-section-title')]"
                 ".map(el => el.textContent.trim()))"))
-            assert titles == ["Тема", "Цвета", "Размер и форма", "Шрифт", "Фон", "Фон левой рейки", "Фон правой рейки", "Цвет вкладок", "Язык", "Экспериментальное", "Частые вопросы", "О программе"]
+            assert titles == ["Пресеты", "Тема", "Цвета", "Размер и форма", "Шрифт", "Фон", "Фон левой рейки", "Фон правой рейки", "Цвет вкладок", "Язык", "Экспериментальное", "Частые вопросы", "О программе"]
             assert self.page.evaluate("document.getElementById('tab-color-input').type") == "color"
             assert self.page.evaluate(
                 "document.getElementById('tab-color-reset').textContent.trim()") == "Сбросить"
@@ -13163,7 +13169,6 @@ class TestSettingsTabColor:
             assert self._card_bg() == "rgb(51, 102, 153)"
             self._open()
             assert self._reset_visible()
-            self._open_pane("backgrounds")
             self.page.locator("#tab-color-reset").click()
             assert self._stored() is None
             assert self._card_bg() == default
@@ -13198,7 +13203,6 @@ class TestSettingsTabColor:
     def test_tab_color_flow_no_page_errors(self):
         self._load(tabs=self._tabs())
         self._open()
-        self._open_pane("backgrounds")
         self._set_color("#336699")
         self.page.locator("#tab-color-reset").click()
         self.page.evaluate("chrome.storage.local.set({'blattam-tab-color': '#123456'})")
@@ -18210,7 +18214,7 @@ class TestI18n:
         assert d["ru_active"] is False, d
         assert d["en_active"] is True, d
         assert d["doc_lang"] == "en", d
-        assert d["navs"] == ["Appearance", "Backgrounds", "General", "Experimental", "FAQ", "About"], d
+        assert d["navs"] == ["Appearance", "General", "Experimental", "FAQ", "About"], d
         assert d["h4"] == "Language", d
 
     def test_toggle_back_to_ru(self):
@@ -19643,7 +19647,7 @@ class TestCustomTheme:
     TOKENS = ["--bg", "--rail-bg", "--surface", "--text", "--text-muted",
               "--card-name", "--ink", "--ghost-bg", "--ghost-ring",
               "--card-radius", "--card-gap", "--card-min", "--card-name-size", "--font-ui"]
-    TITLES = ["Тема", "Цвета", "Размер и форма", "Шрифт", "Фон", "Фон левой рейки", "Фон правой рейки",
+    TITLES = ["Пресеты", "Тема", "Цвета", "Размер и форма", "Шрифт", "Фон", "Фон левой рейки", "Фон правой рейки",
               "Цвет вкладок", "Язык", "Экспериментальное",
               "Частые вопросы", "О программе"]
 
@@ -20508,6 +20512,140 @@ class TestGithubModal:
         assert d["status"] == "Not connected", d
         assert self.page.evaluate("document.getElementById('github-connect-btn').textContent") == "Connect GitHub", d
         assert self.page.evaluate("document.querySelector('#github-modal h3').textContent") == "GitHub", d
+
+class TestGithubModalSync:
+    """GitHub-модалка (newtab): согласованность состояния + ошибки синка.
+    При токене статус «проверяем» виден МГНОВЕННО (до ответа verify-github) —
+    не «Не подключён» при видимой кнопке «Отключить». Ошибка синка видна в UI
+    (с причиной) и НЕ затирается renderGitHubModal через 3 c."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self._errors = []
+        page.on("pageerror", self._on_err)
+        yield
+        assert not self._errors, self._errors
+        page.remove_listener("pageerror", self._on_err)
+
+    def _on_err(self, err):
+        self._errors.append(str(err))
+
+    def _load(self):
+        load_view(self.page)
+        self.page.wait_for_timeout(120)
+
+    def _modal_state(self):
+        return json.loads(self.page.evaluate("""JSON.stringify({
+          connect: getComputedStyle(document.getElementById('github-connect-btn')).display,
+          sync: getComputedStyle(document.getElementById('github-sync-btn')).display,
+          clear: getComputedStyle(document.getElementById('github-clear-btn')).display,
+          disconnect: getComputedStyle(document.getElementById('github-disconnect-btn')).display,
+          status: document.getElementById('github-modal-status').textContent
+        })"""))
+
+    def _mock_connected(self, status="synced"):
+        """Токен + verify-github успех + check-sync-status → «подключено»"""
+        self.page.evaluate("""(st) => {
+          const orig = chrome.runtime.sendMessage.bind(chrome.runtime);
+          chrome.runtime.sendMessage = function (msg, cb) {
+            if (msg && msg.action === 'verify-github') {
+              const r = { success: true, user: { login: 'roach' } };
+              if (cb) cb(r);
+              return Promise.resolve(r);
+            }
+            if (msg && msg.action === 'check-sync-status') {
+              if (cb) cb(st);
+              return Promise.resolve(st);
+            }
+            return orig(msg, cb);
+          };
+          chrome.storage.local.set({ 'github-token': 't' });
+        }""", status)
+
+    def _open_modal(self):
+        self.page.click("#account-slot")
+        self.page.wait_for_timeout(150)
+
+    def _status(self):
+        return self.page.evaluate("document.getElementById('github-modal-status').textContent")
+
+    def test_not_connected_static_consistent(self):
+        """Без токена: статическая разметка согласована — видна только
+        «Подключить» (sync/clear/disconnect скрыты inline в HTML),
+        статус «Не подключён»."""
+        self._load()
+        self._open_modal()
+        d = self._modal_state()
+        assert d["connect"] != "none", d
+        assert d["sync"] == "none", d
+        assert d["clear"] == "none", d
+        assert d["disconnect"] == "none", d
+        assert d["status"] == "Не подключён", d
+
+    def test_token_status_immediate(self):
+        """Ядро фикса #1: при токене и pending verify-github статус
+        уже «проверяем» (не «Не подключён»), а «Отключить» видна."""
+        self._load()
+        self.page.evaluate("""() => {
+          const orig = chrome.runtime.sendMessage.bind(chrome.runtime);
+          chrome.runtime.sendMessage = function (msg, cb) {
+            if (msg && msg.action === 'verify-github') {
+              return Promise.resolve(undefined); // pending: cb не вызывается
+            }
+            return orig(msg, cb);
+          };
+          chrome.storage.local.set({ 'github-token': 't' });
+        }""")
+        self._open_modal()
+        d = self._modal_state()
+        assert d["status"] == "Подключено · проверяем аккаунт…", d
+        assert d["disconnect"] != "none", d
+
+    def test_sync_error_surfaced(self):
+        """sync-now вернул ошибку — UI показывает «Ошибка синхронизации: api 404»
+        и она НЕ затирается через 3 c."""
+        self._load()
+        self._mock_connected("synced")
+        self._open_modal()
+        self.page.wait_for_timeout(100)
+        self.page.evaluate("""() => {
+          const orig = chrome.runtime.sendMessage.bind(chrome.runtime);
+          chrome.runtime.sendMessage = function (msg, cb) {
+            if (msg && msg.action === 'sync-now') {
+              const r = { pulled: false, pushed: false, error: 'api 404' };
+              if (cb) cb(r);
+              return Promise.resolve(r);
+            }
+            return orig(msg, cb);
+          };
+        }""")
+        self.page.click("#github-sync-btn")
+        self.page.wait_for_timeout(200)
+        assert self._status() == "Ошибка синхронизации: api 404", self._status()
+        self.page.wait_for_timeout(3500)
+        assert self._status() == "Ошибка синхронизации: api 404", self._status()
+
+    def test_sync_error_fallback(self):
+        """sync-now без ответа (undefined) — общий «Ошибка синхронизации»."""
+        self._load()
+        self._mock_connected("synced")
+        self._open_modal()
+        self.page.wait_for_timeout(100)
+        self.page.evaluate("""() => {
+          const orig = chrome.runtime.sendMessage.bind(chrome.runtime);
+          chrome.runtime.sendMessage = function (msg, cb) {
+            if (msg && msg.action === 'sync-now') {
+              if (cb) cb(undefined);
+              return Promise.resolve(undefined);
+            }
+            return orig(msg, cb);
+          };
+        }""")
+        self.page.click("#github-sync-btn")
+        self.page.wait_for_timeout(200)
+        assert self._status() == "Ошибка синхронизации", self._status()
+
 # ==========================================
 #  BACKGROUND.JS: DEVICE FLOW — ПОЛЛИНГ + ALARM
 # ==========================================
@@ -20688,6 +20826,106 @@ class TestDeviceFlowBackground:
         assert r1["user_code"] == r2["user_code"] == "ABCD-1234", (r1, r2)
         codes = self.page.evaluate("window.__fetchCalls.filter(u => u.indexOf('/login/device/code') !== -1).length")
         assert codes == 1, codes
+
+class TestGithubSyncBackground:
+    """background.js: sync-now отвечает {pulled, pushed, error} с реальной
+    причиной (network / api 404 …); pull 404 — НЕ ошибка (gist пересоздаст
+    push); мёртвый gist (PUT 404) — самовосстановление через POST, новый
+    id сохраняется в storage."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        page.goto("about:blank")
+        page.evaluate(MOCK_CHROME)
+
+    def _load_bg(self, init_js=""):
+        self.page.evaluate(init_js)
+        self.page.evaluate(load_file("background.js") + "; 'loaded'")
+        self.page.evaluate("""() => {
+          const orig = chrome.runtime.getManifest.bind(chrome.runtime);
+          chrome.runtime.getManifest = function () {
+            return Object.assign({}, orig(), { oauth2: { client_id: 'mock-client' } });
+          };
+        }""")
+
+    def _seed(self, gist_id="dead"):
+        self.page.evaluate("""(g) => {
+          chrome.storage.local._data['github-token'] = 't';
+          if (g) chrome.storage.local._data['blattam-gist-id'] = g;
+        }""", gist_id)
+
+    def _mock_gist_fetch(self, get_res, put_res, post_res):
+        self.page.evaluate("""(m) => {
+          window.__fetchCalls = [];
+          window.__gist = m;
+          window.__fetchTimeoutMs = 50;
+          window.fetch = async function (url, opts) {
+            const u = String(url);
+            const method = (opts && opts.method) || 'GET';
+            window.__fetchCalls.push({ url: u, method: method });
+            let r;
+            if (method === 'PUT') r = m.put;
+            else if (method === 'POST') r = m.post;
+            else r = m.get;
+            return { ok: r.ok, status: r.status, json: async () => (r.body || {}) };
+          };
+        }""", {"get": get_res, "put": put_res, "post": post_res})
+
+    def test_push_404_recreates_gist(self):
+        """Мёртвый gist: PUT → 404 → id сброшен → POST создаёт новый gist;
+        новый id в storage, порядок fetch: сначала PUT, потом POST."""
+        self._mock_gist_fetch(
+            {"ok": False, "status": 404, "body": {"message": "Not Found"}},
+            {"ok": False, "status": 404, "body": {"message": "Not Found"}},
+            {"ok": True, "status": 200, "body": {"id": "new123", "files": {}}})
+        self._load_bg()
+        self._seed("dead")
+        res = call_msg(self.page, "sync-now")
+        assert res is not None, res
+        assert res["pushed"] is True, res
+        assert res["error"] is None, res
+        assert read_local(self.page, "blattam-gist-id") == "new123"
+        calls = json.loads(self.page.evaluate("JSON.stringify(window.__fetchCalls)"))
+        put_idx = [i for i, c in enumerate(calls) if c["method"] == "PUT"
+                   and "/gists/dead" in c["url"]]
+        post_idx = [i for i, c in enumerate(calls) if c["method"] == "POST"
+                    and c["url"] == "https://api.github.com/gists"]
+        assert put_idx and post_idx, calls
+        assert put_idx[0] < post_idx[0], calls
+
+    def test_pull_404_not_error(self):
+        """GET gist → 404 (gist пропал) — это НЕ ошибка синка; push
+        проходит, error == null."""
+        self._mock_gist_fetch(
+            {"ok": False, "status": 404, "body": {"message": "Not Found"}},
+            {"ok": True, "status": 200, "body": {"id": "dead", "files": {}}},
+            {"ok": True, "status": 200, "body": {"id": "new1", "files": {}}})
+        self._load_bg()
+        self._seed("dead")
+        res = call_msg(self.page, "sync-now")
+        assert res is not None, res
+        assert res["error"] is None, res
+        assert res["pushed"] is True, res
+        assert res["pulled"] is False, res
+
+    def test_sync_network_error(self):
+        """fetch падает TypeError (Failed to fetch) — sync-now:
+        pushed == false, error == 'network'."""
+        self.page.evaluate("""() => {
+          window.__fetchCalls = [];
+          window.__fetchTimeoutMs = 50;
+          window.fetch = async function (url, opts) {
+            window.__fetchCalls.push(String(url));
+            throw new TypeError('Failed to fetch');
+          };
+        }""")
+        self._load_bg()
+        self._seed("dead")
+        res = call_msg(self.page, "sync-now")
+        assert res is not None, res
+        assert res["pushed"] is False, res
+        assert res["error"] == "network", res
 
 class TestPopupGitHubPanelRemoved:
     """GitHub-панель (Connect/Sync/Clear) перенесена из popup в модалку
@@ -21005,6 +21243,207 @@ class TestTrash:
         assert d["keys_equal"] is True, d
 
 
+class TestTrashModalSettingsSize:
+    """Модалка корзины (#trash-modal) — зеркало размера модалки настроек (980×720):
+    при 1280×900 rect равен rect #settings-modal ±1px (обе темы); при вьюпорте
+    600px обе — min(…, 100vw-24) = 576px. В строках — фавиконки (img или
+    буквенный fallback без favIconUrl); пустое состояние со значком корзины;
+    тонкий скроллбар #trash-list — в общих правилах с .center / settings-main."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self._errors = []
+        page.on("pageerror", self._on_err)
+        page.set_viewport_size({"width": 1280, "height": 900})
+        yield
+        assert not self._errors, self._errors
+        page.remove_listener("pageerror", self._on_err)
+        page.set_viewport_size({"width": 1280, "height": 720})
+
+    def _on_err(self, err):
+        self._errors.append(str(err))
+
+    TABS = [
+        {"id": "t1", "name": "GitHub", "url": "https://github.com"},
+        {"id": "t2", "name": "Docs", "url": "https://docs.example.com"},
+    ]
+
+    def _inject_real_styles(self):
+        theme = load_file("theme.css")
+        html = load_file("view.html")
+        style = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate(
+            "(styles) => { var st = document.createElement('style'); st.textContent = styles; document.head.appendChild(st); }",
+            [theme + "\n" + style])
+
+    def _measure(self, sel):
+        return json.loads(self.page.evaluate("""(sel) => {
+          const rect = document.querySelector(sel).getBoundingClientRect();
+          return JSON.stringify({w: rect.width, h: rect.height});
+        }""", [sel]))
+
+    def _open_settings_measure_close(self):
+        self.page.evaluate("document.getElementById('settings-btn').click()")
+        self.page.wait_for_timeout(80)
+        r = self._measure("#settings-modal .modal")
+        self.page.evaluate("document.getElementById('settings-close').click()")
+        self.page.wait_for_timeout(60)
+        return r
+
+    def _open_trash_measure_close(self):
+        self.page.evaluate("document.getElementById('trash-btn').click()")
+        self.page.wait_for_timeout(80)
+        r = self._measure("#trash-modal .modal")
+        self.page.evaluate("document.getElementById('trash-close').click()")
+        self.page.wait_for_timeout(60)
+        return r
+
+    def test_trash_modal_equals_settings_size(self):
+        # При 1280×900 rect корзины = rect настроек ±1px (обе темы)
+        for theme in ("light", "dark"):
+            self.page.set_viewport_size({"width": 1280, "height": 900})
+            load_view(self.page, tabs=self.TABS, theme=theme)
+            self._inject_real_styles()
+            self.page.wait_for_timeout(120)
+            setr = self._open_settings_measure_close()
+            thr = self._open_trash_measure_close()
+            assert abs(setr["w"] - thr["w"]) <= 1, (theme, setr, thr)
+            assert abs(setr["h"] - thr["h"]) <= 1, (theme, setr, thr)
+            assert abs(setr["w"] - 980) <= 1 and abs(setr["h"] - 720) <= 1, (theme, setr)
+
+    def test_both_modals_576px_at_600px_viewport(self):
+        # Узкий вьюпорт (600px): обе модалки min(…, 100vw-24) = 576px и равны
+        for theme in ("light", "dark"):
+            self.page.set_viewport_size({"width": 600, "height": 900})
+            load_view(self.page, tabs=self.TABS, theme=theme)
+            self._inject_real_styles()
+            self.page.wait_for_timeout(120)
+            setr = self._open_settings_measure_close()
+            thr = self._open_trash_measure_close()
+            assert abs(setr["w"] - thr["w"]) <= 1, (theme, setr, thr)
+            assert abs(thr["w"] - 576) <= 1, (theme, thr)
+
+    def test_favicon_in_row_and_letter_fallback(self):
+        # В строке — фавиконка: img (src = favIconUrl); без favIconUrl —
+        # буквенный fallback (первая буква имени); порядок детей: fav, main, date, кнопки
+        trash = [
+            {"name": "T1", "url": "https://t1.com", "deletedAt": 1795000000000,
+             "favIconUrl": "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'><rect width='16' height='16' fill='%23777'/></svg>"},
+            {"name": "T2", "url": "https://t2.com", "deletedAt": 1795000001000},
+        ]
+        load_view(self.page, tabs=[], trash=trash)
+        self.page.wait_for_timeout(150)
+        self.page.evaluate("document.getElementById('trash-btn').click()")
+        self.page.wait_for_timeout(150)
+        d = json.loads(self.page.evaluate("""(() => {
+          const rows = document.querySelectorAll('#trash-list .trash-row');
+          const img = rows[0].querySelector('.trash-row-fav img');
+          const fb = rows[1].querySelector('.trash-row-fav-fallback');
+          return JSON.stringify({
+            rows: rows.length,
+            img: !!img,
+            src: img ? img.getAttribute('src') : null,
+            fb: !!fb,
+            fbText: fb ? fb.textContent : null,
+            order: rows.length ? [...rows[0].children].map(el => el.className).join('|') : null
+          });
+        })()"""))
+        assert d["rows"] == 2, d
+        assert d["img"] is True and d["src"].startswith("data:image/svg+xml"), d
+        assert d["fb"] is True and d["fbText"] == "T", d
+        assert d["order"] == "trash-row-fav|trash-row-main|trash-row-date|modal-btn primary|modal-btn ghost", d
+
+    def test_empty_state_with_icon(self):
+        # Пустое состояние: #trash-empty видим, внутри svg.trash-empty-ico
+        # + span «Корзина пуста» (обе темы); список скрыт
+        for theme in ("light", "dark"):
+            load_view(self.page, tabs=self.TABS, theme=theme)
+            self._inject_real_styles()
+            self.page.wait_for_timeout(120)
+            self.page.evaluate("document.getElementById('trash-btn').click()")
+            self.page.wait_for_timeout(120)
+            d = json.loads(self.page.evaluate("""(() => {
+              const empty = document.getElementById('trash-empty');
+              const ico = empty.querySelector('svg.trash-empty-ico');
+              const span = empty.querySelector('span[data-i18n="trash_empty"]');
+              return JSON.stringify({
+                visible: empty.style.display !== 'none'
+                  && getComputedStyle(empty).display !== 'none',
+                ico: !!ico,
+                spanText: span ? span.textContent : null,
+                listHidden: document.getElementById('trash-list').style.display === 'none'
+              });
+            })()"""))
+            assert d["visible"] is True, (theme, d)
+            assert d["ico"] is True, (theme, d)
+            assert d["spanText"] == "Корзина пуста", (theme, d)
+            assert d["listHidden"] is True, (theme, d)
+            self.page.evaluate("document.getElementById('trash-close').click()")
+            self.page.wait_for_timeout(80)
+
+    def test_row_content_intact_and_restore(self):
+        # После ресайза: в строке имя/url/дата/обе кнопки на месте;
+        # «Вернуть» возвращает вкладку в blattam-tabs (регрессия restore)
+        trash = [
+            {"name": "T1", "url": "https://t1.com", "deletedAt": 1795000000000,
+             "favIconUrl": "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'></svg>"}
+        ]
+        load_view(self.page, tabs=[], trash=trash)
+        self.page.wait_for_timeout(150)
+        self._inject_real_styles()
+        self.page.wait_for_timeout(120)
+        self.page.evaluate("document.getElementById('trash-btn').click()")
+        self.page.wait_for_timeout(150)
+        d = json.loads(self.page.evaluate("""(() => {
+          const row = document.querySelector('#trash-list .trash-row');
+          const btns = row.querySelectorAll('button');
+          return JSON.stringify({
+            name: row.querySelector('.trash-row-name').textContent,
+            url: row.querySelector('.trash-row-url').textContent,
+            date: row.querySelector('.trash-row-date').textContent,
+            restore: btns[0] ? btns[0].textContent : null,
+            perm: btns[1] ? btns[1].textContent : null,
+            rowW: row.getBoundingClientRect().width
+          });
+        })()"""))
+        assert d["name"] == "T1" and d["url"] == "https://t1.com", d
+        assert d["date"].startswith("Удалено: "), d
+        assert d["restore"] == "Вернуть" and d["perm"] == "Удалить навсегда", d
+        assert d["rowW"] > 800, d  # строка растянулась на ширину модалки 980
+        self.page.evaluate("document.querySelector('#trash-list .trash-row button').click()")
+        self.page.wait_for_timeout(150)
+        assert read_storage_raw(self.page, "blattam-trash") == []
+        tabs = read_storage_raw(self.page, "blattam-tabs")
+        assert len(tabs) == 1 and tabs[0]["url"] == "https://t1.com", tabs
+        assert "deletedAt" not in tabs[0], tabs
+
+    def test_thin_scrollbar_covers_trash_list(self):
+        # Тонкий скроллбар: computed scrollbar-width: thin у #trash-list +
+        # селектор в пяти общих правилах (как #settings-modal .settings-main)
+        load_view(self.page, tabs=self.TABS,
+                  trash=[{"name": "T1", "url": "https://t1.com", "deletedAt": 1}])
+        self._inject_real_styles()
+        self.page.wait_for_timeout(120)
+        self.page.evaluate("document.getElementById('trash-btn').click()")
+        self.page.wait_for_timeout(120)
+        d = json.loads(self.page.evaluate("""JSON.stringify({
+          sw: getComputedStyle(document.getElementById('trash-list')).scrollbarWidth
+        })"""))
+        assert d["sw"] == "thin", d
+        t = load_file("view.html").split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        for sel in (
+            "#trash-modal .trash-list::-webkit-scrollbar {",
+            "#trash-modal .trash-list::-webkit-scrollbar-track {",
+            "#trash-modal .trash-list::-webkit-scrollbar-thumb {",
+            "#trash-modal .trash-list::-webkit-scrollbar-thumb:hover {",
+            "#trash-modal .trash-list { scrollbar-width: thin",
+        ):
+            assert t.find(sel) >= 0, sel
+        self.page.evaluate("document.getElementById('trash-close').click()")
+        self.page.wait_for_timeout(60)
+
+
 class TestRailBackgrounds:
     """«Фоны боковых реек» в настройках (blattam-bg-image-left/right, data URL, local)."""
 
@@ -21042,7 +21481,7 @@ class TestRailBackgrounds:
             load_view(self.page, theme=theme)
             self._open()
             # новые разделы сразу после «Фона», до «Цвет вкладок»
-            assert self._titles() == ["Тема", "Цвета", "Размер и форма", "Шрифт", "Фон", "Фон левой рейки",
+            assert self._titles() == ["Пресеты", "Тема", "Цвета", "Размер и форма", "Шрифт", "Фон", "Фон левой рейки",
                                       "Фон правой рейки", "Цвет вкладок", "Язык", "Экспериментальное",
                                       "Частые вопросы", "О программе"]
             for which in ("left", "right"):
@@ -21088,7 +21527,6 @@ class TestRailBackgrounds:
     def test_left_clear(self):
         load_view(self.page)
         self._open()
-        self._open_pane("backgrounds")
         self._set_file("left")
         assert self.page.evaluate("chrome.storage.local._data['blattam-bg-image-left']") is not None
         self.page.locator("#bg-left-clear-btn").click()
@@ -21150,15 +21588,14 @@ class TestRailBackgrounds:
         load_view(self.page, lang="en")
         self._open()
         titles = self._titles()
-        assert titles[5] == "Left rail background"
-        assert titles[6] == "Right rail background"
+        assert titles[6] == "Left rail background"
+        assert titles[7] == "Right rail background"
         assert "Background" in titles and "Tab color" in titles
 
     def test_no_pageerrors(self):
         for theme in (None, "dark"):
             load_view(self.page, theme=theme)
             self._open()
-            self._open_pane("backgrounds")
             self._set_file("left")
             self._set_file("right")
             self.page.locator("#bg-left-clear-btn").click()
@@ -21166,18 +21603,18 @@ class TestRailBackgrounds:
         assert self.page_errors == [], self.page_errors
 
 # ==========================================
-#  VIEW.JS: НАСТРОЙКИ (волна 2) — навигация: 6 разделов
+#  VIEW.JS: НАСТРОЙКИ (волна 2) — навигация: 5 разделов
 # ==========================================
 
 class TestSettingsNavRestructure:
-    """Волна 2: панель «Кастомизация» перераспределена на 6 разделов
-    (Внешний вид / Фоны / Общие / Экспериментальное / FAQ / О программе);
+    """Волна 2: панель «Кастомизация» перераспределена на 5 разделов
+    (Внешний вид / Общие / Экспериментальное / FAQ / О программе);
     дефолтный раздел — «Внешний вид»."""
 
-    SECTIONS = ["appearance", "backgrounds", "general", "experimental", "faq", "about"]
-    RU_LABELS = ["Внешний вид", "Фоны", "Общие", "Экспериментальное", "FAQ", "О программе"]
-    EN_LABELS = ["Appearance", "Backgrounds", "General", "Experimental", "FAQ", "About"]
-    TITLES = ["Тема", "Цвета", "Размер и форма", "Шрифт", "Фон", "Фон левой рейки", "Фон правой рейки",
+    SECTIONS = ["appearance", "general", "experimental", "faq", "about"]
+    RU_LABELS = ["Внешний вид", "Общие", "Экспериментальное", "FAQ", "О программе"]
+    EN_LABELS = ["Appearance", "General", "Experimental", "FAQ", "About"]
+    TITLES = ["Пресеты", "Тема", "Цвета", "Размер и форма", "Шрифт", "Фон", "Фон левой рейки", "Фон правой рейки",
               "Цвет вкладок", "Язык", "Экспериментальное", "Частые вопросы", "О программе"]
 
     @pytest.fixture(autouse=True)
@@ -21199,7 +21636,7 @@ class TestSettingsNavRestructure:
         return self.page.evaluate(
             "document.getElementById('settings-pane-" + section + "').style.display")
 
-    def test_nav_six_items_ru_labels(self):
+    def test_nav_five_items_ru_labels(self):
         load_view(self.page)
         self._open()
         d = json.loads(self.page.evaluate("""(() => {
@@ -21210,7 +21647,7 @@ class TestSettingsNavRestructure:
             labels: items.map(b => b.textContent.trim())
           });
         })()"""))
-        assert d["count"] == 6, d
+        assert d["count"] == 5, d
         assert d["sections"] == self.SECTIONS, d
         assert d["labels"] == self.RU_LABELS, d
 
@@ -21264,16 +21701,16 @@ class TestSettingsNavRestructure:
         assert d["colors"] == "settings-pane-appearance", d
         assert d["geo"] == "settings-pane-appearance", d
         assert d["font"] == "settings-pane-appearance", d
-        assert d["bg"] == "settings-pane-backgrounds", d
-        assert d["bgLeft"] == "settings-pane-backgrounds", d
-        assert d["bgRight"] == "settings-pane-backgrounds", d
-        assert d["tabColor"] == "settings-pane-backgrounds", d
+        assert d["bg"] == "settings-pane-appearance", d
+        assert d["bgLeft"] == "settings-pane-appearance", d
+        assert d["bgRight"] == "settings-pane-appearance", d
+        assert d["tabColor"] == "settings-pane-appearance", d
         assert d["lang"] == "settings-pane-general", d
         assert d["qs"] == "settings-pane-experimental", d
         assert d["oldPane"] is False, d
-        assert d["mainOrder"] == ["settings-pane-appearance", "settings-pane-backgrounds",
-                                  "settings-pane-general", "settings-pane-experimental",
-                                  "settings-pane-faq", "settings-pane-about"], d
+        assert d["mainOrder"] == ["settings-pane-appearance", "settings-pane-general",
+                                  "settings-pane-experimental", "settings-pane-faq",
+                                  "settings-pane-about"], d
 
     def test_section_titles_exact_order_both_themes(self):
         for theme in (None, "dark"):
@@ -21521,3 +21958,300 @@ class TestRailWidths:
             "document.querySelector('[data-i18n=\"cust_railleft_w\"]').textContent") == "Left rail width"
         assert self.page.evaluate(
             "document.querySelector('[data-i18n=\"cust_railright_w\"]').textContent") == "Right rail width"
+
+# ==========================================
+#  VIEW.HTML: СКРОЛЛБАР КОНТЕНТА ОКНА НАСТРОЕК (как у .center, токены --scroll-thumb)
+# ==========================================
+
+class TestSettingsScrollbar:
+    """Скроллбар #settings-modal .settings-main — тот же тонкий скруглённый,
+    что у центральной колонки и правой рейки (токены --scroll-thumb)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self.page_errors = []
+        self._on_pageerror = lambda exc: self.page_errors.append(str(exc))
+        self.page.on("pageerror", self._on_pageerror)
+        self.page.set_viewport_size({"width": 1280, "height": 900})
+        yield
+        self.page.remove_listener("pageerror", self._on_pageerror)
+
+    def _inject_real_styles(self):
+        # харнес ставит только body.innerHTML — подгружаем настоящие стили
+        # (theme.css + <style> view.html), чтобы computed-значения были реальными
+        theme = open(f"{EXT_PATH}/theme.css", encoding="utf-8").read()
+        html = open(f"{EXT_PATH}/view.html", encoding="utf-8").read()
+        style = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate(
+            "(() => { const st = document.createElement('style'); st.textContent = "
+            + json.dumps(theme + style)
+            + "; (document.head || document.documentElement).appendChild(st); })()")
+
+    def _load(self, **kw):
+        load_view(self.page, **kw)
+        self._inject_real_styles()
+
+    def _open(self):
+        self.page.locator("#settings-btn").click()
+
+    def _style_text(self):
+        return load_file("view.html").split("<style>", 1)[1].rsplit("</style>", 1)[0]
+
+    def _thumb(self, selector):
+        return json.loads(self.page.evaluate("""(sel) => {
+          const cs = getComputedStyle(document.querySelector(sel), '::-webkit-scrollbar-thumb');
+          return JSON.stringify({bg: cs.backgroundColor, bw: cs.borderTopWidth,
+            bs: cs.borderTopStyle, bc: cs.borderTopColor, radius: cs.borderTopLeftRadius});
+        }""", [selector]))
+
+    def _rule(self, text, sel):
+        i = text.find(sel)
+        assert i >= 0, sel
+        return text[i:text.find("}", i) + 1]
+
+    def _thumb_eq(self, theme=None):
+        self._load(tabs=[{"name": "Вкладка 1", "url": "https://example.com/1"}],
+                   **({"theme": theme} if theme else {}))
+        self._open()
+        sm, ct = self._thumb("#settings-modal .settings-main"), self._thumb(".center")
+        if sm["bg"] and sm["bg"] != "rgba(0, 0, 0, 0)":
+            assert sm == ct, (sm, ct)
+        else:
+            # Chromium не возвращает computed для псевдоэлементов скроллбара —
+            # проверяем ТЕКСТ правил: общие блоки с теми же токеном и радиусом
+            t = self._style_text()
+            for sel in (".center::-webkit-scrollbar-thumb",
+                        "#settings-modal .settings-main::-webkit-scrollbar-thumb"):
+                # оба селектора лежат в ОДНОМ общем правиле — ищем блок по селектору
+                m = re.search(r"([^{}]*" + re.escape(sel) + r"[^{}]*)\{([^{}]*)\}", t)
+                assert m, sel
+                body = m.group(2)
+                assert "var(--scroll-thumb)" in body and "border-radius: 999px" in body, (sel, body)
+        assert self.page_errors == []
+
+    def test_settings_scrollbar_same_as_center_light(self):
+        self._thumb_eq()
+
+    def test_settings_scrollbar_same_as_center_dark(self):
+        self._thumb_eq("dark")
+
+    def _width_modern(self, theme=None):
+        self._load(tabs=[{"name": "Вкладка 1", "url": "https://example.com/1"}],
+                   **({"theme": theme} if theme else {}))
+        self._open()
+        w = json.loads(self.page.evaluate("""(sel) => {
+          const cs = getComputedStyle(document.querySelector(sel), '::-webkit-scrollbar');
+          const st = getComputedStyle(document.querySelector(sel));
+          return JSON.stringify({width: cs.width, sw: st.scrollbarWidth, sc: st.scrollbarColor});
+        }""", ["#settings-modal .settings-main"]))
+        if w["width"] == "10px":
+            assert w["sw"] == "thin", w
+            assert w["sc"], w
+        else:
+            t = self._style_text()
+            r = self._rule(t, "#settings-modal .settings-main::-webkit-scrollbar {")
+            assert "width: 10px" in r, r
+            r = self._rule(t, "#browser-tabs-list, #settings-modal .settings-main {")
+            assert "scrollbar-width: thin" in r and "scrollbar-color: var(--scroll-thumb) transparent" in r, r
+        assert self.page_errors == []
+
+    def test_settings_scrollbar_width_and_modern_props_light(self):
+        self._width_modern()
+
+    def test_settings_scrollbar_width_and_modern_props_dark(self):
+        self._width_modern("dark")
+
+    def test_settings_scrollbar_only_tokens(self):
+        t = self._style_text()
+        hex6 = re.compile(r"#[0-9a-fA-F]{6}\b")
+        found = 0
+        for m in re.finditer(r"([^{}]+)\{([^{}]*)\}", t):
+            sel, body = m.group(1).strip(), m.group(2)
+            if "settings-main" in sel and ("::-webkit-scrollbar" in sel or "scrollbar-width" in body):
+                assert not hex6.search(body), (sel, body)
+                found += 1
+                if sel.rstrip().endswith("::-webkit-scrollbar-thumb") or "scrollbar-width" in body:
+                    assert "var(--scroll-thumb)" in body, (sel, body)
+        assert found >= 5, found
+
+
+# ==========================================
+#  VIEW.JS: ПРЕСЕТЫ (профили внешнего вида)
+# ==========================================
+
+class TestPresetProfiles:
+    """«Пресеты»: снапшот шести ключей внешнего вида (blattam-presets +
+    blattam-active-preset, local); активный сбрасывается при ручном изменении
+    (сверка значений в syncActivePreset)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self._errors = []
+        page.on("pageerror", self._on_err)
+        self._orig_viewport = page.viewport_size
+        page.set_viewport_size({"width": 1280, "height": 900})
+        yield
+        assert not self._errors, self._errors
+        page.remove_listener("pageerror", self._on_err)
+        page.set_viewport_size(self._orig_viewport)
+
+    def _on_err(self, err):
+        self._errors.append(str(err))
+
+    def _inject_real_styles(self):
+        # реальный CSS (theme.css + <style> view.html) — для computed-style проверок
+        theme = open(f"{EXT_PATH}/theme.css", encoding="utf-8").read()
+        html = open(f"{EXT_PATH}/view.html", encoding="utf-8").read()
+        style = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate(
+            "(() => { const st = document.createElement('style'); st.textContent = "
+            + json.dumps(theme + style)
+            + "; (document.head || document.documentElement).appendChild(st); })()")
+
+    def _open(self):
+        self.page.locator("#settings-btn").click()
+
+    def _data(self):
+        return {"theme": "light", "customTheme": None, "bgImage": None,
+                "bgImageLeft": None, "bgImageRight": None, "tabColor": None}
+
+    def _list_names(self):
+        return json.loads(self.page.evaluate(
+            "JSON.stringify([...document.querySelectorAll('#preset-list .preset-name')]"
+            ".map(e => e.textContent))"))
+
+    def test_preset_section_first_and_empty(self):
+        load_view(self.page)
+        self._open()
+        assert self.page.evaluate("document.getElementById('preset-section') !== null")
+        titles = json.loads(self.page.evaluate(
+            "JSON.stringify([...document.querySelectorAll('#settings-modal .settings-section-title')]"
+            ".map(el => el.textContent.trim()))"))
+        assert titles[0] == "Пресеты"
+        assert self.page.evaluate("document.querySelectorAll('#preset-list .preset-empty').length") == 1
+        assert self.page.evaluate("document.querySelectorAll('#preset-list .preset-row').length") == 0
+
+    def test_save_new_preset(self):
+        load_view(self.page, theme="dark", tab_color="#8a6d5c", custom_theme={"--bg": "#abcdef"})
+        self._open()
+        self.page.locator("#preset-name-input").fill("Тёмный")
+        self.page.locator("#preset-save-btn").click()
+        presets = self.page.evaluate("chrome.storage.local._data['blattam-presets']")
+        assert len(presets) == 1
+        assert presets[0]["name"] == "Тёмный"
+        assert presets[0]["id"].startswith("p")
+        assert presets[0]["data"] == {"theme": "dark", "customTheme": {"--bg": "#abcdef"},
+                                      "bgImage": None, "bgImageLeft": None, "bgImageRight": None,
+                                      "tabColor": "#8a6d5c"}
+        assert self.page.evaluate("chrome.storage.local._data['blattam-active-preset']") == presets[0]["id"]
+        assert self._list_names() == ["Тёмный"]
+        assert self.page.evaluate("document.querySelectorAll('#preset-list .preset-badge').length") == 1
+        assert self.page.evaluate(
+            "document.querySelector('#preset-list .preset-badge').textContent") == "активен"
+        assert self.page.locator("#preset-name-input").input_value() == ""
+
+    def test_save_auto_name(self):
+        load_view(self.page)
+        self._open()
+        self.page.locator("#preset-save-btn").click()  # имя не введено
+        presets = self.page.evaluate("chrome.storage.local._data['blattam-presets']")
+        assert len(presets) == 1
+        assert presets[0]["name"] == "Пресет 1"
+
+    def test_apply_preset(self):
+        p = {"id": "pa", "name": "A", "createdAt": 1, "data": self._data()}
+        load_view(self.page, theme="dark", tab_color="#123456",
+                  custom_theme={"--bg": "#111111"}, presets=[p], active_preset="pa")
+        self._inject_real_styles()
+        self._open()
+        self.page.locator("#preset-list .preset-apply").first.click()
+        self.page.wait_for_timeout(50)
+        # data.theme 'light' пишется как значение; остальные null — ключи сняты
+        assert self.page.evaluate("chrome.storage.local._data['blattam-theme']") == "light"
+        assert self.page.evaluate("'blattam-custom-theme' in chrome.storage.local._data") is False
+        assert self.page.evaluate("'blattam-tab-color' in chrome.storage.local._data") is False
+        assert self.page.evaluate("chrome.storage.local._data['blattam-active-preset']") == "pa"
+        # body — светлый --bg (#ffffff)
+        assert self.page.evaluate("getComputedStyle(document.body).backgroundColor") == "rgb(255, 255, 255)"
+
+    def test_manual_change_clears_active(self):
+        p = {"id": "pm", "name": "M", "createdAt": 1, "data": self._data()}
+        load_view(self.page, presets=[p], active_preset="pm")
+        self._open()
+        assert self.page.evaluate("document.querySelectorAll('#preset-list .preset-badge').length") == 1
+        # ручное изменение одного из шести ключей — «активен» снимается
+        self.page.evaluate("chrome.storage.local.set({'blattam-tab-color': '#123456'})")
+        self.page.wait_for_timeout(50)
+        assert self.page.evaluate("'blattam-active-preset' in chrome.storage.local._data") is False
+        # модалка открыта — список перерисован: без бейджа и подсветки
+        assert self.page.evaluate("document.querySelectorAll('#preset-list .preset-badge').length") == 0
+        assert self.page.evaluate("document.querySelectorAll('#preset-list .preset-row.active').length") == 0
+
+    def test_delete_preset(self):
+        p1 = {"id": "p1", "name": "One", "createdAt": 1, "data": self._data()}
+        p2 = {"id": "p2", "name": "Two", "createdAt": 2, "data": self._data()}
+        load_view(self.page, presets=[p1, p2], active_preset="p1")
+        self._open()
+        self.page.evaluate("document.querySelectorAll('#preset-list .preset-del')[0].click()")
+        ids = json.loads(self.page.evaluate(
+            "JSON.stringify(chrome.storage.local._data['blattam-presets'].map(x => x.id))"))
+        assert ids == ["p2"]
+        # активный удалён — ключ снят
+        assert self.page.evaluate("'blattam-active-preset' in chrome.storage.local._data") is False
+
+    def test_presets_persist_across_reload(self):
+        p1 = {"id": "p1", "name": "First", "createdAt": 1, "data": self._data()}
+        load_view(self.page, presets=[p1], active_preset="p1")
+        self._open()
+        self.page.locator("#preset-name-input").fill("Свой")
+        self.page.locator("#preset-save-btn").click()
+        stored = self.page.evaluate("chrome.storage.local._data['blattam-presets']")
+        assert [x["name"] for x in stored] == ["First", "Свой"]
+        # «релоад» с тем же хранилищем — пресеты не теряются
+        load_view(self.page, presets=stored, active_preset=stored[1]["id"])
+        self._open()
+        assert self._list_names() == ["First", "Свой"]
+        assert self.page.evaluate("document.querySelectorAll('#preset-list .preset-row.active').length") == 1
+
+    def test_preset_with_backgrounds(self):
+        b = "data:image/png;base64,iVBORw0KGgo="
+        data = {"theme": "light", "customTheme": None, "bgImage": b,
+                "bgImageLeft": b, "bgImageRight": b, "tabColor": "#112233"}
+        load_view(self.page, bg=b, bg_left=b, bg_right=b, tab_color="#112233",
+                  presets=[{"id": "pb", "name": "BG", "createdAt": 1, "data": data}],
+                  active_preset="pb")
+        self._inject_real_styles()
+        # сброс вида — снять все четыре ключа
+        self.page.evaluate(
+            "chrome.storage.local.remove(['blattam-bg-image', 'blattam-bg-image-left', "
+            "'blattam-bg-image-right', 'blattam-tab-color'])")
+        self.page.wait_for_timeout(50)
+        self._open()
+        self.page.evaluate("document.querySelectorAll('#preset-list .preset-apply')[0].click()")
+        self.page.wait_for_timeout(50)
+        assert self.page.evaluate("chrome.storage.local._data['blattam-bg-image']") == b
+        assert self.page.evaluate("chrome.storage.local._data['blattam-bg-image-left']") == b
+        assert self.page.evaluate("chrome.storage.local._data['blattam-bg-image-right']") == b
+        assert self.page.evaluate("chrome.storage.local._data['blattam-tab-color']") == "#112233"
+        # фон снова на body и обеих рейках
+        for el in ("document.body", "document.getElementById('rail-left')",
+                   "document.getElementById('rail-right')"):
+            assert self.page.evaluate(
+                "getComputedStyle(" + el + ").backgroundImage").startswith('url("data:image/png')
+
+    def test_i18n_en(self):
+        p = {"id": "p1", "name": "First", "createdAt": 1, "data": self._data()}
+        load_view(self.page, lang="en", presets=[p], active_preset="p1")
+        self._open()
+        assert self.page.evaluate(
+            "document.querySelector('#preset-section .settings-section-title').textContent.trim()") == "Presets"
+        assert self.page.evaluate(
+            "document.getElementById('preset-name-input').placeholder") == "Preset name"
+        btns = json.loads(self.page.evaluate(
+            "JSON.stringify([...document.querySelectorAll('#preset-list .preset-row button')]"
+            ".map(b => b.textContent.trim()))"))
+        assert btns == ["Apply", "Delete"]
+        assert self.page.evaluate(
+            "document.querySelector('#preset-list .preset-badge').textContent") == "active"
