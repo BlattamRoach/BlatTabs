@@ -200,10 +200,12 @@ async function verifyGitHubToken() {
     if (response.ok) {
       return await response.json();
     }
+    // 401/403/429 — различимо с сетью в UI (проблема токена, не сети)
+    return { error: 'api ' + response.status };
   } catch (e) {
     console.error('GitHub verify error:', e);
+    return { error: 'network' };
   }
-  return null;
 }
 
 // Пространства (blattam-spaces, плоские) + сворачиваемые группы (blattam-groups)
@@ -870,9 +872,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     case 'verify-github': {
       const p = (async () => {
         const user = await verifyGitHubToken();
-        if (user) return { success: true, user };
-        // Токен есть, но API недоступен (сеть) — view покажет кэшированный логин
-        return (await getGitHubToken()) ? { success: false, token_present: true } : { success: false };
+        if (user && !user.error) return { success: true, user };
+        // Токен есть, но API недоступен / токен недействителен — error для UI
+        return { success: false, token_present: !!(await getGitHubToken()),
+                 error: (user && user.error) || 'no-response' };
       })().then((res) => { sendResponse(res); return res; });
       return p;
     }
