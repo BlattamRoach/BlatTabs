@@ -524,6 +524,16 @@
     #settings-modal .settings-nav-item { height: 30px; padding: 0 12px; border: 0; border-radius: 6px; background: transparent; text-align: left; font: 500 13px/1 var(--font-ui); color: var(--text-soft); cursor: pointer; transition: background .12s, color .12s; }
     #settings-modal .settings-nav-item:hover { background: var(--hover); }
     #settings-modal .settings-nav-item.active { background: var(--hover); color: var(--ink); }
+    #settings-modal .hk-hint { margin: 0 0 10px; font: 12px/1.5 var(--font-ui); color: var(--text-soft); }
+    #settings-modal .hk-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 5px 0; }
+    #settings-modal .hk-lbl { font: 13px/1 var(--font-ui); color: var(--text); }
+    #settings-modal .hk-box { display: flex; align-items: center; gap: 6px; min-width: 170px; height: 28px; padding: 0 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); cursor: pointer; }
+    #settings-modal .hk-box:hover { background: var(--hover); }
+    #settings-modal .hk-box.hk-armed { border-color: var(--ink); background: var(--hover); }
+    #settings-modal .hk-val { font: 12px/1 var(--font-ui); color: var(--ink); }
+    #settings-modal .hk-val.hk-empty { color: var(--text-soft); }
+    #settings-modal .hk-clear { border: 0; background: transparent; color: var(--text-soft); font: 14px/1 var(--font-ui); cursor: pointer; padding: 0 2px; }
+    #settings-modal .hk-clear:hover { color: var(--ink); }
     #settings-modal .settings-main { min-height: 0; overflow-y: auto; }
     #settings-modal .modal-close {
       position: absolute; top: 14px; right: 14px; width: 26px; height: 26px;
@@ -747,6 +757,7 @@
       <button class="modal-close" id="github-modal-close" data-i18n-title="settings_close_title" data-i18n-aria="settings_close_title" title="Закрыть" aria-label="Закрыть">✕</button>
       <h3 data-i18n="github_h3">GitHub</h3>
       <p class="gh-status" id="github-modal-status" data-i18n="github_not_connected">Не подключён</p>
+      <button class="gh-btn" id="github-retry-btn" style="display:none;" data-i18n="github_retry">Проверить ещё раз</button>
       <div class="account-device" id="account-device" hidden>
         <span class="account-device-code" id="account-device-code" data-i18n-title="account_device_code_title" title="Код для github.com/login/device"></span>
         <button class="account-device-copy" id="account-device-copy" type="button" data-i18n-title="account_copy" title="Копировать">⧉</button>
@@ -810,6 +821,7 @@
         <nav class="settings-nav" aria-label="Разделы настроек" data-i18n-aria="settings_nav_aria">
           <button class="settings-nav-item active" data-section="appearance" data-i18n="nav_appearance">Внешний вид</button>
           <button class="settings-nav-item" data-section="general" data-i18n="nav_general">Общие</button>
+          <button class="settings-nav-item" data-section="hotkeys" data-i18n="nav_hotkeys">Горячие клавиши</button>
           <button class="settings-nav-item" data-section="experimental" data-i18n="nav_experimental">Экспериментальное</button>
           <button class="settings-nav-item" data-section="faq" data-i18n="nav_faq">FAQ</button>
           <button class="settings-nav-item" data-section="about" data-i18n="nav_about">О программе</button>
@@ -983,6 +995,23 @@
           <button class="btn btn-ghost" id="lang-btn-ru" data-i18n="lang_ru">Русский</button>
           <button class="btn btn-ghost" id="lang-btn-en" data-i18n="lang_en">English</button>
         </div>
+      </section>
+          </div>
+          <div class="settings-pane" id="settings-pane-hotkeys" style="display:none;">
+      <section class="settings-section" id="hk-section">
+        <h4 class="settings-section-title" data-i18n="hk_title">Горячие клавиши</h4>
+        <p class="hk-hint" data-i18n="hk_hint">Нажмите на комбинацию и нажмите нужные клавиши. Esc — отменить ввод.</p>
+        <div class="hk-row"><span class="hk-lbl" data-i18n="hk_next">Далее (вниз)</span><div class="hk-box" data-action="next" role="button" tabindex="0" data-i18n-aria="hk_next"><span class="hk-val hk-empty"></span><button class="hk-clear" data-i18n-title="hk_clear" style="display:none;">×</button></div></div>
+        <div class="hk-row"><span class="hk-lbl" data-i18n="hk_prev">Назад (вверх)</span><div class="hk-box" data-action="prev" role="button" tabindex="0" data-i18n-aria="hk_prev"><span class="hk-val hk-empty"></span><button class="hk-clear" data-i18n-title="hk_clear" style="display:none;">×</button></div></div>
+        <div class="hk-row"><span class="hk-lbl" data-i18n="hk_open">Открыть вкладку</span><div class="hk-box" data-action="open" role="button" tabindex="0" data-i18n-aria="hk_open"><span class="hk-val hk-empty"></span><button class="hk-clear" data-i18n-title="hk_clear" style="display:none;">×</button></div></div>
+        <div class="hk-row"><span class="hk-lbl" data-i18n="hk_delete">Удалить вкладку</span><div class="hk-box" data-action="delete" role="button" tabindex="0" data-i18n-aria="hk_delete"><span class="hk-val hk-empty"></span><button class="hk-clear" data-i18n-title="hk_clear" style="display:none;">×</button></div></div>
+        <div class="hk-row"><span class="hk-lbl" data-i18n="hk_search">Фокус на поиске</span><div class="hk-box" data-action="search" role="button" tabindex="0" data-i18n-aria="hk_search"><span class="hk-val hk-empty"></span><button class="hk-clear" data-i18n-title="hk_clear" style="display:none;">×</button></div></div>
+        <div class="hk-row"><span class="hk-lbl" data-i18n="hk_select_all">Выбрать все вкладки</span><div class="hk-box" data-action="selectAll" role="button" tabindex="0" data-i18n-aria="hk_select_all"><span class="hk-val hk-empty"></span><button class="hk-clear" data-i18n-title="hk_clear" style="display:none;">×</button></div></div>
+        <div class="hk-row"><span class="hk-lbl" data-i18n="hk_new_space">Новое пространство</span><div class="hk-box" data-action="newSpace" role="button" tabindex="0" data-i18n-aria="hk_new_space"><span class="hk-val hk-empty"></span><button class="hk-clear" data-i18n-title="hk_clear" style="display:none;">×</button></div></div>
+        <div class="hk-row"><span class="hk-lbl" data-i18n="hk_new_group">Новая группа</span><div class="hk-box" data-action="newGroup" role="button" tabindex="0" data-i18n-aria="hk_new_group"><span class="hk-val hk-empty"></span><button class="hk-clear" data-i18n-title="hk_clear" style="display:none;">×</button></div></div>
+        <div class="hk-row"><span class="hk-lbl" data-i18n="hk_theme">Переключить тему</span><div class="hk-box" data-action="theme" role="button" tabindex="0" data-i18n-aria="hk_theme"><span class="hk-val hk-empty"></span><button class="hk-clear" data-i18n-title="hk_clear" style="display:none;">×</button></div></div>
+        <div class="hk-row"><span class="hk-lbl" data-i18n="hk_settings">Открыть настройки</span><div class="hk-box" data-action="settings" role="button" tabindex="0" data-i18n-aria="hk_settings"><span class="hk-val hk-empty"></span><button class="hk-clear" data-i18n-title="hk_clear" style="display:none;">×</button></div></div>
+        <div class="hk-row"><button class="btn btn-ghost" id="hk-reset-all" data-i18n="hk_reset_all">Сбросить всё</button></div>
       </section>
           </div>
           <div class="settings-pane" id="settings-pane-experimental" style="display:none;">

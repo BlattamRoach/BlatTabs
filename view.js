@@ -620,8 +620,9 @@ function switchSpace(id) {
   renderTabs(searchInput.value);
 }
 
-// "+ Пространство" — создать пространство (пустое имя → «Пространство N»)
-addSpaceBtn.addEventListener('click', () => {
+// "+ Пространство" — создать пространство (пустое имя → «Пространство N»);
+// та же модалка — по хоткею (действие newSpace)
+function openNewSpaceModal() {
   modalTitle.textContent = t('new_space');
   spaceNameInput.value = '';
   showSpaceModal(true, (name) => {
@@ -635,7 +636,8 @@ addSpaceBtn.addEventListener('click', () => {
       renderTabs(searchInput.value);
     });
   });
-});
+}
+addSpaceBtn.addEventListener('click', openNewSpaceModal);
 
 // Модалка: переименовать пространство
 function openRenameSpaceModal(spaceId, currentName) {
@@ -766,7 +768,7 @@ document.addEventListener('keydown', (e) => {
   if (settingsModal.classList.contains('open') && e.key === 'Escape') closeSettingsModal();
 });
 
-// Двухпанное окно: слева навигация разделов («Внешний вид»/«Общие»/«Экспериментальное»/«FAQ»/«О программе» — кнопки
+// Двухпанное окно: слева навигация разделов («Внешний вид»/«Общие»/«Горячие клавиши»/«Экспериментальное»/«FAQ»/«О программе» — кнопки
 // .settings-nav-item), справа — контент; виден только активный
 // (#settings-pane-appearance и др. — display:none у неактивной).
 // Состояние — module-переменная по id раздела (переживает перерисовку, идемпотентна);
@@ -778,7 +780,7 @@ function setSettingsSection(id) {
   if (!settingsNavItems.some((b) => b.dataset.section === id)) id = 'appearance';
   settingsSection = id;
   settingsNavItems.forEach((b) => b.classList.toggle('active', b.dataset.section === id));
-  ['appearance', 'general', 'experimental', 'faq', 'about'].forEach((s) => {
+  ['appearance', 'general', 'hotkeys', 'experimental', 'faq', 'about'].forEach((s) => {
     const pane = document.getElementById('settings-pane-' + s);
     if (pane) pane.style.display = (s === id) ? '' : 'none';
   });
@@ -4174,6 +4176,155 @@ function qsHide() {
   void qsOverlay.offsetHeight;
   qsOverlay.style.transition = '';
 }
+// === Горячие клавиши (blattam-hotkeys, chrome.storage.local) ===
+// 10 действий, каждое — список комбинаций. Канонический вид связки:
+// [ctrl|alt|shift|meta]+ + key (одна буква — uppercase): 'ArrowDown', 'Enter',
+// 'ctrl+k', '/'. Escape — зарезервирован (глобальный сброс), не привязывается.
+// Дефолты = текущее поведение клавиатуры. Порядок HOTKEY_ACTIONS — при дубле
+// связки побеждает первое действие.
+const HOTKEY_ACTIONS = ['next', 'prev', 'open', 'delete', 'search', 'selectAll', 'newSpace', 'newGroup', 'theme', 'settings'];
+const HOTKEY_DEFAULTS = {
+  next: ['ArrowDown', 'ArrowRight'],
+  prev: ['ArrowUp', 'ArrowLeft'],
+  open: ['Enter'],
+  delete: ['Delete', 'Backspace'],
+  search: ['/'],
+  selectAll: ['ctrl+a'],
+  newSpace: [],
+  newGroup: [],
+  theme: [],
+  settings: []
+};
+let hotkeyConfig = JSON.parse(JSON.stringify(HOTKEY_DEFAULTS));
+
+function hotkeyComboFromEvent(e) {
+  if (!e.key) return null;
+  const mods = [];
+  if (e.ctrlKey) mods.push('ctrl');
+  if (e.altKey) mods.push('alt');
+  if (e.shiftKey) mods.push('shift');
+  if (e.metaKey) mods.push('meta');
+  let key = e.key;
+  return mods.length ? mods.join('+') + '+' + key : key;
+}
+
+const HK_GLYPHS = { ArrowDown: '↓', ArrowUp: '↑', ArrowLeft: '←', ArrowRight: '→', Delete: 'Del' };
+function hotkeyComboDisplay(combo) {
+  return combo.split('+').map((p) => {
+    if (p === 'ctrl') return 'Ctrl';
+    if (p === 'alt') return 'Alt';
+    if (p === 'shift') return 'Shift';
+    if (p === 'meta') return 'Meta';
+    return HK_GLYPHS[p] || (p.length === 1 ? p.toUpperCase() : p);
+  }).join('+');
+}
+
+function selectAllVisibleTabs() {
+  selectedUrls = new Set(visibleTabs(searchInput.value).map((t) => t.url));
+  renderTabs(searchInput.value);
+}
+function toggleThemeAction() {
+  setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+}
+
+const HOTKEY_RUN = {
+  next: () => moveActive(1),
+  prev: () => moveActive(-1),
+  open: openActiveTab,
+  delete: deleteActiveTab,
+  search: () => { searchInput.focus(); searchInput.select(); },
+  selectAll: selectAllVisibleTabs,
+  newSpace: openNewSpaceModal,
+  newGroup: createGroupInActiveSpace,
+  theme: toggleThemeAction,
+  settings: openSettingsModal
+};
+
+// Перерисовка значений строк (строки статичные в view.html; во время захвата
+// — не трогаем)
+function renderHotkeyRows() {
+  HOTKEY_ACTIONS.forEach((action) => {
+    const box = document.querySelector('.hk-box[data-action="' + action + '"]');
+    if (!box || box.classList.contains('hk-armed')) return;
+    const combos = hotkeyConfig[action] || [];
+    const val = box.querySelector('.hk-val');
+    const clearBtn = box.querySelector('.hk-clear');
+    val.textContent = combos.length ? combos.map(hotkeyComboDisplay).join(' · ') : t('hk_none');
+    val.classList.toggle('hk-empty', !combos.length);
+    if (clearBtn) clearBtn.style.display = combos.length ? '' : 'none';
+  });
+}
+
+// Захват: клик по строке → однострочный слушатель keydown на window (capture —
+// раньше ВСЕХ document-слушателей: модалочные Escape-закрытия и глобальный
+// keydown). Esc — отмена; одиночный модификатор — игнор; комбинация — dedup +
+// запись storage.
+let hkArmed = null;
+function hkDisarm() {
+  if (!hkArmed) return;
+  const box = document.querySelector('.hk-box[data-action="' + hkArmed.action + '"]');
+  if (box) box.classList.remove('hk-armed');
+  window.removeEventListener('keydown', hkArmed.listener, true);
+  hkArmed = null;
+  renderHotkeyRows();
+}
+function hkArm(action) {
+  hkDisarm();
+  const box = document.querySelector('.hk-box[data-action="' + action + '"]');
+  if (!box) return;
+  box.classList.add('hk-armed');
+  const val = box.querySelector('.hk-val');
+  val.classList.remove('hk-empty');
+  val.textContent = t('hk_press');
+  const listener = (e) => {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (e.key === 'Escape') { hkDisarm(); return; }
+    if (e.key === 'Control' || e.key === 'Shift' || e.key === 'Alt' || e.key === 'Meta') return;
+    const combo = hotkeyComboFromEvent(e);
+    if (!combo) return;
+    const list = hotkeyConfig[action] || (hotkeyConfig[action] = []);
+    if (list.indexOf(combo) === -1) list.push(combo);
+    chrome.storage.local.set({ 'blattam-hotkeys': hotkeyConfig });
+    hkDisarm();
+  };
+  hkArmed = { action, listener };
+  window.addEventListener('keydown', listener, true);
+}
+
+document.querySelectorAll('.hk-box').forEach((box) => {
+  box.addEventListener('click', (e) => {
+    if (e.target.closest('.hk-clear')) {
+      e.stopPropagation();
+      hkDisarm();
+      hotkeyConfig[box.dataset.action] = [];
+      chrome.storage.local.set({ 'blattam-hotkeys': hotkeyConfig });
+      return; // onChanged перерисует
+    }
+    if (hkArmed && hkArmed.action === box.dataset.action) { hkDisarm(); return; }
+    hkArm(box.dataset.action);
+  });
+});
+const hkResetAllBtn = document.getElementById('hk-reset-all');
+if (hkResetAllBtn) hkResetAllBtn.addEventListener('click', () => {
+  hkDisarm();
+  chrome.storage.local.remove(['blattam-hotkeys']);
+  hotkeyConfig = JSON.parse(JSON.stringify(HOTKEY_DEFAULTS));
+  renderHotkeyRows();
+});
+
+// Конфиг: init + onChanged (другие newtab-окна следуют за сменой; перерисовка
+// карточек не нужна)
+function applyHotkeyConfig(stored) {
+  HOTKEY_ACTIONS.forEach((a) => {
+    if (stored && Array.isArray(stored[a])) hotkeyConfig[a] = stored[a].slice();
+  });
+  renderHotkeyRows();
+}
+// Init — ПОСЛЕ готовности языка (loadLang): строки показывают t('hk_none')
+// и зависят от I18N_LANG.
+loadLang().then(() => chrome.storage.local.get(['blattam-hotkeys'], (r) => applyHotkeyConfig(r['blattam-hotkeys'])));
+
 document.addEventListener('keydown', (e) => {
   // Модалка работает сама — не перехватываем
   if (spaceModal.classList.contains('open')) return;
@@ -4214,26 +4365,18 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
-  switch (e.key) {
-    case 'ArrowDown':
-    case 'ArrowRight':
-      e.preventDefault();
-      moveActive(1);
-      break;
-    case 'ArrowUp':
-    case 'ArrowLeft':
-      e.preventDefault();
-      moveActive(-1);
-      break;
-    case 'Enter':
-      e.preventDefault();
-      openActiveTab();
-      break;
-    case 'Delete':
-    case 'Backspace':
-      e.preventDefault();
-      deleteActiveTab();
-      break;
+  // Горячие клавиши: связка события → действие (blattam-hotkeys). Escape выше
+  // (сброс), буквы быстрого поиска — не доходят до сюда.
+  const hkCombo = hotkeyComboFromEvent(e);
+  if (hkCombo) {
+    for (let i = 0; i < HOTKEY_ACTIONS.length; i++) {
+      const action = HOTKEY_ACTIONS[i];
+      if ((hotkeyConfig[action] || []).indexOf(hkCombo) !== -1) {
+        e.preventDefault();
+        HOTKEY_RUN[action]();
+        return;
+      }
+    }
   }
 });
 
@@ -4310,6 +4453,11 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     // кастомные токены (объект, либо null после удаления ключа).
     if (changes['blattam-custom-theme']) {
       applyCustomTheme(changes['blattam-custom-theme'].newValue || null);
+    }
+    // «Горячие клавиши» (blattam-hotkeys): обновляем конфиг + строки
+    // настроек; перерисовка карточек не нужна.
+    if (changes['blattam-hotkeys']) {
+      applyHotkeyConfig(changes['blattam-hotkeys'].newValue || null);
     }
     // «Пресеты»: изменился любой из шести ключей внешнего вида — сверить активный
     // (значения не совпали — снять «активен»); список/активный изменились — обновить;
@@ -5298,24 +5446,59 @@ loadLang().then(function () {
     }
   }
 
+  // Авто-retry verify: при провале (сеть/токен) карточка застревала в
+  // «проверяем» навсегда (других триггеров перерисовки нет). Таймер ведёт
+  // СТРАНИЦА (SW умирает), 30 с, стоп при успехе.
+  let verifyRetryTimer = null;
+  function clearVerifyRetry() {
+    if (verifyRetryTimer) { clearTimeout(verifyRetryTimer); verifyRetryTimer = null; }
+  }
+  function scheduleVerifyRetry() {
+    clearVerifyRetry();
+    const ms = (typeof self !== 'undefined' && self.__verifyRetryMs) || 30000;
+    verifyRetryTimer = setTimeout(function () {
+      verifyRetryTimer = null;
+      refreshAccount();
+      renderGitHubModal();
+    }, ms);
+  }
+  function isAuthVerifyError(err) {
+    return typeof err === 'string' && /^api (401|403)$/.test(err);
+  }
+
   function refreshAccount() {
     chrome.storage.local.get(['github-token', 'blattam-github-login'], (r) => {
-      if (!r['github-token']) { renderAccount(null); return; }
+      if (!r['github-token']) { clearVerifyRetry(); renderAccount(null); return; }
       // Мгновенно — при токене + кэше логина, до verify-github:
       // рейка не мигает «подключаем», успех verify перекроет свежим логином.
       if (r['blattam-github-login']) renderAccount({ login: r['blattam-github-login'] });
       chrome.runtime.sendMessage({ action: 'verify-github' }, (res) => {
         if (res && res.success) {
+          clearVerifyRetry();
           chrome.storage.local.set({ 'blattam-github-login': res.user.login });
           renderAccount(res.user);
           return;
         }
-        // Токен есть, но GitHub API недоступен/ответ не успешный:
-        // кэшированный логин → «подключено»; без кэша → «подключено, проверяем»
-        // (токен из GitHub действителен — недоступен только API из этой сети)
-        if (r['blattam-github-login']) renderAccount({ login: r['blattam-github-login'] });
-        else if (res && res.token_present) renderAccount({}, t('account_verifying'));
-        else renderAccount(null, t('account_verify_error'));
+        // Токен есть, но verify не удался:
+        if (r['blattam-github-login']) {
+          clearVerifyRetry();
+          renderAccount({ login: r['blattam-github-login'] });
+          return;
+        }
+        if (res && res.token_present) {
+          if (isAuthVerifyError(res.error)) {
+            // Мёртвый токен не лечится повтором — показываем ошибку, без retry
+            clearVerifyRetry();
+            renderAccount(null, t('account_token_invalid'));
+          } else {
+            // Сеть может восстановиться — «проверяем» + авто-retry
+            renderAccount({}, t('account_verifying'));
+            scheduleVerifyRetry();
+          }
+          return;
+        }
+        renderAccount(null, t('account_verify_error'));
+        scheduleVerifyRetry();
       });
     });
   }
@@ -5433,6 +5616,7 @@ loadLang().then(function () {
   const ghSync = document.getElementById('github-sync-btn');
   const ghClear = document.getElementById('github-clear-btn');
   const ghDisconnect = document.getElementById('github-disconnect-btn');
+  const ghRetry = document.getElementById('github-retry-btn');
   const ghClose = document.getElementById('github-modal-close');
 
   function ghStatusSet(text) {
@@ -5463,20 +5647,34 @@ loadLang().then(function () {
       // (до ~35–70 с на плохой сети) виден «Не подключён» при видимой
       // кнопке «Отключить». Финальный статус перекроет.
       ghStatusSet(t('account_verifying'));
+      if (ghRetry) ghRetry.style.display = '';
       chrome.runtime.sendMessage({ action: 'verify-github' }, (res) => {
         let name = null;
         if (res && res.success) {
+          clearVerifyRetry();
           name = res.user.login;
           chrome.storage.local.set({ 'blattam-github-login': name });
         } else if (r['blattam-github-login']) {
+          clearVerifyRetry();
           name = r['blattam-github-login'];
         } else if (res && res.token_present) {
+          if (isAuthVerifyError(res.error)) {
+            clearVerifyRetry();
+            ghStatusSet(t('account_token_invalid'));
+            if (ghRetry) ghRetry.style.display = '';
+            return;
+          }
           ghStatusSet(t('account_verifying'));
+          scheduleVerifyRetry();
+          if (ghRetry) ghRetry.style.display = '';
           return;
         } else {
           ghStatusSet(t('account_verify_error'));
+          scheduleVerifyRetry();
+          if (ghRetry) ghRetry.style.display = '';
           return;
         }
+        if (ghRetry) ghRetry.style.display = 'none';
         chrome.runtime.sendMessage({ action: 'check-sync-status' }, (st) => {
           const map = { synced: t('github_synced'), ahead: t('github_local_ahead'), behind: t('github_remote_ahead') };
           ghStatusSet('GitHub: ' + name + ' · ' + (map[st] || t('github_status_unknown')));
@@ -5505,6 +5703,10 @@ loadLang().then(function () {
   });
 
   ghConnect.addEventListener('click', () => startGitHubLogin());
+
+  // «Проверить ещё раз» — немедленный повтор verify (авто-retry и так
+  // крутится каждые 30 с; кнопка — ручное ускорение)
+  ghRetry.addEventListener('click', () => { refreshAccount(); renderGitHubModal(); });
 
   ghSync.addEventListener('click', () => {
     chrome.runtime.sendMessage({ action: 'sync-now' }, (res) => {

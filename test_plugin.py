@@ -511,7 +511,7 @@ def load_view(pg, tabs=None, spaces=None, groups=None, folders=None,
               last_space=None, theme=None, confirm=False, browser_tabs=None,
               bg=None, bg_left=None, bg_right=None, tab_color=None, lang=None,
               quick_search=None, custom_theme=None, trash=None,
-              presets=None, active_preset=None):
+              presets=None, active_preset=None, hotkeys=None):
     """about:blank + mock + данные + DOM view.html + view.js.
 
     browser_tabs — список открытых вкладок браузера (chrome.tabs._tabs):
@@ -523,6 +523,8 @@ def load_view(pg, tabs=None, spaces=None, groups=None, folders=None,
         init.append("chrome.storage.local._data['blattam-tabs'] = " + json.dumps(tabs, ensure_ascii=False) + ";")
     if trash is not None:
         init.append("chrome.storage.local._data['blattam-trash'] = " + json.dumps(trash, ensure_ascii=False) + ";")
+    if hotkeys is not None:
+        init.append("chrome.storage.local._data['blattam-hotkeys'] = " + json.dumps(hotkeys) + ";")
     if browser_tabs is not None:
         init.append("chrome.tabs._tabs = " + json.dumps(browser_tabs, ensure_ascii=False) + ";")
     if spaces is not None:
@@ -12953,7 +12955,7 @@ class TestSettingsBackground:
             titles = json.loads(self.page.evaluate(
                 "JSON.stringify([...document.querySelectorAll('#settings-modal .settings-section-title')]"
                 ".map(el => el.textContent.trim()))"))
-            assert titles == ["Пресеты", "Тема", "Цвета", "Размер и форма", "Шрифт", "Фон", "Фон левой рейки", "Фон правой рейки", "Цвет вкладок", "Язык", "Экспериментальное", "Частые вопросы", "О программе"]
+            assert titles == ["Пресеты", "Тема", "Цвета", "Размер и форма", "Шрифт", "Фон", "Фон левой рейки", "Фон правой рейки", "Цвет вкладок", "Язык", "Горячие клавиши", "Экспериментальное", "Частые вопросы", "О программе"]
             assert self.page.evaluate("document.getElementById('bg-file-btn').textContent.trim()") == "Выбрать картинку"
             assert self.page.evaluate("document.getElementById('bg-clear-btn').textContent.trim()") == "Убрать"
             # скрытый input-файла рядом с #import-input
@@ -13123,7 +13125,7 @@ class TestSettingsTabColor:
             titles = json.loads(self.page.evaluate(
                 "JSON.stringify([...document.querySelectorAll('#settings-modal .settings-section-title')]"
                 ".map(el => el.textContent.trim()))"))
-            assert titles == ["Пресеты", "Тема", "Цвета", "Размер и форма", "Шрифт", "Фон", "Фон левой рейки", "Фон правой рейки", "Цвет вкладок", "Язык", "Экспериментальное", "Частые вопросы", "О программе"]
+            assert titles == ["Пресеты", "Тема", "Цвета", "Размер и форма", "Шрифт", "Фон", "Фон левой рейки", "Фон правой рейки", "Цвет вкладок", "Язык", "Горячие клавиши", "Экспериментальное", "Частые вопросы", "О программе"]
             assert self.page.evaluate("document.getElementById('tab-color-input').type") == "color"
             assert self.page.evaluate(
                 "document.getElementById('tab-color-reset').textContent.trim()") == "Сбросить"
@@ -18214,7 +18216,7 @@ class TestI18n:
         assert d["ru_active"] is False, d
         assert d["en_active"] is True, d
         assert d["doc_lang"] == "en", d
-        assert d["navs"] == ["Appearance", "General", "Experimental", "FAQ", "About"], d
+        assert d["navs"] == ["Appearance", "General", "Hotkeys", "Experimental", "FAQ", "About"], d
         assert d["h4"] == "Language", d
 
     def test_toggle_back_to_ru(self):
@@ -19648,7 +19650,7 @@ class TestCustomTheme:
               "--card-name", "--ink", "--ghost-bg", "--ghost-ring",
               "--card-radius", "--card-gap", "--card-min", "--card-name-size", "--font-ui"]
     TITLES = ["Пресеты", "Тема", "Цвета", "Размер и форма", "Шрифт", "Фон", "Фон левой рейки", "Фон правой рейки",
-              "Цвет вкладок", "Язык", "Экспериментальное",
+              "Цвет вкладок", "Язык", "Горячие клавиши", "Экспериментальное",
               "Частые вопросы", "О программе"]
 
     @pytest.fixture(autouse=True)
@@ -20512,6 +20514,264 @@ class TestGithubModal:
         assert d["status"] == "Not connected", d
         assert self.page.evaluate("document.getElementById('github-connect-btn').textContent") == "Connect GitHub", d
         assert self.page.evaluate("document.querySelector('#github-modal h3').textContent") == "GitHub", d
+
+
+class TestVerifyAuthErrorAndRetry:
+    """Wave 2: verify-github несёт error ('network' / 'api 401' / 'api 403').
+    401/403 → рейка/модалка «Токен недействителен — войдите заново» БЕЗ retry
+    (мёртвый токен не лечится повтором); сеть → «подключено · проверяем» +
+    авто-retry 30 c со страницы (таймер view.js, стоп при успехе) + кнопка
+    «Проверить ещё раз» в модалке (немедленный повтор verify).
+    Background-уровень: verify-github → {success: false, token_present, error}."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self._errors = []
+        page.on("pageerror", self._on_err)
+        yield
+        assert not self._errors, self._errors
+        page.remove_listener("pageerror", self._on_err)
+
+    def _on_err(self, err):
+        self._errors.append(str(err))
+
+    # --- view-уровень (паттерны TestDeviceFlowPolling / TestGithubModal) ---
+
+    def _load_view(self, lang=None):
+        load_view(self.page, lang=lang)
+        self.page.wait_for_timeout(150)
+
+    def _rail(self):
+        return json.loads(self.page.evaluate("""JSON.stringify({
+          label: document.querySelector('#account-slot .a-t').textContent,
+          sub: document.querySelector('#account-slot .a-s').textContent
+        })"""))
+
+    def _install_verify_mock(self, queue, token=True, retry_ms=250):
+        """Обёртка sendMessage: verify-github берёт ответ из очереди (счётчик —
+        window.__verifyCalls), опустела → network-провал; check-sync-status →
+        'synced'. Ставит window.__verifyRetryMs (хук 30 c) и github-token в
+        storage (onChanged → refreshAccount → первый verify-вызов)."""
+        self.page.evaluate("""(args) => {
+          const orig = chrome.runtime.sendMessage.bind(chrome.runtime);
+          window.__verifyCalls = 0;
+          window.__verifyQueue = args.queue;
+          window.__verifyRetryMs = args.retryMs;
+          chrome.runtime.sendMessage = function (msg, cb) {
+            if (msg && msg.action === 'verify-github') {
+              window.__verifyCalls += 1;
+              const r = window.__verifyQueue.length
+                ? window.__verifyQueue.shift()
+                : { success: false, token_present: true, error: 'network' };
+              if (cb) cb(r);
+              return Promise.resolve(r);
+            }
+            if (msg && msg.action === 'check-sync-status') {
+              if (cb) cb('synced');
+              return Promise.resolve('synced');
+            }
+            return orig(msg, cb);
+          };
+          if (args.token) chrome.storage.local.set({ 'github-token': 't' });
+        }""", {"queue": queue, "retryMs": retry_ms, "token": token})
+
+    def _open_modal(self):
+        self.page.click("#account-slot")
+        self.page.wait_for_timeout(100)
+
+    def _modal(self):
+        return json.loads(self.page.evaluate("""JSON.stringify({
+          status: document.getElementById('github-modal-status').textContent,
+          retry: document.getElementById('github-retry-btn').style.display
+        })"""))
+
+    def test_rail_network_error_shows_verifying(self):
+        self._load_view()
+        self._install_verify_mock([
+            {"success": False, "token_present": True, "error": "network"}])
+        d = {}
+        for _ in range(10):
+            d = self._rail()
+            if d["sub"] == "Подключено · проверяем аккаунт…":
+                break
+            self.page.wait_for_timeout(200)
+        assert d["sub"] == "Подключено · проверяем аккаунт…", d
+        assert d["label"] == "GitHub", d
+
+    def test_rail_network_retry_recovers(self):
+        self._load_view()
+        self._install_verify_mock([
+            {"success": False, "token_present": True, "error": "network"},
+            {"success": True, "user": {"login": "testuser"}},
+        ])
+        d = {}
+        for _ in range(15):
+            d = self._rail()
+            if d["label"] == "GitHub: testuser":
+                break
+            self.page.wait_for_timeout(100)
+        assert d["label"] == "GitHub: testuser", d
+        assert self.page.evaluate("window.__verifyCalls") >= 2
+        assert read_local(self.page, "blattam-github-login") == "testuser"
+
+    def test_rail_401_shows_invalid_no_retry(self):
+        self._load_view()
+        self._install_verify_mock([
+            {"success": False, "token_present": True, "error": "api 401"}])
+        d = {}
+        for _ in range(10):
+            d = self._rail()
+            if d["sub"] == "Токен недействителен — войдите заново":
+                break
+            self.page.wait_for_timeout(200)
+        assert d["sub"] == "Токен недействителен — войдите заново", d
+        # retry-хук 250 ms: если retry был бы — счётчик стал бы ≥ 2
+        self.page.wait_for_timeout(700)
+        assert self.page.evaluate("window.__verifyCalls") == 1
+
+    def test_rail_success_clears_retry(self):
+        self._load_view()
+        self._install_verify_mock([
+            {"success": True, "user": {"login": "testuser"}}])
+        d = {}
+        for _ in range(10):
+            d = self._rail()
+            if d["label"] == "GitHub: testuser":
+                break
+            self.page.wait_for_timeout(200)
+        assert d["label"] == "GitHub: testuser", d
+        self.page.wait_for_timeout(700)
+        assert self.page.evaluate("window.__verifyCalls") == 1
+
+    def test_no_token_no_verify_no_retry(self):
+        self._load_view()
+        self.page.evaluate("""() => {
+          window.__verifyCalls = 0;
+          const orig = chrome.runtime.sendMessage.bind(chrome.runtime);
+          chrome.runtime.sendMessage = function (msg, cb) {
+            if (msg && msg.action === 'verify-github') window.__verifyCalls += 1;
+            return orig(msg, cb);
+          };
+        }""")
+        self.page.wait_for_timeout(400)
+        assert self.page.evaluate("window.__verifyCalls") == 0
+        d = self._rail()
+        assert d["sub"] == "Нажмите, чтобы войти в GitHub", d
+
+    def test_modal_network_error_status_and_retry_btn(self):
+        self._load_view()
+        # 2 провала: рейка (onChanged при установке токена) + модалка
+        self._install_verify_mock([
+            {"success": False, "token_present": True, "error": "network"},
+            {"success": False, "token_present": True, "error": "network"},
+        ])
+        self._open_modal()
+        d = {}
+        for _ in range(10):
+            d = self._modal()
+            if d["status"] == "Подключено · проверяем аккаунт…":
+                break
+            self.page.wait_for_timeout(200)
+        assert d["status"] == "Подключено · проверяем аккаунт…", d
+        assert d["retry"] != "none", d
+
+    def test_modal_401_shows_invalid(self):
+        self._load_view()
+        self._install_verify_mock([
+            {"success": False, "token_present": True, "error": "api 401"},
+            {"success": False, "token_present": True, "error": "api 401"},
+        ])
+        self._open_modal()
+        d = {}
+        for _ in range(10):
+            d = self._modal()
+            if d["status"] == "Токен недействителен — войдите заново":
+                break
+            self.page.wait_for_timeout(200)
+        assert d["status"] == "Токен недействителен — войдите заново", d
+        assert d["retry"] != "none", d
+
+    def test_modal_success_hides_retry_btn(self):
+        self._load_view()
+        self._install_verify_mock([
+            {"success": True, "user": {"login": "testuser"}},
+            {"success": True, "user": {"login": "testuser"}},
+        ])
+        self._open_modal()
+        d = {}
+        for _ in range(10):
+            d = self._modal()
+            if d["status"].startswith("GitHub: testuser · "):
+                break
+            self.page.wait_for_timeout(200)
+        assert d["status"].startswith("GitHub: testuser · "), d
+        assert d["retry"] == "none", d
+
+    def test_modal_retry_btn_click_reverifies(self):
+        self._load_view()
+        self._install_verify_mock([
+            {"success": False, "token_present": True, "error": "network"},
+            {"success": False, "token_present": True, "error": "network"},
+        ])
+        self._open_modal()
+        for _ in range(10):
+            if self._modal()["status"] == "Подключено · проверяем аккаунт…":
+                break
+            self.page.wait_for_timeout(200)
+        before = self.page.evaluate("window.__verifyCalls")
+        self.page.click("#github-retry-btn")
+        self.page.wait_for_timeout(150)
+        after = self.page.evaluate("window.__verifyCalls")
+        assert after > before, (before, after)
+
+    def test_en_locale_401_text(self):
+        self._load_view(lang="en")
+        self._install_verify_mock([
+            {"success": False, "token_present": True, "error": "api 401"},
+            {"success": False, "token_present": True, "error": "api 401"},
+        ])
+        self._open_modal()
+        d = {}
+        for _ in range(10):
+            d = self._modal()
+            if d["status"] == "Token invalid — sign in again":
+                break
+            self.page.wait_for_timeout(200)
+        assert d["status"] == "Token invalid — sign in again", d
+
+    # --- background-уровень (паттерн TestDeviceFlowBackground: fetch-мок
+    #     ставится ДО загрузки background.js) ---
+
+    def _load_bg(self, setup_js):
+        self.page.goto("about:blank")
+        self.page.evaluate(MOCK_CHROME + setup_js)
+        self.page.evaluate(load_file("background.js") + "; 'loaded'")
+
+    def test_bg_verify_401_shape(self):
+        self._load_bg("""
+          window.fetch = async function (url) {
+            if (String(url).indexOf('api.github.com/user') !== -1) {
+              return { json: async () => ({ message: 'Bad credentials' }), ok: false, status: 401 };
+            }
+            throw new Error('unexpected fetch: ' + url);
+          };
+          chrome.storage.local.set({ 'github-token': 't' });
+        """)
+        res = call_msg(self.page, "verify-github")
+        assert res == {"success": False, "token_present": True, "error": "api 401"}, res
+
+    def test_bg_verify_network_shape(self):
+        self._load_bg("""
+          window.__fetchTimeoutMs = 50;
+          window.fetch = async function (url) {
+            throw new Error('mock network failure: ' + url);
+          };
+          chrome.storage.local.set({ 'github-token': 't' });
+        """)
+        res = call_msg(self.page, "verify-github")
+        assert res == {"success": False, "token_present": True, "error": "network"}, res
+
 
 class TestGithubModalSync:
     """GitHub-модалка (newtab): согласованность состояния + ошибки синка.
@@ -21482,7 +21742,7 @@ class TestRailBackgrounds:
             self._open()
             # новые разделы сразу после «Фона», до «Цвет вкладок»
             assert self._titles() == ["Пресеты", "Тема", "Цвета", "Размер и форма", "Шрифт", "Фон", "Фон левой рейки",
-                                      "Фон правой рейки", "Цвет вкладок", "Язык", "Экспериментальное",
+                                      "Фон правой рейки", "Цвет вкладок", "Язык", "Горячие клавиши", "Экспериментальное",
                                       "Частые вопросы", "О программе"]
             for which in ("left", "right"):
                 assert self.page.evaluate(
@@ -21607,15 +21867,15 @@ class TestRailBackgrounds:
 # ==========================================
 
 class TestSettingsNavRestructure:
-    """Волна 2: панель «Кастомизация» перераспределена на 5 разделов
-    (Внешний вид / Общие / Экспериментальное / FAQ / О программе);
+    """Волна 2: панель «Кастомизация» перераспределена на 6 разделов
+    (Внешний вид / Общие / Горячие клавиши / Экспериментальное / FAQ / О программе);
     дефолтный раздел — «Внешний вид»."""
 
-    SECTIONS = ["appearance", "general", "experimental", "faq", "about"]
-    RU_LABELS = ["Внешний вид", "Общие", "Экспериментальное", "FAQ", "О программе"]
-    EN_LABELS = ["Appearance", "General", "Experimental", "FAQ", "About"]
+    SECTIONS = ["appearance", "general", "hotkeys", "experimental", "faq", "about"]
+    RU_LABELS = ["Внешний вид", "Общие", "Горячие клавиши", "Экспериментальное", "FAQ", "О программе"]
+    EN_LABELS = ["Appearance", "General", "Hotkeys", "Experimental", "FAQ", "About"]
     TITLES = ["Пресеты", "Тема", "Цвета", "Размер и форма", "Шрифт", "Фон", "Фон левой рейки", "Фон правой рейки",
-              "Цвет вкладок", "Язык", "Экспериментальное", "Частые вопросы", "О программе"]
+              "Цвет вкладок", "Язык", "Горячие клавиши", "Экспериментальное", "Частые вопросы", "О программе"]
 
     @pytest.fixture(autouse=True)
     def _setup(self, page):
@@ -21636,7 +21896,7 @@ class TestSettingsNavRestructure:
         return self.page.evaluate(
             "document.getElementById('settings-pane-" + section + "').style.display")
 
-    def test_nav_five_items_ru_labels(self):
+    def test_nav_six_items_ru_labels(self):
         load_view(self.page)
         self._open()
         d = json.loads(self.page.evaluate("""(() => {
@@ -21647,7 +21907,7 @@ class TestSettingsNavRestructure:
             labels: items.map(b => b.textContent.trim())
           });
         })()"""))
-        assert d["count"] == 5, d
+        assert d["count"] == 6, d
         assert d["sections"] == self.SECTIONS, d
         assert d["labels"] == self.RU_LABELS, d
 
@@ -21709,8 +21969,8 @@ class TestSettingsNavRestructure:
         assert d["qs"] == "settings-pane-experimental", d
         assert d["oldPane"] is False, d
         assert d["mainOrder"] == ["settings-pane-appearance", "settings-pane-general",
-                                  "settings-pane-experimental", "settings-pane-faq",
-                                  "settings-pane-about"], d
+                                  "settings-pane-hotkeys", "settings-pane-experimental",
+                                  "settings-pane-faq", "settings-pane-about"], d
 
     def test_section_titles_exact_order_both_themes(self):
         for theme in (None, "dark"):
@@ -22255,3 +22515,291 @@ class TestPresetProfiles:
         assert btns == ["Apply", "Delete"]
         assert self.page.evaluate(
             "document.querySelector('#preset-list .preset-badge').textContent") == "active"
+# ==========================================
+#  VIEW.JS: ГОРЯЧИЕ КЛАВИШИ — настройка хоткеев в настройках
+# ==========================================
+
+class TestHotkeys:
+    """Настройки → «Горячие клавиши»: 10 действий, blattam-hotkeys (local).
+    Захват: клик по строке → нажать комбинацию (Esc — отмена); × — снять все;
+    «Сбросить всё» — дефолты. Дефолты = прежнее поведение клавиатуры.
+    Захват проверяется РЕАЛЬНЫМ вводом (page.keyboard) — capture-слушатель
+    живёт на window."""
+
+    ACTIONS = ["next", "prev", "open", "delete", "search", "selectAll",
+               "newSpace", "newGroup", "theme", "settings"]
+    RU_ROW_LABELS = ["Далее (вниз)", "Назад (вверх)", "Открыть вкладку",
+                     "Удалить вкладку", "Фокус на поиске", "Выбрать все вкладки",
+                     "Новое пространство", "Новая группа", "Переключить тему",
+                     "Открыть настройки"]
+    EN_ROW_LABELS = ["Next (down)", "Previous (up)", "Open tab", "Delete tab",
+                     "Focus search", "Select all tabs", "New space",
+                     "New group", "Toggle theme", "Open settings"]
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self.page_errors = []
+        self._on_pageerror = lambda exc: self.page_errors.append(str(exc))
+        self.page.on("pageerror", self._on_pageerror)
+        yield
+        self.page.remove_listener("pageerror", self._on_pageerror)
+
+    TABS = [
+        {"name": "A", "url": "https://a.com"},
+        {"name": "B", "url": "https://b.com"},
+        {"name": "C", "url": "https://c.com"},
+    ]
+
+    def _open_hotkeys(self):
+        self.page.click("#settings-btn")
+        self.page.wait_for_timeout(150)
+        self.page.locator("#settings-modal .settings-nav-item[data-section='hotkeys']").click()
+        self.page.wait_for_timeout(150)
+
+    def _rows(self):
+        return json.loads(self.page.evaluate("""(() => {
+          const rows = {};
+          document.querySelectorAll('#hk-section .hk-box').forEach((box) => {
+            const val = box.querySelector('.hk-val');
+            const clear = box.querySelector('.hk-clear');
+            rows[box.dataset.action] = {
+              text: val ? val.textContent.trim() : null,
+              clearVisible: clear ? clear.style.display !== 'none' : false
+            };
+          });
+          return JSON.stringify(rows);
+        })()"""))
+
+    def _hk_storage(self):
+        return json.loads(self.page.evaluate(
+            "(chrome.storage.local._data['blattam-hotkeys'] === undefined) ? 'null' : "
+            "JSON.stringify(chrome.storage.local._data['blattam-hotkeys'])"))
+
+    def test_pane_in_nav(self):
+        load_view(self.page, tabs=self.TABS)
+        self._open_hotkeys()
+        d = json.loads(self.page.evaluate("""(() => {
+          const items = [...document.querySelectorAll('#settings-modal .settings-nav-item')];
+          return JSON.stringify({
+            count: items.length,
+            sections: items.map(b => b.dataset.section),
+            labels: items.map(b => b.textContent.trim())
+          });
+        })()"""))
+        assert d["count"] == 6, d
+        assert d["sections"] == ["appearance", "general", "hotkeys", "experimental", "faq", "about"], d
+        assert d["labels"][2] == "Горячие клавиши", d
+        assert self.page.evaluate(
+            "document.getElementById('settings-pane-hotkeys').style.display") != "none"
+
+    def test_default_bindings_display(self):
+        load_view(self.page, tabs=self.TABS)
+        self._open_hotkeys()
+        rows = self._rows()
+        assert rows["next"]["text"] == "↓ · →", rows
+        assert rows["prev"]["text"] == "↑ · ←", rows
+        assert rows["open"]["text"] == "Enter", rows
+        assert rows["delete"]["text"] == "Del · Backspace", rows
+        assert rows["search"]["text"] == "/", rows
+        assert rows["selectAll"]["text"] == "Ctrl+A", rows
+        for a in ("newSpace", "newGroup", "theme", "settings"):
+            assert rows[a]["text"] == "не назначено", rows
+            assert rows[a]["clearVisible"] is False, rows
+        assert rows["open"]["clearVisible"] is True, rows
+        # ключ ещё не записан — дефолты в памяти
+        assert self._hk_storage() is None
+
+    def test_row_labels_ru_order(self):
+        load_view(self.page, tabs=self.TABS)
+        self._open_hotkeys()
+        labels = json.loads(self.page.evaluate(
+            "JSON.stringify([...document.querySelectorAll('#hk-section .hk-lbl')].map(e => e.textContent.trim()))"))
+        assert labels == self.RU_ROW_LABELS, labels
+
+    def test_capture_new_group_and_fires(self):
+        load_view(self.page, tabs=self.TABS)
+        self._open_hotkeys()
+        self.page.locator(".hk-box[data-action='newGroup']").click()
+        assert self.page.evaluate(
+            "document.querySelector(\".hk-box[data-action='newGroup']\").classList.contains('hk-armed')")
+        self.page.keyboard.press("F2")
+        self.page.wait_for_timeout(150)
+        stored = self._hk_storage()
+        assert stored["newGroup"] == ["F2"], stored
+        rows = self._rows()
+        assert rows["newGroup"]["text"] == "F2", rows
+        # Esc закрывает модалку настроек (захват уже снят)
+        self.page.keyboard.press("Escape")
+        self.page.wait_for_timeout(150)
+        assert not self.page.evaluate(
+            "document.getElementById('settings-modal').classList.contains('open')")
+        # F2 открывает модалку создания группы
+        self.page.keyboard.press("F2")
+        self.page.wait_for_timeout(150)
+        assert self.page.evaluate(
+            "document.getElementById('space-modal').classList.contains('open')")
+        assert self.page.evaluate(
+            "document.getElementById('modal-title').textContent.trim()") == "Новая группа"
+
+    def test_capture_escape_cancels(self):
+        load_view(self.page, tabs=self.TABS)
+        self._open_hotkeys()
+        self.page.locator(".hk-box[data-action='newSpace']").click()
+        self.page.keyboard.press("Escape")
+        self.page.wait_for_timeout(150)
+        # модалка настроек осталась открыта, захват снят, storage не тронут
+        assert self.page.evaluate(
+            "document.getElementById('settings-modal').classList.contains('open')")
+        assert self.page.evaluate(
+            "document.querySelector(\".hk-box[data-action='newSpace']\").classList.contains('hk-armed')") is False
+        assert self._hk_storage() is None
+
+    def test_capture_modifier_combo(self):
+        load_view(self.page, tabs=self.TABS)
+        self._open_hotkeys()
+        self.page.locator(".hk-box[data-action='search']").click()
+        self.page.keyboard.down("Control")
+        self.page.keyboard.press("k")
+        self.page.keyboard.up("Control")
+        self.page.wait_for_timeout(150)
+        stored = self._hk_storage()
+        assert stored["search"] == ["/", "ctrl+k"], stored
+        rows = self._rows()
+        assert rows["search"]["text"] == "/ · Ctrl+K", rows
+
+    def test_capture_dedup(self):
+        load_view(self.page, tabs=self.TABS)
+        self._open_hotkeys()
+        self.page.locator(".hk-box[data-action='open']").click()
+        self.page.keyboard.press("Enter")
+        self.page.wait_for_timeout(150)
+        stored = self._hk_storage()
+        assert stored["open"] == ["Enter"], stored
+
+    def test_clear_binding(self):
+        load_view(self.page, tabs=self.TABS)
+        self._open_hotkeys()
+        self.page.locator(".hk-box[data-action='open'] .hk-clear").click()
+        self.page.wait_for_timeout(150)
+        stored = self._hk_storage()
+        assert stored["open"] == [], stored
+        rows = self._rows()
+        assert rows["open"]["text"] == "не назначено", rows
+        # Enter больше не открывает активную вкладку
+        self.page.keyboard.press("Escape")  # закрыть настройки (и сброс)
+        self.page.wait_for_timeout(150)
+        self.page.keyboard.press("ArrowDown")
+        self.page.wait_for_timeout(100)
+        assert self.page.evaluate(
+            "document.querySelectorAll('.tab-card.kbd-active').length") == 1
+        self.page.keyboard.press("Enter")
+        self.page.wait_for_timeout(150)
+        assert self.page.evaluate("window.lastMessage") is None
+
+    def test_rebind_new_space_fires(self):
+        load_view(self.page, tabs=self.TABS)
+        self._open_hotkeys()
+        self.page.locator(".hk-box[data-action='newSpace']").click()
+        self.page.keyboard.press("F5")
+        self.page.wait_for_timeout(150)
+        stored = self._hk_storage()
+        assert stored["newSpace"] == ["F5"], stored
+        self.page.keyboard.press("Escape")
+        self.page.wait_for_timeout(150)
+        self.page.keyboard.press("F5")
+        self.page.wait_for_timeout(150)
+        assert self.page.evaluate(
+            "document.getElementById('space-modal').classList.contains('open')")
+        assert self.page.evaluate(
+            "document.getElementById('modal-title').textContent.trim()") == "Новое пространство"
+
+    def test_select_all_hotkey(self):
+        load_view(self.page, tabs=self.TABS)
+        self.page.keyboard.down("Control")
+        self.page.keyboard.press("a")
+        self.page.keyboard.up("Control")
+        self.page.wait_for_timeout(150)
+        assert self.page.evaluate("document.querySelectorAll('.tab-select:checked').length") == 3
+        self.page.keyboard.press("Escape")  # сброс
+        self.page.wait_for_timeout(150)
+        assert self.page.evaluate("document.querySelectorAll('.tab-select:checked').length") == 0
+
+    def test_search_focus_hotkey(self):
+        load_view(self.page, tabs=self.TABS)
+        self.page.keyboard.press("/")
+        self.page.wait_for_timeout(100)
+        assert self.page.evaluate("document.activeElement.id") == "search"
+
+    def test_theme_toggle_hotkey(self):
+        load_view(self.page, tabs=self.TABS)
+        self._open_hotkeys()
+        self.page.locator(".hk-box[data-action='theme']").click()
+        self.page.keyboard.press("F3")
+        self.page.wait_for_timeout(150)
+        assert self._hk_storage()["theme"] == ["F3"]
+        self.page.keyboard.press("Escape")
+        self.page.wait_for_timeout(150)
+        self.page.keyboard.press("F3")
+        self.page.wait_for_timeout(150)
+        assert self.page.evaluate("chrome.storage.local._data['blattam-theme']") == "dark"
+        assert self.page.evaluate("document.documentElement.dataset.theme") == "dark"
+
+    def test_settings_hotkey_opens_modal(self):
+        load_view(self.page, tabs=self.TABS)
+        self._open_hotkeys()
+        self.page.locator(".hk-box[data-action='settings']").click()
+        self.page.keyboard.press("F4")
+        self.page.wait_for_timeout(150)
+        assert self._hk_storage()["settings"] == ["F4"]
+        self.page.keyboard.press("Escape")
+        self.page.wait_for_timeout(150)
+        assert not self.page.evaluate(
+            "document.getElementById('settings-modal').classList.contains('open')")
+        self.page.keyboard.press("F4")
+        self.page.wait_for_timeout(150)
+        assert self.page.evaluate(
+            "document.getElementById('settings-modal').classList.contains('open')")
+
+    def test_reset_all(self):
+        load_view(self.page, tabs=self.TABS)
+        self._open_hotkeys()
+        self.page.locator(".hk-box[data-action='newSpace']").click()
+        self.page.keyboard.press("F5")
+        self.page.wait_for_timeout(100)
+        self.page.locator(".hk-box[data-action='open'] .hk-clear").click()
+        self.page.wait_for_timeout(100)
+        assert self._hk_storage()["open"] == []
+        self.page.locator("#hk-reset-all").click()
+        self.page.wait_for_timeout(150)
+        assert self._hk_storage() is None
+        rows = self._rows()
+        assert rows["open"]["text"] == "Enter", rows
+        assert rows["newSpace"]["text"] == "не назначено", rows
+
+    def test_storage_persist(self):
+        load_view(self.page, tabs=self.TABS, hotkeys={"newSpace": ["F5"], "open": ["Enter"]})
+        self._open_hotkeys()
+        rows = self._rows()
+        assert rows["newSpace"]["text"] == "F5", rows
+        assert rows["open"]["text"] == "Enter", rows
+
+    def test_i18n_en(self):
+        load_view(self.page, tabs=self.TABS, lang="en")
+        self._open_hotkeys()
+        nav = json.loads(self.page.evaluate(
+            "JSON.stringify([...document.querySelectorAll('#settings-modal .settings-nav-item')].map(b => b.textContent.trim()))"))
+        assert "Hotkeys" in nav, nav
+        labels = json.loads(self.page.evaluate(
+            "JSON.stringify([...document.querySelectorAll('#hk-section .hk-lbl')].map(e => e.textContent.trim()))"))
+        assert labels == self.EN_ROW_LABELS, labels
+        rows = self._rows()
+        assert rows["newSpace"]["text"] == "unassigned", rows
+        assert rows["selectAll"]["text"] == "Ctrl+A", rows
+
+    def test_no_pageerrors_both_themes(self):
+        for theme in (None, "dark"):
+            self.page_errors = []
+            load_view(self.page, tabs=self.TABS, theme=theme)
+            self._open_hotkeys()
+        assert self.page_errors == [], self.page_errors
