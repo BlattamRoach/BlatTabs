@@ -23369,3 +23369,334 @@ class TestHotkeys:
             load_view(self.page, tabs=self.TABS, theme=theme)
             self._open_hotkeys()
         assert self.page_errors == [], self.page_errors
+
+
+# ==========================================
+#  C2.7: Безопасное открытие — только http/https
+# ==========================================
+
+class TestSafeOpenUrl:
+    """background.js С2.7: javascript:/data:/chrome:// и непарсящиеся URL не
+    открываются (open-one / open-many / openTab); https открывается (регрессия)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        page.goto("about:blank")
+        page.evaluate(MOCK_CHROME)
+        page.evaluate(load_file("background.js") + "; 'loaded'")
+
+    def _created(self):
+        return json.loads(self.page.evaluate("JSON.stringify(chrome.tabs.createdTabs)"))
+
+    def test_open_one_javascript_blocked(self):
+        send_msg(self.page, "open-one", url="javascript:alert(1)")
+        assert self._created() == []
+
+    def test_open_one_data_blocked(self):
+        send_msg(self.page, "open-one", url="data:text/html;base64,PHNjcmlwdD4=")
+        assert self._created() == []
+
+    def test_open_one_chrome_blocked(self):
+        send_msg(self.page, "open-one", url="chrome://settings")
+        assert self._created() == []
+
+    def test_open_many_filters_unsafe(self):
+        """open-many: небезопасный URL в массиве отбрасывается, валидный открывается (неактивно)."""
+        send_msg(self.page, "open-many", urls=["https://ok.example", "javascript:alert(1)"])
+        created = self._created()
+        assert len(created) == 1, created
+        assert created[0]["url"] == "https://ok.example"
+        assert created[0]["active"] is False
+
+    def test_open_tab_by_index_data_blocked(self):
+        """openTab по индексу: вкладка с data:-URL не открывается; соседняя https — открывается."""
+        self.page.evaluate("""
+          chrome.storage.local._data['blattam-tabs'] = [
+            {name: 'D', url: 'data:text/html,x', spaceId: 'sp'},
+            {name: 'H', url: 'https://ok.example', spaceId: 'sp'}
+          ];
+        """)
+        send_msg(self.page, "open", index=0)
+        assert self._created() == []
+        send_msg(self.page, "open", index=1)
+        created = self._created()
+        assert len(created) == 1 and created[0]["url"] == "https://ok.example", created
+
+    def test_open_one_https_regression(self):
+        send_msg(self.page, "open-one", url="https://example.com")
+        created = self._created()
+        assert len(created) == 1 and created[0]["url"] == "https://example.com", created
+
+
+# ==========================================
+#  C2.8: Валидация импорта (view.js)
+# ==========================================
+
+class TestImportValidation:
+    """view.js С2.8: валидация импорта ДО применения: >5000 вкладок / url не
+    http(s) или >2048 / name >200 / comment >1000 — alert и ничего не
+    записывается; валидный файл импортируется (регрессия)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    def _load(self, confirm=False):
+        load_view(self.page, tabs=[], confirm=confirm)
+        self.page.evaluate("""() => {
+          window.__alerts = [];
+          window.alert = (m) => { window.__alerts.push(m); };
+        }""")
+        self.page.wait_for_timeout(80)
+
+    def _import(self, data):
+        payload = json.dumps(data, ensure_ascii=False)
+        self.page.evaluate("""(payload) => {
+          var input = document.getElementById('import-input');
+          var dt = new DataTransfer();
+          dt.items.add(new File([payload], 'blatt-tabs-backup.json', {type: 'application/json'}));
+          input.files = dt.files;
+          input.dispatchEvent(new Event('change'));
+        }""", payload)
+        self.page.wait_for_timeout(250)
+
+    def _alerts(self):
+        return json.loads(self.page.evaluate("JSON.stringify(window.__alerts)"))
+
+    def test_invalid_url_alerts_and_storage_untouched(self):
+        self._load()
+        self._import({"blatt-tabs": True, "tabs": [
+            {"name": "Evil", "url": "javascript:alert(1)"}]})
+        alerts = self._alerts()
+        assert any("Невалидный URL" in a for a in alerts), alerts
+        assert read_storage_raw(self.page, "blattam-tabs") == []
+
+    def test_too_many_tabs_alerts(self):
+        self._load()
+        self._import({"blatt-tabs": True, "tabs": [
+            {"name": f"T{i}", "url": f"https://t{i}.example"} for i in range(5001)]})
+        alerts = self._alerts()
+        assert any("Слишком много вкладок" in a for a in alerts), alerts
+        assert read_storage_raw(self.page, "blattam-tabs") == []
+
+    def test_url_too_long_alerts(self):
+        self._load()
+        bad = "https://long.example/" + "a" * 2040  # 2063 символов > 2048
+        self._import({"blatt-tabs": True, "tabs": [
+            {"name": "Long", "url": bad}]})
+        alerts = self._alerts()
+        assert any("Невалидный URL" in a for a in alerts), alerts
+        assert read_storage_raw(self.page, "blattam-tabs") == []
+
+    def test_name_too_long_alerts(self):
+        self._load()
+        self._import({"blatt-tabs": True, "tabs": [
+            {"name": "N" * 201, "url": "https://ok.example"}]})
+        alerts = self._alerts()
+        assert any("Слишком длинное имя" in a for a in alerts), alerts
+        assert read_storage_raw(self.page, "blattam-tabs") == []
+
+    def test_comment_too_long_alerts(self):
+        self._load()
+        self._import({"blatt-tabs": True, "tabs": [
+            {"name": "C", "url": "https://ok.example", "comment": "c" * 1001}]})
+        alerts = self._alerts()
+        assert any("Слишком длинный комментарий" in a for a in alerts), alerts
+        assert read_storage_raw(self.page, "blattam-tabs") == []
+
+    def test_valid_file_imports(self):
+        self._load(confirm=True)
+        self._import({"blatt-tabs": True, "tabs": [
+            {"name": "A", "url": "https://a.example"},
+            {"name": "B", "url": "https://b.example"}]})
+        assert self._alerts() == []
+        tabs = read_storage_raw(self.page, "blattam-tabs")
+        assert sorted(t["url"] for t in tabs) == ["https://a.example", "https://b.example"], tabs
+
+
+# ==========================================
+#  C2.9: blattam-data-updated-at (метка свежести синка)
+# ==========================================
+
+class TestSyncUpdatedAt:
+    """background.js С2.9: blattam-data-updated-at — метка свежести данных
+    синка: пишется при изменении keysToSync, САМ НЕ в keysToSync (нет цикла —
+    его запись не создаёт sync-alarm), getSyncPayload читает сохранённое
+    значение (не Date.now() в момент чтения), applySyncPayload проставляет
+    из payload.updatedAt."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        page.goto("about:blank")
+        page.evaluate(MOCK_CHROME)
+        page.evaluate(load_file("background.js") + "; 'loaded'")
+
+    def _sync_push_alarms(self):
+        created = json.loads(self.page.evaluate("JSON.stringify(chrome.alarms.created)"))
+        return [a for a in created if a["name"] == "blattam-sync-push"]
+
+    def test_write_data_key_creates_marker(self):
+        """Запись в keysToSync (blattam-tabs) — в local появляется blattam-data-updated-at (число)."""
+        self.page.evaluate("delete chrome.storage.local._data['blattam-data-updated-at']")
+        self.page.evaluate("chrome.storage.local.set({'blattam-tabs': [{name: 'A', url: 'https://a.com'}]})")
+        val = self.page.evaluate("chrome.storage.local._data['blattam-data-updated-at']")
+        assert isinstance(val, (int, float)) and val > 0, val
+
+    def test_marker_key_not_in_keys_to_sync(self):
+        """Запись самой метки НЕ создаёт sync-alarm; запись blattam-tabs — создаёт."""
+        n0 = len(self._sync_push_alarms())
+        self.page.evaluate("chrome.storage.local.set({'blattam-data-updated-at': 1})")
+        assert len(self._sync_push_alarms()) == n0, self._sync_push_alarms()
+        self.page.evaluate("chrome.storage.local.set({'blattam-tabs': [{name: 'B', url: 'https://b.com'}]})")
+        assert len(self._sync_push_alarms()) == n0 + 1, self._sync_push_alarms()
+
+    def test_get_sync_payload_reads_saved_value(self):
+        """Посаженная метка возвращается как есть (12345), а не Date.now() в момент чтения."""
+        self.page.evaluate("chrome.storage.local._data['blattam-data-updated-at'] = 12345")
+        payload = self.page.evaluate("getSyncPayload()")
+        assert payload["updatedAt"] == 12345, payload
+
+    def test_apply_sync_payload_stamps_from_payload(self):
+        """applySyncPayload({updatedAt: 777}) — в local метка == 777 (собственная
+        запись blattam-tabs её не перетирает); push-аларм от изменения данных всё же создаётся."""
+        n0 = len(self._sync_push_alarms())
+        self.page.evaluate("""applySyncPayload({
+          tabs: [{name: 'R', url: 'https://r.com', spaceId: 'sp1'}],
+          settings: {}, updatedAt: 777
+        })""")
+        assert self.page.evaluate("chrome.storage.local._data['blattam-data-updated-at']") == 777
+        assert len(self._sync_push_alarms()) == n0 + 1, self._sync_push_alarms()
+
+
+# ==========================================
+#  C2.10: Пустой / битый gist (pullFromGitHub + check-sync-status)
+# ==========================================
+
+class TestEmptyGist:
+    """background.js С2.10: пустой gist (clear-cloud записал '') — НЕ ошибка
+    (JSON.parse('') не падаем); битый payload (tabs не массив) — не
+    применяется, bad-payload; check-sync-status с пустым raw — 'unknown';
+    нормальный gist — pulled: true (регрессия)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        page.goto("about:blank")
+        page.evaluate(MOCK_CHROME)
+
+    def _load_bg(self):
+        self.page.evaluate(load_file("background.js") + "; 'loaded'")
+
+    def _seed(self):
+        # ТОЛЬКО после старта SW: стартовая purgeStaleScopeToken удаляет
+        # токен без маркера blattam-auth-scope
+        self.page.evaluate("""() => {
+          chrome.storage.local._data['github-token'] = 't';
+          chrome.storage.local._data['blattam-auth-scope'] = 'gist-1';
+          chrome.storage.local._data['blattam-gist-id'] = 'g1';
+        }""")
+
+    def _mock_get(self, body):
+        self.page.evaluate("""(body) => {
+          window.__fetchCalls = [];
+          window.__fetchTimeoutMs = 50;
+          window.fetch = async function (url, opts) {
+            window.__fetchCalls.push({ url: String(url), method: (opts && opts.method) || 'GET' });
+            return { ok: true, status: 200, json: async () => body };
+          };
+        }""", body)
+
+    def test_pull_empty_content_not_error(self):
+        """Пустой content в gist — {ok: true, pulled: false}, не ошибка."""
+        self._mock_get({"files": {"sync.json": {"content": ""}}})
+        self._load_bg()
+        self._seed()
+        res = self.page.evaluate("pullFromGitHub()")
+        assert res == {"ok": True, "pulled": False}, res
+
+    def test_pull_bad_payload(self):
+        """Битый payload (tabs не массив) — {ok: false, error: 'bad-payload'}, вкладки не тронуты."""
+        self._mock_get({"files": {"sync.json": {"content": '{"tabs": 42}'}}})
+        self._load_bg()
+        self._seed()
+        res = self.page.evaluate("pullFromGitHub()")
+        assert res == {"ok": False, "error": "bad-payload"}, res
+        assert read_local(self.page, "blattam-tabs") is None
+
+    def test_check_sync_status_empty_unknown(self):
+        self._mock_get({"files": {"sync.json": {"content": ""}}})
+        self._load_bg()
+        self._seed()
+        res = call_msg(self.page, "check-sync-status")
+        assert res == "unknown", res
+
+    def test_pull_normal_gist_regression(self):
+        """Нормальный gist ({'tabs': [...], updatedAt}) — pulled: true, удалённые вкладки применены."""
+        self._mock_get({"files": {"sync.json": {"content": json.dumps({
+            "tabs": [{"name": "R", "url": "https://r.com", "spaceId": "sp1"}],
+            "updatedAt": 111
+        })}}})
+        self._load_bg()
+        self._seed()
+        res = self.page.evaluate("pullFromGitHub()")
+        assert res == {"ok": True, "pulled": True}, res
+        tabs = read_local(self.page, "blattam-tabs") or []
+        assert any(t["url"] == "https://r.com" for t in tabs), tabs
+
+
+# ==========================================
+#  C2.11: Debounced push на chrome.alarms
+# ==========================================
+
+class TestSyncDebounceAlarm:
+    """background.js С2.11: дебаунс пуша на chrome.alarms (pending setTimeout
+    умирал вместе с MV3 service worker): triggerDebouncedPush создаёт аларм
+    blattam-sync-push; аларм будит SW — pushToGitHub + clear; в путях синка
+    нет setTimeout/'syncTimer' (статика)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        page.goto("about:blank")
+        page.evaluate(MOCK_CHROME)
+        self.page.evaluate("""() => {
+          window.__fetchCalls = [];
+          window.__fetchTimeoutMs = 50;
+          window.fetch = async function (url, opts) {
+            window.__fetchCalls.push({ url: String(url), method: (opts && opts.method) || 'GET' });
+            return { ok: true, status: 200, json: async () => ({ id: 'g1' }) };
+          };
+        }""")
+        self.page.evaluate(load_file("background.js") + "; 'loaded'")
+        self.page.evaluate("""() => {
+          chrome.storage.local._data['github-token'] = 't';
+          chrome.storage.local._data['blattam-auth-scope'] = 'gist-1';
+          chrome.storage.local._data['blattam-gist-id'] = 'g1';
+        }""")
+
+    def test_trigger_creates_sync_alarm(self):
+        self.page.evaluate("triggerDebouncedPush()")
+        created = json.loads(self.page.evaluate("JSON.stringify(chrome.alarms.created)"))
+        assert any(a["name"] == "blattam-sync-push"
+                   and (a["info"] or {}).get("delayInMinutes") == 5000 / 60000
+                   for a in created), created
+
+    def test_alarm_pushes_and_clears(self):
+        """onAlarm('blattam-sync-push'): fetch к api.github.com/gists + clear аларма."""
+        self.page.evaluate("chrome.alarms.onAlarm._listeners[0]({name: 'blattam-sync-push'})")
+        self.page.wait_for_timeout(300)
+        calls = json.loads(self.page.evaluate("JSON.stringify(window.__fetchCalls)"))
+        assert any("api.github.com/gists" in c["url"] and c["method"] == "PUT" for c in calls), calls
+        cleared = json.loads(self.page.evaluate("JSON.stringify(chrome.alarms.cleared)"))
+        assert "blattam-sync-push" in cleared, cleared
+
+    def test_no_settimeout_in_sync_debounce(self):
+        """Статика: в triggerDebouncedPush нет setTimeout, 'syncTimer' в файле нет."""
+        src = load_file("background.js")
+        assert "syncTimer" not in src
+        i = src.index("function triggerDebouncedPush")
+        body = src[i:src.index("\n}", i)]
+        assert "setTimeout" not in body, body
+        assert "chrome.alarms.create(SYNC_ALARM" in body, body

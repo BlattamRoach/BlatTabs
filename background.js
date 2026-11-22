@@ -166,18 +166,25 @@ async function deviceFlowStart() {
 
 // Страховка, когда страница view закрыта: аларм каждые 30 с будит SW и
 // делает один шаг поллинга (состояние в storage).
+// С2.11: тот же слушатель будит SW и на SYNC_ALARM — отложенный (дебаунс) push.
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name !== DEVICE_ALARM) return;
-  chrome.storage.local.get(DEVICE_FLOW_KEY).then((r) => {
-    const state = r[DEVICE_FLOW_KEY];
-    if (!state || Date.now() > state.expires_at) {
-      chrome.storage.local.remove(DEVICE_FLOW_KEY);
-      chrome.alarms.clear(DEVICE_ALARM);
-      return;
-    }
-    if (state.slow_down_until && Date.now() < state.slow_down_until) return;
-    deviceFlowPollOnce(state);
-  });
+  if (alarm.name === DEVICE_ALARM) {
+    chrome.storage.local.get(DEVICE_FLOW_KEY).then((r) => {
+      const state = r[DEVICE_FLOW_KEY];
+      if (!state || Date.now() > state.expires_at) {
+        chrome.storage.local.remove(DEVICE_FLOW_KEY);
+        chrome.alarms.clear(DEVICE_ALARM);
+        return;
+      }
+      if (state.slow_down_until && Date.now() < state.slow_down_until) return;
+      deviceFlowPollOnce(state);
+    });
+    return;
+  }
+  if (alarm.name === SYNC_ALARM) {
+    chrome.alarms.clear(SYNC_ALARM); // one-shot — снимаем явный clear
+    pushToGitHub();
+  }
 });
 
 // Отключение: сбрасываем кэш identity + локальный токен (Gist остаётся).
@@ -223,6 +230,13 @@ const SPACES_KEY = 'blattam-spaces';
 const GROUPS_KEY = 'blattam-groups';
 const LAST_SPACE_KEY = 'blattam-last-space';
 const FOLDERS_KEY = 'blattam-folders'; // legacy: только миграция папки → пространства
+// С2.9: метка свежести данных синка (chrome.storage.local). Пишется в
+// storage.onChanged ТОЛЬКО при изменении keysToSync, читается в getSyncPayload
+// (вместо Date.now() в момент чтения — из-за него локальный payload был
+// «вечно свежее» → вечный «Local is ahead»), проставляется в applySyncPayload
+// из updatedAt полученного payload. Сам ключ НЕ входит в keysToSync —
+// его запись не триггерит синк заново (нет цикла).
+const UPDATED_AT_KEY = 'blattam-data-updated-at';
 
 // === i18n: имена по умолчанию зависят от blattam-lang (Настройки → Язык) ===
 async function currentLang() {
@@ -428,7 +442,7 @@ async function renameSpace(spaceId, newName) {
 const GIST_ID_KEY = 'blattam-gist-id';
 
 async function getSyncPayload() {
-  const localData = await chrome.storage.local.get([STORAGE_KEY, GIST_ID_KEY]);
+  const localData = await chrome.storage.local.get([STORAGE_KEY, GIST_ID_KEY, UPDATED_AT_KEY]);
   const syncData = await chrome.storage.sync.get(null); // Get all sync storage (settings + spaces/groups)
   
   return {
@@ -436,7 +450,7 @@ async function getSyncPayload() {
     spaces: syncData[SPACES_KEY] || [],
     groups: syncData[GROUPS_KEY] || [],
     settings: { ...syncData },
-    updatedAt: Date.now() // Includes lang, last-space, etc.
+    updatedAt: localData[UPDATED_AT_KEY] || 0 // С2.9: сохранённая метка (не Date.now() в момент чтения)
   };
 }
 
@@ -462,7 +476,8 @@ async function applySyncPayload(payload) {
   if (payload.tabs) localSet[STORAGE_KEY] = payload.tabs;
   if (payload.spaces) syncSet[SPACES_KEY] = payload.spaces;
   if (payload.groups) syncSet[GROUPS_KEY] = payload.groups;
-  
+  if (payload.updatedAt) localSet[UPDATED_AT_KEY] = payload.updatedAt; // С2.9: метка — из полученного payload
+
   await chrome.storage.local.set(localSet);
   await chrome.storage.sync.set(syncSet);
 }
@@ -530,9 +545,16 @@ async function pullFromGitHub() {
     if (!response.ok) return { ok: false, error: 'api ' + response.status };
     const data = await response.json();
 
-    const remotePayload = JSON.parse(data.files['sync.json'].content);
+    // С2.10: пустой gist (clear-cloud записал '') — НЕ ошибка, JSON.parse('') не падаем
+    const raw = data.files && data.files['sync.json'] && data.files['sync.json'].content;
+    if (!raw || !raw.trim()) return { ok: true, pulled: false };
+    const remotePayload = JSON.parse(raw);
+    // С2.10: битый payload (нет массива tabs) — не применяем
+    if (!remotePayload || !Array.isArray(remotePayload.tabs)) {
+      return { ok: false, error: 'bad-payload' };
+    }
     const localTabs = await loadTabs();
-    const mergedTabs = await mergeTabs(localTabs, remotePayload.tabs || []);
+    const mergedTabs = await mergeTabs(localTabs, remotePayload.tabs);
     const finalPayload = { ...remotePayload, tabs: mergedTabs, updatedAt: Date.now() };
     await applySyncPayload(finalPayload);
     return { ok: true, pulled: true };
@@ -542,18 +564,27 @@ async function pullFromGitHub() {
   }
 }
 
-// Debounced Sync Trigger
-let syncTimer = null;
+// Debounced Sync Trigger — С2.11: setTimeout(5000) умирал вместе с MV3
+// service worker (~30 с простоя) — дебаунс перенесён на chrome.alarms (тот же
+// паттерн, что у Device Flow-аларма): аларм будит SW и делает push.
+// Повторный create сбрасывает отсчёт (дебаунс). В unpacked-расширениях Chrome
+// клампит delay < 1 мин до ~1 мин — приемлемо (критерий роадмапа: сохранил
+// вкладку → сразу закрыл newtab → через минуту gist обновлён).
+const SYNC_ALARM = 'blattam-sync-push';
 function triggerDebouncedPush() {
-  if (syncTimer) clearTimeout(syncTimer);
-  syncTimer = setTimeout(() => {
-    pushToGitHub();
-  }, 5000);
+  chrome.alarms.create(SYNC_ALARM, { delayInMinutes: 5000 / 60000 });
 }
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
   const keysToSync = [STORAGE_KEY, SPACES_KEY, GROUPS_KEY, LAST_SPACE_KEY];
   const isDataChange = keysToSync.some(k => changes[k]);
+  if (isDataChange && !changes[UPDATED_AT_KEY]) {
+    // С2.9: метка изменения данных (ключ НЕ в keysToSync — нет цикла).
+    // Писатель проставил метку в той же записи (applySyncPayload) — не
+    // перетираем: иначе pull сразу делал бы локальные данные «свежее»
+    // (вечное «Local is ahead» возвращалось бы через собственную запись)
+    chrome.storage.local.set({ [UPDATED_AT_KEY]: Date.now() });
+  }
   if (isDataChange && (areaName !== 'local' || STORAGE_KEY in changes)) {
     triggerDebouncedPush();
   }
@@ -629,10 +660,22 @@ async function addTab(name, url, spaceId) {
   await saveTabs(tabs);
 }
 
+// С2.7: открывать только http/https — javascript:/data:/chrome:// и другие
+// схемы (и непарсящиеся URL) не открываем (open-one / open-many / openTab).
+function isSafeOpenUrl(url) {
+  try {
+    const u = new URL(url);
+    return u.protocol === 'http:' || u.protocol === 'https:';
+  } catch (e) {
+    return false;
+  }
+}
+
 async function openTab(tabIndex) {
   const tabs = await loadTabs();
   const tab = tabs[tabIndex];
   if (!tab) return;
+  if (!isSafeOpenUrl(tab.url)) return; // С2.7: небезопасный URL не открываем
   chrome.tabs.create({ url: tab.url, active: true });
 }
 
@@ -771,11 +814,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       break;
     // Открыть одну сохранённую вкладку (view-путь) — создаёт браузерную вкладку
     case 'open-one':
-      chrome.tabs.create({ url: msg.url, active: true });
+      if (isSafeOpenUrl(msg.url)) chrome.tabs.create({ url: msg.url, active: true });
       break;
-    // Массовое открытие: открывает each saved tab (неактивно)
+    // Массовое открытие: открывает each saved tab (неактивно);
+    // С2.7: небезопасные URL из массива отбрасываются
     case 'open-many':
-      for (const url of msg.urls || []) chrome.tabs.create({ url, active: false });
+      for (const url of (msg.urls || []).filter((u) => isSafeOpenUrl(u))) {
+        chrome.tabs.create({ url, active: false });
+      }
       break;
     case 'delete':
       deleteTab(msg.index);
@@ -897,7 +943,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         try {
           const response = await fetchGitHub(`https://api.github.com/gists/${gistId}`, { headers: { Authorization: `token ${token}` } });
           const remoteData = await response.json();
-          const remotePayload = JSON.parse(remoteData.files['sync.json'].content);
+          // С2.10: пустой gist (clear-cloud) — статус unknown, JSON.parse('') не падаем
+          const raw = remoteData.files && remoteData.files['sync.json'] && remoteData.files['sync.json'].content;
+          if (!raw || !raw.trim()) return 'unknown';
+          const remotePayload = JSON.parse(raw);
+          if (!remotePayload || !Array.isArray(remotePayload.tabs)) return 'unknown';
           const local = await getSyncPayload();
           
           if (!remotePayload || !remotePayload.updatedAt) return 'unknown';

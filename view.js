@@ -4550,6 +4550,31 @@ document.getElementById('import-input').addEventListener('change', (e) => {
       let fileSpaces = Array.isArray(data.spaces) ? data.spaces : null;
       let fileGroups = Array.isArray(data.groups) ? data.groups : [];
       const fileTabs = data.tabs;
+
+      // С2.8: валидация импорта — небезопасные/чрезмерные данные НЕ импортируем
+      // (alert и выход, ничего не записываем): только http/https, url ≤ 2048,
+      // name ≤ 200, comment ≤ 1000, ≤ 5000 вкладок
+      if (fileTabs.length > 5000) { alert(t('import_too_many_tabs')); return; }
+      for (const tab of fileTabs) {
+        if (!tab) continue; // не-объекты и так отбрасывает импорт-фильтр (t.url && t.name)
+        if (tab.url != null && tab.url !== '') {
+          let urlOk = false;
+          if (typeof tab.url === 'string' && tab.url.length <= 2048) {
+            try {
+              const pu = new URL(tab.url);
+              urlOk = pu.protocol === 'http:' || pu.protocol === 'https:';
+            } catch (e) { urlOk = false; }
+          }
+          if (!urlOk) { alert(t('import_invalid_url')); return; }
+        }
+        if (tab.name != null && (typeof tab.name !== 'string' || tab.name.length > 200)) {
+          alert(t('import_invalid_name')); return;
+        }
+        if (tab.comment != null && String(tab.comment).length > 1000) {
+          alert(t('import_invalid_comment')); return;
+        }
+      }
+
       if (fileSpaces === null && (Array.isArray(data.folders) || fileTabs.some(t => t && t.folderId != null))) {
         fileSpaces = [];
         migrateFoldersToSpaces(fileTabs, fileSpaces, data.folders);
