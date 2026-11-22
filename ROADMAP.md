@@ -70,6 +70,73 @@ toggle'ит; reorder шапка→шапка + клик по целевой ша
 
 ---
 
+## 🗺 Дорожная карта: 5 сессий по аудиту Qwen4-Max (22.11.2026)
+
+Источник: экспорт чата Qwen (`d497c7a0`) + перепроверка по коду на commit 89f070b (develop, 925 тестов) — все 20 задач открыты. Разработчик: BlattamBot (одиночно). Коммиты — только по «коммити».
+Коррекция к Qwen: ID расширения = `kxlxyxaimnvqdhhcvquvengjiqfhugua` (вычислено из `key` в manifest). Qwen написал `jbhpnh…` — неверно.
+
+### Что НЕ делаем
+- «Зашифровать токен в storage» — ключ лежит рядом, шифр декоративный; настоящее лечение — сузить scope (С1.5)
+- Настоящий CRX-автоапдейт (Omaha XML, подпись, content-type) — неделя боли ради фичи, которая на Windows всё равно не заработает
+- Разбивка view.js (246 КБ) на модули — отдельный проект
+- Перенос spaces/groups из sync в local — ломает миграции и квоты
+- «Отрефактори и улучши архитектуру» — только точечные правки
+- Советы Qwen «пользователю расширения» (пустой GitHub-аккаунт, Toby/Workona) — мы разработчик, не применимо
+- Qwen (С5) советует убрать `key` из манифеста — **не делаем**: `key` сохраняет ID `kxlxyxaimnvqdhhcvquvengjiqfhugua`, на который завязан OAuth-callback (С1.4); ключ публичный (в репо), CWS выдаст тот же ID
+
+### 📦 С1 — «OAuth»: чиним сломанный вход в GitHub
+Корень: `oauth-callback.html` не попадает в релизный zip → редирект в 404 → «Authorization page could not be loaded» (Device Flow — обход этой же дырки); инлайн-скрипт в callback блокируется CSP MV3 (`script-src 'self'`); `redirect_uri` для `launchWebAuthFlow` выбран неверный.
+
+- [x] **С1.1** `test_plugin.py`: `EXT_PATH = r"C:\Users\DI\Desktop\QwenCode\BlatTabs"` → `os.path.dirname(os.path.abspath(__file__))` (тесты перестают работать только на моей машине; перестаем светить путь в публичном репо) — сделано: `EXT_PATH` теперь вычисляется из расположения самого test_plugin.py, хардкода пути нет (файл читается оттуда же, `load_file`/`TestRelease`/`TestManifest` не трогались)
+- [x] **С1.2** `oauth-callback.html`: инлайн-`<script>` → новый `oauth-callback.js` (логика без изменений; в html — `<script src="oauth-callback.js"></script>` перед `</body>`) — сделано: логика побайтово та же (вырезана из HTML как есть, включая сообщения «Ошибка авторизации: …» / «Готово! Это окно можно закрыть.»; code обрабатывает background, страница только сообщает). Тесты: TestOAuthCallbackPage (5: в html нет инлайн-`<script>` + подключён `oauth-callback.js` / файл js содержит прежнюю логику / ?code= → «Готово!» / ?error= → «Ошибка авторизации: access_denied» / без параметров → «Готово!» — страница сервится локальным HTTP-сервером с реальным query-строком)
+- [x] **С1.3** `build_zip.py`: в `build_files()` добавить `oauth-callback.html` + `oauth-callback.js` (делать после С1.2) — сделано: 13 → 15 файлов (оба callback-файла в архиве); `TestRelease.EXPECTED_MEMBERS` обновлён под новый 15-файловый состав (часть задачи, не нарушение правила)
+- [x] **С1.4** `view.js` → `startGitHubLogin`: `redirectUri` = `chrome.identity.getRedirectURL()` (было `chrome.runtime.getURL('oauth-callback.html')`) — сделано: `redirect_uri` теперь chromiumapp.org-URL расширения (ID из `key` в manifest — единственная редирект-URL, зарегистрированная в OAuth App GitHub; `chrome-extension://…` GitHub не принимает); тот же `redirectUri` уходит в `oauth-exchange`; мок `chrome.identity` в тестах дополнен `getRedirectURL` (2 `_install_flow_mocks`). Тесты: TestOAuthLoginRedirect (1: authorize-URL несёт identity-URL, а не `chrome-extension://`, + `oauth-exchange` с тем же `redirectUri` и code)
+- [x] **С1.5** Scope `repo` → `gist` ровно в 3 местах: `manifest.json` (`oauth2.scopes`), `background.js` (`deviceFlowStart`), `view.js` (`startGitHubLogin`) — сделано: ровно в этих 3 местах (других вхождений `scope: 'repo'`/`'repo'` в авторизации нет). Тесты: TestManifest::test_oauth2_scopes_gist (`scopes == ['gist']`) + test_key_not_removed (регрессия: `key` НЕ удалён — на ID завязан OAuth-callback)
+- [x] **С1.6** `background.js`: при записи токена (2 места: `exchangeGitHubCode`, `deviceFlowPollOnce`) — маркер `blattam-auth-scope: 'gist-1'`; на старте: если токен есть, а маркер ≠ `gist-1` — удалить `github-token`/`github-github-login` (принудительный re-login) — сделано: маркер пишется в том же `chrome.storage.local.set`, что и токен (оба пути получения); стартовая проверка `purgeStaleScopeToken()` — рядом с остальными init-вызовами: токен есть + `blattam-auth-scope ≠ 'gist-1'` → удаляются `github-token` и `blattam-github-login` (в спеке опечатка `github-github-login`; реальный ключ кэша логина в коде — `blattam-github-login`). Тесты: TestAuthScopeMarker (6: токен+маркер — не трогается / токен без маркера — оба удалены / токен с чужим маркером — удалены / без токена — no-op, логин-кэш не тронут / обмен code — токен+маркер `gist-1` / успешный device-полл — токен+маркер, повторный запуск SW токен сохраняет). Два background-теста TestVerifyAuthErrorAndRetry, сидевшие токен ДО старта SW, дополнены маркером (иначе новая стартовая проверка его удаляла). Итого 939 unit-тестов
+
+**Готово, когда:** тесты ≥ 925, 0 падений; `build_zip.py` → 15 файлов (оба callback-файла внутри).
+**Ручные шаги (BlattamRoach):** `https://github.com/settings/developers` → OAuth Apps → BlatTabs → «Authorization callback URL» → `https://kxlxyxaimnvqdhhcvquvengjiqfhugua.chromiumapp.org/` (ID сверить на `chrome://extensions`); проверка: Ctrl+T → «Войти в GitHub» → Authorize → окно само закрылось → в рейке `GitHub: <login>`; push → pull → статус синка.
+
+### 📦 С2 — «Безопасность и синк»
+- [ ] **С2.7** `background.js`: хелпер `isSafeOpenUrl` (только `http:`/`https:` через `new URL`, catch → false) + обернуть `open-one`, `open-many` (фильтр массива), `openTab`; **не трогать** `hijackStartpageToView`
+- [ ] **С2.8** `view.js` → `import-input`: валидация импорта (http/https-схема, `url ≤ 2048`, `name ≤ 200`, `comment ≤ 1000`, ≤ 5000 вкладок — иначе alert и выход)
+- [ ] **С2.9** Вечное «Local is ahead»: `getSyncPayload` ставит `updatedAt: Date.now()` в момент чтения. Новый ключ `blattam-data-updated-at`: писать в `storage.onChanged` (только при изменении `keysToSync`), читать в `getSyncPayload`, проставлять в `applySyncPayload`; сам ключ НЕ входит в `keysToSync` (нет цикла — проверить тестом)
+- [ ] **С2.10** `background.js` → `pullFromGitHub` + `check-sync-status`: пустой gist (`JSON.parse('')` падает) — гвард `!raw || !raw.trim()` → `{ok: true, pulled: false}` / `'unknown'` + проверка `Array.isArray(remotePayload.tabs)`
+- [ ] **С2.11** `triggerDebouncedPush`: `setTimeout(5000)` умирает со смертью SW (~30 с) — перевести на `chrome.alarms` (паттерн уже есть — Device Flow)
+
+**Готово, когда:** тесты зелёные; после push «✅ Синхронизировано»; `javascript:alert(1)` из импортированного файла не открывается; сохранил вкладку → сразу закрыл newtab → через минуту gist обновлён.
+
+### 📦 С3 — «Приватность и поведение»
+- [ ] **С3.12** `refreshBrowserTabsMirror`: фильтр `!t.incognito`. **Решение BlattamBot:** зеркало остаётся в `storage.local` (без инкогнито); перенос в память SW — отдельная задача, если понадобится
+- [ ] **С3.13** Убрать Google Fonts: 3 `<link>` в `view.html` и `popup.html`; `theme.css`: `--font-ui` → `system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif`, `--font-mono` → `ui-monospace, 'Cascadia Mono', Consolas, monospace` (woff2 локально — потом, вручную)
+- [ ] **С3.14** `background.js` → блок `sweepStartpageTabs` (20 × `tabs.query` по 500 мс): обернуть в `if (/OPR\//.test(navigator.userAgent))` — в Chrome на старте воркера холостых запросов нет
+
+**Готово, когда:** тесты зелёные; шрифты не зависят от сети; в Chrome sweep не стучит.
+
+### 📦 С4 — «Честность»: обновления, i18n, документы
+- [ ] **С4.15** Убрать неработающее автообновление: `update_url` из манифеста; честный текст в «О программе» (ручное обновление через Releases); кнопка «Проверить обновления» → «Открыть страницу Releases»; удалить `update.json`. **Единственная сессия, где разрешено трогать тесты:** `TestManifest.test_update_url` + `TestManifest.test_update_json_feed_matches_release` — переписать под новое поведение
+- [ ] **С4.16** `view.html`: навесить `data-i18n` на FAQ + «О программе» (ключи `faq1_q…faq5_a`, `about_title/version/check` уже есть в `i18n.js`, не используются)
+- [ ] **С4.17** Устаревшие тексты: `README.md` («синхронизация появится с аккаунтом»), `faq5_a` (ru + en) — синк вышел в 2.5.0
+- [ ] **С4.18** `getSyncPayload`/`applySyncPayload`: явный whitelist настроек + валидация типов (вместо «списать всё из облака»). **Решение BlattamBot:** темы/пресеты/хоткеи пока НЕ синкаем — честно написать в FAQ
+- [ ] **С4.19** `LICENSE` (MIT) + `PRIVACY.md` (что хранится локально; что уходит в GitHub и только по явному действию; токен в `storage.local`; внешних серверов нет). Пишет BlattamBot, ревьюит BlattamRoach
+
+**Готово, когда:** тесты зелёные (включая переписанные update-тесты); переключатель языка меняет FAQ/About; LICENSE + PRIVACY.md показаны пользователю.
+
+### 📦 С5 — «Chrome Web Store»
+- [ ] **С5.20** `store/`: single-purpose + обоснование каждого разрешения; PRIVACY.md опубликовать на GitHub Pages; финальный чек-лист; `key` **оставляем** (ID не меняется)
+
+**Ручные шаги (BlattamRoach):** аккаунт CWS Developer ($25 разовый) → загрузка zip из `build_zip.py` → ответы на вопросы ревью (тексты готовит BlattamBot).
+**Готово, когда:** расширение опубликовано, либо список замечаний ревью + план правок.
+
+### Стандартное правило каждой сессии
+1. workdir `C:\Users\DI\Desktop\QwenCode\BlatTabs`, ветка `develop`, дерево чистое до старта (откат: `git checkout -- .`)
+2. Базовая линия: **925 тестов** (commit 89f070b); `PYTHONDONTWRITEBYTECODE=1 C:\Python314\python.exe test_plugin.py`
+3. Финал сессии: тесты ≥ базовой линии, 0 падений → ROADMAP.md обновлён → **стоп, ждём «коммити»**
+4. Чек-лист перед релизом (если трогался build): zip в чистую папку → Load unpacked → без «Ошибок» → Ctrl+T рендерится → сохранить/удалить/вернуть вкладку → GitHub: вход → push → pull → clear cloud → sync → disconnect → консоли newtab и SW пустые → SHA-256 в описании релиза
+5. При дефиците времени: С1 (все) → С2.9 → С2.10 → С2.11 → С3.13 → С3.14 → С4.15, остальное постепенно
+
+---
+
 ## 🚀 Фичи для реализации
 
 ### Быстрые (1 коммит)
