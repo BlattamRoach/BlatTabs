@@ -5,17 +5,22 @@ BlatTabs тесты через Playwright.
 
 Запуск: PYTHONDONTWRITEBYTECODE=1 C:\Python314\python.exe test_plugin.py
 """
+import http.server
 import importlib.util
 import json
 import os
 import re
+import socketserver
+import threading
 import pytest
 import struct
+import urllib.parse
 import zlib
 import zipfile
 from playwright.sync_api import sync_playwright
 
-EXT_PATH = r"C:\Users\DI\Desktop\QwenCode\BlatTabs"
+# Корень репозитория = папка этого файла (тесты запускаются из любой CWD)
+EXT_PATH = os.path.dirname(os.path.abspath(__file__))
 
 
 # === Моки Chrome API ===
@@ -663,6 +668,17 @@ class TestManifest:
         with zipfile.ZipFile(zip_path) as zf:
             zmanifest = json.loads(zf.read("manifest.json").decode("utf-8"))
             assert zmanifest["version"] == ver
+
+    def test_oauth2_scopes_gist(self):
+        # С1.5: scope сужен repo → gist (синку нужны только gist-API)
+        m = json.load(open(f"{EXT_PATH}/manifest.json"))
+        assert m["oauth2"]["scopes"] == ["gist"]
+
+    def test_key_not_removed(self):
+        # Регрессия: `key` остаётся в манифесте — фиксирует ID расширения,
+        # на который завязан OAuth-callback (chromiumapp.org-URL)
+        m = json.load(open(f"{EXT_PATH}/manifest.json"))
+        assert m.get("key"), "manifest key removed — extension ID would change"
 
 
 
@@ -7388,6 +7404,8 @@ class TestRelease:
         "view.html",
         "view.js",
         "theme.css",
+        "oauth-callback.html",
+        "oauth-callback.js",
         "_locales/ru/messages.json",
         "_locales/en/messages.json",
         "icons/icon16.png",
@@ -19955,6 +19973,7 @@ class TestAccountDeviceCode:
             return orig(msg, cb);
           };
           chrome.identity = {
+            getRedirectURL: function () { return 'https://mock-extension-id.chromiumapp.org/'; },
             launchWebAuthFlow: function (opts, cb) {
               chrome.runtime.lastError = { message: 'mock: auth window failed' };
               if (cb) cb();
@@ -20375,6 +20394,7 @@ class TestGithubModal:
             return orig(msg, cb);
           };
           chrome.identity = {
+            getRedirectURL: function () { return 'https://mock-extension-id.chromiumapp.org/'; },
             launchWebAuthFlow: function (opts, cb) {
               chrome.runtime.lastError = { message: 'mock: auth window failed' };
               if (cb) cb();
@@ -20824,7 +20844,8 @@ class TestVerifyAuthErrorAndRetry:
             }
             throw new Error('unexpected fetch: ' + url);
           };
-          chrome.storage.local.set({ 'github-token': 't' });
+          // Маркер gist-1 — иначе стартовая проверка SW удалила бы токен
+          chrome.storage.local.set({ 'github-token': 't', 'blattam-auth-scope': 'gist-1' });
         """)
         res = call_msg(self.page, "verify-github")
         assert res == {"success": False, "token_present": True, "error": "api 401"}, res
@@ -20835,7 +20856,8 @@ class TestVerifyAuthErrorAndRetry:
           window.fetch = async function (url) {
             throw new Error('mock network failure: ' + url);
           };
-          chrome.storage.local.set({ 'github-token': 't' });
+          // Маркер gist-1 — иначе стартовая проверка SW удалила бы токен
+          chrome.storage.local.set({ 'github-token': 't', 'blattam-auth-scope': 'gist-1' });
         """)
         res = call_msg(self.page, "verify-github")
         assert res == {"success": False, "token_present": True, "error": "network"}, res
@@ -21407,6 +21429,229 @@ class TestDeviceFlowBackground:
         assert r1["user_code"] == r2["user_code"] == "ABCD-1234", (r1, r2)
         codes = self.page.evaluate("window.__fetchCalls.filter(u => u.indexOf('/login/device/code') !== -1).length")
         assert codes == 1, codes
+
+
+# ==========================================
+#  OAUTH CALLBACK: oauth-callback.html/js (С1.2)
+# ==========================================
+
+@pytest.fixture(scope="module")
+def callback_server():
+    """Локальный HTTP-сервер на корне репо: callback-страница с реальным
+    query-строком (?code= / ?error=), как при редиректе GitHub."""
+    # http.server.SimpleHTTPRequestHandler — фабричная ФУНКЦИЯ (Python 3),
+    # класс не наследуется — оборачиваем инстансирование
+    def _make_handler(request, client_address, server):
+        return http.server.SimpleHTTPRequestHandler(
+            request, client_address, server, directory=EXT_PATH)
+    httpd = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _make_handler)
+    port = httpd.server_address[1]
+    th = threading.Thread(target=httpd.serve_forever, daemon=True)
+    th.start()
+    yield "http://127.0.0.1:%d" % port
+    httpd.shutdown()
+    httpd.server_close()
+
+
+class TestOAuthCallbackPage:
+    """oauth-callback.html/js: GitHub редиректит сюда с ?code= / ?error=.
+    Инлайн-<script> вынесен в oauth-callback.js (CSP MV3: script-src 'self'
+    блокирует инлайн); логика прежняя: ?error= → «Ошибка авторизации: …»,
+    иначе (в т.ч. ?code=) → «Готово! Это окно можно закрыть.»"""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    def test_html_no_inline_script(self):
+        html = load_file("oauth-callback.html")
+        assert "<script>" not in html, "инлайн <script> — блокируется CSP MV3 (script-src 'self')"
+        assert '<script src="oauth-callback.js"></script>' in html
+
+    def test_js_file_contains_logic(self):
+        js = load_file("oauth-callback.js")
+        assert "URLSearchParams(location.search)" in js
+        assert "params.get('error')" in js
+        assert "Ошибка авторизации" in js
+        assert "Готово! Это окно можно закрыть." in js
+
+    def test_code_param_shows_done(self, callback_server):
+        self.page.goto(callback_server + "/oauth-callback.html?code=abc123")
+        self.page.wait_for_timeout(50)
+        assert self.page.evaluate("document.getElementById('msg').textContent") == "Готово! Это окно можно закрыть."
+
+    def test_error_param_shows_message(self, callback_server):
+        self.page.goto(callback_server + "/oauth-callback.html?error=access_denied")
+        self.page.wait_for_timeout(50)
+        assert self.page.evaluate("document.getElementById('msg').textContent") == "Ошибка авторизации: access_denied"
+
+    def test_no_params_shows_done(self, callback_server):
+        self.page.goto(callback_server + "/oauth-callback.html")
+        self.page.wait_for_timeout(50)
+        assert self.page.evaluate("document.getElementById('msg').textContent") == "Готово! Это окно можно закрыть."
+
+
+# ==========================================
+#  OAUTH LOGIN: redirectUri из identity (С1.4) + scope gist (С1.5)
+# ==========================================
+
+class TestOAuthLoginRedirect:
+    """startGitHubLogin: redirect_uri = chrome.identity.getRedirectURL()
+    (chromiumapp.org-URL — единственная зарегистрированная в OAuth App
+    GitHub); scope в authorize-URL — gist; тот же redirectUri уходит в
+    oauth-exchange."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    def test_redirect_uri_from_identity_gist_scope(self):
+        load_view(self.page)
+        self.page.wait_for_timeout(150)
+        self.page.evaluate("""() => {
+          const REDIRECT = 'https://mock-extension-id.chromiumapp.org/';
+          chrome.identity = {
+            getRedirectURL: function () { return REDIRECT; },
+            launchWebAuthFlow: function (opts, cb) {
+              window.__authUrl = opts.url;
+              if (cb) cb(REDIRECT + '?code=abc123');
+              return Promise.resolve(REDIRECT + '?code=abc123');
+            }
+          };
+          const orig = chrome.runtime.sendMessage.bind(chrome.runtime);
+          chrome.runtime.sendMessage = function (msg, cb) {
+            if (msg && msg.action === 'oauth-exchange') {
+              window.__exchange = msg;
+              if (cb) cb('gh-token');
+              return Promise.resolve('gh-token');
+            }
+            return orig(msg, cb);
+          };
+          const origManifest = chrome.runtime.getManifest.bind(chrome.runtime);
+          chrome.runtime.getManifest = function () {
+            return Object.assign({}, origManifest(), { oauth2: { client_id: 'mock-client' } });
+          };
+        }""")
+        self.page.click("#account-slot")
+        self.page.wait_for_timeout(100)
+        self.page.click("#github-connect-btn")
+        self.page.wait_for_timeout(150)
+        d = json.loads(self.page.evaluate("""JSON.stringify({
+          url: window.__authUrl || null,
+          exchange: window.__exchange || null
+        })"""))
+        assert d["url"] is not None, d
+        # redirect_uri — из identity.getRedirectURL(), а не chrome-extension://
+        assert "redirect_uri=" + urllib.parse.quote(
+            "https://mock-extension-id.chromiumapp.org/", safe="") in d["url"], d["url"]
+        assert "chrome-extension://" not in d["url"], d["url"]
+        # С1.5: scope = gist
+        assert "scope=gist" in d["url"], d["url"]
+        # code получен → oauth-exchange с тем же redirectUri
+        assert d["exchange"] is not None and d["exchange"]["action"] == "oauth-exchange", d
+        assert d["exchange"]["code"] == "abc123", d
+        assert d["exchange"]["redirectUri"] == "https://mock-extension-id.chromiumapp.org/", d
+
+
+# ==========================================
+#  SCOPE-МАРКЕР blattam-auth-scope (С1.6)
+# ==========================================
+
+class TestAuthScopeMarker:
+    """background.js: при записи GitHub-токена (exchange / успешный device-полл)
+    пишется маркер blattam-auth-scope: 'gist-1' (тот же storage, что
+    github-token); на старте SW: токен есть, а маркер ≠ 'gist-1' → удаляются
+    github-token и blattam-github-login (принудительный re-login)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        page.goto("about:blank")
+        page.evaluate(MOCK_CHROME)
+
+    def _install_fetch_mock(self, token_res=None):
+        self.page.evaluate("""(tr) => {
+          window.__fetchCalls = [];
+          window.__tokenRes = tr || { error: 'authorization_pending' };
+          window.fetch = async function (url, opts) {
+            window.__fetchCalls.push(String(url));
+            let body;
+            if (String(url).indexOf('/login/device/code') !== -1) {
+              body = { device_code: 'DC-1', user_code: 'ABCD-1234', verification_uri: 'https://github.com/login/device', verification_uri_complete: 'https://github.com/login/device#ABCD-1234', interval: 5, expires_in: 900 };
+            } else if (String(url).indexOf('/login/oauth/access_token') !== -1) {
+              body = window.__tokenRes;
+            } else body = { ok: false };
+            return { json: async () => body, ok: true, status: 200 };
+          };
+        }""", token_res or {"error": "authorization_pending"})
+
+    def _load_bg(self, seed_js=""):
+        self.page.evaluate(seed_js)
+        self.page.evaluate(load_file("background.js") + "; 'loaded'")
+        self.page.evaluate("""() => {
+          const orig = chrome.runtime.getManifest.bind(chrome.runtime);
+          chrome.runtime.getManifest = function () {
+            return Object.assign({}, orig(), { oauth2: { client_id: 'mock-client' } });
+          };
+        }""")
+        # стартовая проверка — async (microtask); даём ей завершиться
+        self.page.wait_for_timeout(100)
+
+    # --- e. стартовая проверка ---
+
+    def test_start_token_with_marker_kept(self):
+        seed = ("chrome.storage.local._data['github-token'] = 't';"
+                "chrome.storage.local._data['blattam-github-login'] = 'roach';"
+                "chrome.storage.local._data['blattam-auth-scope'] = 'gist-1';")
+        self._load_bg(seed)
+        assert read_local(self.page, "github-token") == "t"
+        assert read_local(self.page, "blattam-github-login") == "roach"
+        assert read_local(self.page, "blattam-auth-scope") == "gist-1"
+
+    def test_start_token_without_marker_purged(self):
+        seed = ("chrome.storage.local._data['github-token'] = 't';"
+                "chrome.storage.local._data['blattam-github-login'] = 'roach';")
+        self._load_bg(seed)
+        assert read_local(self.page, "github-token") is None
+        assert read_local(self.page, "blattam-github-login") is None
+
+    def test_start_token_with_other_marker_purged(self):
+        seed = ("chrome.storage.local._data['github-token'] = 't';"
+                "chrome.storage.local._data['blattam-github-login'] = 'roach';"
+                "chrome.storage.local._data['blattam-auth-scope'] = 'repo-0';")
+        self._load_bg(seed)
+        assert read_local(self.page, "github-token") is None
+        assert read_local(self.page, "blattam-github-login") is None
+
+    def test_start_no_token_noop(self):
+        self._load_bg("chrome.storage.local._data['blattam-github-login'] = 'roach';")
+        # токена нет — чужой логин-кэш не трогаем (нет оснований для re-login)
+        assert read_local(self.page, "github-token") is None
+        assert read_local(self.page, "blattam-github-login") == "roach"
+
+    # --- f. запись маркера при получении токена ---
+
+    def test_oauth_exchange_writes_marker(self):
+        self._install_fetch_mock({"access_token": "gh-exchange-token"})
+        self._load_bg()
+        res = call_msg(self.page, "oauth-exchange", code="c1",
+                       redirectUri="https://mock-extension-id.chromiumapp.org/")
+        assert res == "gh-exchange-token", res
+        assert read_local(self.page, "github-token") == "gh-exchange-token"
+        assert read_local(self.page, "blattam-auth-scope") == "gist-1"
+
+    def test_device_poll_success_writes_marker(self):
+        self._install_fetch_mock({"access_token": "gh-device-token"})
+        self._load_bg()
+        call_msg(self.page, "device-flow-start")
+        res = call_msg(self.page, "device-flow-poll")
+        assert res.get("connected") is True, res
+        assert read_local(self.page, "github-token") == "gh-device-token"
+        assert read_local(self.page, "blattam-auth-scope") == "gist-1"
+        # повторный запуск SW с токеном + маркером — токен сохраняется
+        self.page.evaluate(load_file("background.js") + "; 'reloaded'")
+        self.page.wait_for_timeout(100)
+        assert read_local(self.page, "github-token") == "gh-device-token"
 
 class TestGithubSyncBackground:
     """background.js: sync-now отвечает {pulled, pushed, error} с реальной

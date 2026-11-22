@@ -5587,10 +5587,14 @@ loadLang().then(function () {
   // окно; из background это падало бы с «Authorization page could not be loaded»)
   function startGitHubLogin() {
     const m = chrome.runtime.getManifest();
-    const redirectUri = chrome.runtime.getURL('oauth-callback.html');
+    // redirect_uri = chromiumapp.org-URL расширения (ID из `key` в manifest) —
+    // единственная редирект-URL, зарегистрированная в OAuth App GitHub;
+    // chrome.runtime.getURL('oauth-callback.html') (chrome-extension://…)
+    // GitHub не принимает → «redirect_uri mismatch»
+    const redirectUri = chrome.identity.getRedirectURL();
     const authUrl = 'https://github.com/login/oauth/authorize'
       + '?client_id=' + encodeURIComponent(m.oauth2.client_id)
-      + '&scope=' + encodeURIComponent('repo')
+      + '&scope=' + encodeURIComponent('gist')
       + '&redirect_uri=' + encodeURIComponent(redirectUri);
     chrome.identity.launchWebAuthFlow({ url: authUrl, interactive: true }, (resultUrl) => {
       if (chrome.runtime.lastError) {

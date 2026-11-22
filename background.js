@@ -44,7 +44,10 @@ async function exchangeGitHubCode(code, redirectUri) {
   });
   const data = await resp.json();
   if (!data.access_token) throw new Error(data.error_description || data.error || 'Token exchange failed');
-  await chrome.storage.local.set({ 'github-token': data.access_token });
+  // Маркер blattam-auth-scope: токен выдан под scope gist (регистрация OAuth
+  // App); стартовая проверка SW сверяет его и принудительно пере-логинит
+  // при «чужом» (repo-эпохе) токене
+  await chrome.storage.local.set({ 'github-token': data.access_token, 'blattam-auth-scope': 'gist-1' });
   await chrome.storage.local.remove('github-auth-error');
   return data.access_token;
 }
@@ -85,7 +88,8 @@ async function deviceFlowPollOnce(state) {
       return { connected: false, pending: true, network: true };
     }
     if (result.access_token) {
-      await chrome.storage.local.set({ 'github-token': result.access_token });
+      // Маркер blattam-auth-scope — см. exchangeGitHubCode
+      await chrome.storage.local.set({ 'github-token': result.access_token, 'blattam-auth-scope': 'gist-1' });
       await chrome.storage.local.remove('github-auth-error');
       await chrome.storage.local.remove(DEVICE_FLOW_KEY);
       chrome.alarms.clear(DEVICE_ALARM);
@@ -135,7 +139,7 @@ async function deviceFlowStart() {
   const resp = await fetch('https://github.com/login/device/code', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-    body: JSON.stringify({ client_id: clientId, scope: 'repo' })
+    body: JSON.stringify({ client_id: clientId, scope: 'gist' })
   });
   const data = await resp.json();
   if (!data.device_code) throw new Error(data.error_description || data.error || 'device flow failed');
@@ -963,6 +967,19 @@ chrome.commands.onCommand.addListener((command) => {
 // Автомиграция при загрузке расширения: вкладки sync → local + legacy-папки
 migrateTabsToLocalStorage();
 ensureSpaces();
+
+// === Миграция scope repo → gist: принудительный re-login ===
+// Старые версии записывали github-token без маркера (токен repo-scope).
+// На старте SW: токен есть, а blattam-auth-scope ≠ 'gist-1' — удаляем
+// github-token и кэш логина blattam-github-login (view покажет
+// «Не подключён» — пользователь заново входит под scope gist).
+async function purgeStaleScopeToken() {
+  const r = await chrome.storage.local.get(['github-token', 'blattam-auth-scope']);
+  if (r['github-token'] && r['blattam-auth-scope'] !== 'gist-1') {
+    await chrome.storage.local.remove(['github-token', 'blattam-github-login']);
+  }
+}
+purgeStaleScopeToken();
 // === Зеркало открытых вкладок браузера (blattam-browser-tabs) ===
 // Правая рейка newtab-страницы дублирует открытые вкладки (все окна, в
 // порядке верхней полосы). Единственный реальный источник зеркала — здесь

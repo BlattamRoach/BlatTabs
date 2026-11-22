@@ -42,6 +42,8 @@ def build_files():
         "view.html",
         "view.js",
         "theme.css",
+        "oauth-callback.html",
+        "oauth-callback.js",
         "_locales/ru/messages.json",
         "_locales/en/messages.json",
         "icons/icon16.png",

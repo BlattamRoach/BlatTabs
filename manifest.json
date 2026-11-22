@@ -45,6 +45,6 @@
   },
   "oauth2": {
     "client_id": "Ov23liAnTVu9E7T5e7ec",
-    "scopes": ["repo"]
+    "scopes": ["gist"]
   }
 }
