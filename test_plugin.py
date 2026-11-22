@@ -7305,6 +7305,7 @@ class TestOperaStartpage:
         # Opera при запуске) — sweep при старте SW (chrome.tabs.query) ловит её.
         self.page.goto("about:blank")
         self.page.evaluate(MOCK_CHROME)
+        self.page.evaluate("Object.defineProperty(navigator, 'userAgent', {configurable: true, value: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 OPR/94.0.0.0'})")
         self.page.evaluate(
             "chrome.tabs._tabs = ["
             "{id: 21, url: 'chrome://startpage/', windowId: 1, index: 0}, "
@@ -7319,11 +7320,110 @@ class TestOperaStartpage:
     def test_startup_sweep_noop_when_no_startpage(self):
         self.page.goto("about:blank")
         self.page.evaluate(MOCK_CHROME)
+        self.page.evaluate("Object.defineProperty(navigator, 'userAgent', {configurable: true, value: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 OPR/94.0.0.0'})")
         self.page.evaluate(
             "chrome.tabs._tabs = [{id: 31, url: 'https://example.com', windowId: 1, index: 0}];")
         self.page.evaluate(load_file("background.js") + "; 'loaded'")
         self.page.wait_for_timeout(100)
         assert self._last_update() is None
+
+class TestSweepOperaOnly:
+    """Стартовый sweep (скан startpage-вкладок при старте SW, 20 x chrome.tabs.query)
+    по 500 мс) работает только в Opera (userAgent содержит OPR/): в Chrome на
+    старте SW холостых запросов нет (С3.14). Перехват startpage-вкладок по событиям
+    onCreated/onUpdated остаётся безусловным — в Chrome это no-op (startpage-URL
+    не встречается)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        page.goto("about:blank")
+        page.evaluate(MOCK_CHROME)
+
+    def _fire_created(self, tab):
+        self.page.evaluate("chrome.tabs.onCreated._fire(%s)" % json.dumps(tab))
+
+    def _last_update(self):
+        return self.page.evaluate("chrome.tabs._lastUpdate")
+
+    def test_sweep_inactive_without_opera_ua(self):
+        self.page.evaluate(
+            "chrome.tabs._tabs = [{id: 41, url: 'chrome://startpage/', windowId: 1, index: 0}];")
+        self.page.evaluate(load_file("background.js") + "; 'loaded'")
+        self.page.wait_for_timeout(700)
+        assert self._last_update() is None
+
+    def test_event_hijack_still_works_without_opera_ua(self):
+        self.page.evaluate(load_file("background.js") + "; 'loaded'")
+        self._fire_created({"id": 51, "url": "chrome://startpage/"})
+        lu = self._last_update()
+        assert lu is not None
+        assert lu["opts"]["url"] == "chrome-extension://mock-extension-id/view.html"
+
+class TestRailMirrorIncognito:
+    """Зеркало вкладок браузера (правая рейка newtab-страницы,
+    storage.local 'blattam-browser-tabs') не включает инкогнито-вкладки —
+    refreshBrowserTabsMirror фильтрует их по !t.incognito (С3.12).
+    Исключение вкладок самой newtab-страницы (view.html) сохранено."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        page.goto("about:blank")
+        page.evaluate(MOCK_CHROME)
+
+    def _seed(self, tabs):
+        self.page.evaluate("chrome.tabs._tabs = %s;" % json.dumps(tabs))
+        self.page.evaluate(load_file("background.js") + "; 'loaded'")
+        self.page.wait_for_timeout(300)
+
+    def _mirror(self):
+        raw = self.page.evaluate(
+            "JSON.stringify(chrome.storage.local._data['blattam-browser-tabs'])")
+        return json.loads(raw) if raw else []
+    def test_incognito_tab_excluded_from_mirror(self):
+        self._seed([
+            {"id": 101, "title": "Normal", "url": "https://n.com",
+             "favIconUrl": "", "windowId": 1, "index": 0},
+            {"id": 102, "title": "Secret", "url": "https://s.com",
+             "favIconUrl": "", "windowId": 1, "index": 1, "incognito": True},
+        ])
+        mirror = self._mirror()
+        assert any(t["id"] == 101 for t in mirror)
+        assert not any(t["id"] == 102 for t in mirror)
+
+    def test_regular_tab_still_mirrored(self):
+        self._seed([
+            {"id": 101, "title": "Normal", "url": "https://n.com",
+             "favIconUrl": "", "windowId": 1, "index": 0},
+        ])
+        rec = next(t for t in self._mirror() if t["id"] == 101)
+        assert rec["title"] == "Normal"
+        assert rec["url"] == "https://n.com"
+        assert rec["windowId"] == 1
+        assert rec["index"] == 0
+
+    def test_newtab_page_still_excluded(self):
+        self._seed([
+            {"id": 104, "url": "chrome-extension://mock-extension-id/view.html",
+             "windowId": 1, "index": 0},
+        ])
+        assert self._mirror() == []
+
+    def test_incognito_excluded_after_tab_event(self):
+        self._seed([
+            {"id": 101, "title": "Normal", "url": "https://n.com",
+             "favIconUrl": "", "windowId": 1, "index": 0},
+        ])
+        tab = {"id": 103, "url": "https://inc.com", "title": "I",
+               "favIconUrl": "", "windowId": 1, "index": 1, "incognito": True}
+        self.page.evaluate(
+            "chrome.tabs._tabs.push(%s); chrome.tabs.onCreated._fire(%s);"
+            % (json.dumps(tab), json.dumps(tab)))
+        self.page.wait_for_timeout(300)
+        mirror = self._mirror()
+        assert any(t["id"] == 101 for t in mirror)
+        assert not any(t["id"] == 103 for t in mirror)
 
 # ==========================================
 #  СРЕДНИЙ КЛИК ПО КАРТОЧКЕ — фоновая вкладка
@@ -11051,6 +11151,62 @@ class TestCardNameDarkTone:
         assert d["name"] == self._hex_to_rgb(d["cardName"]), d
         assert d["cardName"].lower() != d["text"].lower(), d
         assert self._lum(d["name"]) < self._lum(self._hex_to_rgb(d["text"])), d
+
+
+class TestSystemFonts:
+    """Волна C3.13: Google Fonts (Geist) убрано — системные font-стеки.
+    view.html/popup.html — без ссылок fonts.googleapis.com/fonts.gstatic.com;
+    theme.css: --font-ui/--font-mono — системные стеки (Geist нет);
+    computed font-family в view — system-ui/Segoe UI, без Geist (light+dark)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    TABS = [{"name": "GitHub", "url": "https://github.com"}]
+
+    def _page_text(self, name):
+        with open(os.path.join(EXT_PATH, name), "r", encoding="utf-8") as f:
+            return f.read()
+
+    def _inject_real_styles(self):
+        theme = load_file("theme.css")
+        html = load_file("view.html")
+        style = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate(
+            "(styles) => { var st = document.createElement('style'); st.textContent = styles; document.head.appendChild(st); }",
+            [theme + "\n" + style])
+
+    def test_no_google_fonts_links_in_pages(self):
+        for name in ("view.html", "popup.html"):
+            content = self._page_text(name)
+            for bad in ("fonts.googleapis.com", "fonts.gstatic.com", "Geist"):
+                assert bad not in content, (name, bad)
+            assert "theme.css" in content, name
+
+    def test_theme_css_font_stacks_system(self):
+        content = self._page_text("theme.css")
+        assert "--font-ui: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;" in content
+        assert "--font-mono: ui-monospace, 'Cascadia Mono', Consolas, monospace;" in content
+        assert "Geist" not in content
+
+    def _computed_family(self, theme):
+        load_view(self.page, tabs=self.TABS, theme=theme)
+        self._inject_real_styles()
+        self.page.wait_for_timeout(150)
+        assert self.page.evaluate("document.documentElement.dataset.theme") == theme
+        return self.page.evaluate(
+            "getComputedStyle(document.querySelector('.tab-name')).fontFamily")
+
+    def test_view_computed_font_system_light(self):
+        fam = self._computed_family("light")
+        assert "system-ui" in fam or "Segoe UI" in fam, fam
+        assert "Geist" not in fam, fam
+
+    def test_view_computed_font_system_dark(self):
+        fam = self._computed_family("dark")
+        assert "system-ui" in fam or "Segoe UI" in fam, fam
+        assert "Geist" not in fam, fam
 
 
 # ==========================================

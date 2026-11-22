@@ -78,8 +78,8 @@
   --rail-right-w: 190px;     /* ширина правой рейки (кастомизируемый, «Размер и форма») */
 
   /* Шрифты */
-  --font-ui: 'Geist', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  --font-mono: 'Geist Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  --font-ui: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Mono', Consolas, monospace;
 }
 
 /* Тёмная тема — теплее и светлее: нейтрально-тёплая приглушённая палитра,
