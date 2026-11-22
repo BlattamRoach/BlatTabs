@@ -1881,6 +1881,21 @@ function appendCard(tab) {
     openUrl(tab.url);
   });
 
+  // Средний клик (колесо) — открыть сайт новой ФОНОВОЙ вкладкой
+  // (chrome.tabs.create, active:false) и остаться на странице плагина:
+  // mousedown гасит autoscroll браузера (preventDefault), auxclick (button 1)
+  // — фоновое открытие (тот же путь, что дроп карточки на правую рейку).
+  // Hover-кнопки (чекбокс/✕/✎) своё поведение сохраняют.
+  card.addEventListener('mousedown', (e) => {
+    if (e.button === 1) e.preventDefault();
+  });
+  card.addEventListener('auxclick', (e) => {
+    if (e.button !== 1) return;
+    if (pdInteractiveTarget(e.target)) return; // чекбокс/✕/✎ держат своё
+    e.preventDefault();
+    openSavedUrlsInBackground([tab.url]);
+  });
+
   // Drag & drop: карточку можно перетащить на чип пространства (переместить)
   // или в зазор между карточками (reorder — глобальные обработчики ниже)
   card.draggable = true;
@@ -5446,9 +5461,9 @@ loadLang().then(function () {
     }
   }
 
-  // Авто-retry verify: при провале (сеть/токен) карточка застревала в
-  // «проверяем» навсегда (других триггеров перерисовки нет). Таймер ведёт
-  // СТРАНИЦА (SW умирает), 30 с, стоп при успехе.
+  // Авто-retry verify: при провале рейка/модалка показывают ошибку,
+  // таймер ведёт СТРАНИЦА (SW умирает), 30 с, стоп при успехе; retry
+  // тихий — модалка не мигает «проверяем» (showChecking=false).
   let verifyRetryTimer = null;
   function clearVerifyRetry() {
     if (verifyRetryTimer) { clearTimeout(verifyRetryTimer); verifyRetryTimer = null; }
@@ -5459,7 +5474,7 @@ loadLang().then(function () {
     verifyRetryTimer = setTimeout(function () {
       verifyRetryTimer = null;
       refreshAccount();
-      renderGitHubModal();
+      renderGitHubModal(false);
     }, ms);
   }
   function isAuthVerifyError(err) {
@@ -5491,8 +5506,9 @@ loadLang().then(function () {
             clearVerifyRetry();
             renderAccount(null, t('account_token_invalid'));
           } else {
-            // Сеть может восстановиться — «проверяем» + авто-retry
-            renderAccount({}, t('account_verifying'));
+            // Стадийность сети убрали: честная ошибка + тихий авто-retry
+            // (сеть может восстановиться; при успехе логин перекроет)
+            renderAccount(null, t('account_verify_error'));
             scheduleVerifyRetry();
           }
           return;
@@ -5628,7 +5644,7 @@ loadLang().then(function () {
     ghStatusSet(text);
   }
 
-  function renderGitHubModal() {
+  function renderGitHubModal(showChecking = true) {
     if (!ghModal || !ghModal.classList.contains('open')) return;
     chrome.storage.local.get(['github-token', 'blattam-github-login', 'github-auth-error'], (r) => {
       if (!r['github-token']) {
@@ -5643,10 +5659,9 @@ loadLang().then(function () {
       if (ghSync) ghSync.style.display = '';
       if (ghClear) ghClear.style.display = '';
       if (ghDisconnect) ghDisconnect.style.display = '';
-      // Статус мгновенно «проверяем» — иначе до ответа verify-github
-      // (до ~35–70 с на плохой сети) виден «Не подключён» при видимой
-      // кнопке «Отключить». Финальный статус перекроет.
-      ghStatusSet(t('account_verifying'));
+      // Вспышка «проверяем» только для пользовательских проверок; тихий
+      // retry (showChecking=false) не мигает статусом.
+      if (showChecking) ghStatusSet(t('account_verifying'));
       if (ghRetry) ghRetry.style.display = '';
       chrome.runtime.sendMessage({ action: 'verify-github' }, (res) => {
         let name = null;
@@ -5664,7 +5679,7 @@ loadLang().then(function () {
             if (ghRetry) ghRetry.style.display = '';
             return;
           }
-          ghStatusSet(t('account_verifying'));
+          ghStatusSet(t('account_verify_error'));
           scheduleVerifyRetry();
           if (ghRetry) ghRetry.style.display = '';
           return;

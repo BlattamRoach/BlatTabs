@@ -7310,6 +7310,71 @@ class TestOperaStartpage:
         assert self._last_update() is None
 
 # ==========================================
+#  СРЕДНИЙ КЛИК ПО КАРТОЧКЕ — фоновая вкладка
+# ==========================================
+
+class TestMiddleClickBackgroundOpen:
+    """Средний клик (колесо) по сохранённой вкладке — сайт открывается новой
+    фоновой вкладкой (chrome.tabs.create, active:false), страница плагина
+    остаётся активной. Левый клик (open-one, active:true) не тронут."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    def test_middle_click_opens_background_tab(self):
+        load_view(self.page, tabs=[{"name": "A", "url": "https://a.com"}])
+        self.page.locator(".tab-card").click(button="middle")
+        last = json.loads(self.page.evaluate("JSON.stringify(window.lastTabCreated)"))
+        assert last == {"url": "https://a.com", "active": False}
+
+    def test_middle_click_single_open_no_left_path(self):
+        load_view(self.page, tabs=[{"name": "A", "url": "https://a.com"},
+                                   {"name": "B", "url": "https://b.com"}])
+        self.page.locator(".tab-card").nth(1).click(button="middle")
+        assert self.page.evaluate("chrome.tabs.createdTabs.length") == 1
+        last = json.loads(self.page.evaluate("JSON.stringify(window.lastTabCreated)"))
+        assert last["url"] == "https://b.com"
+        assert last["active"] is False
+        msg = self.page.evaluate("window.lastMessage && window.lastMessage.action")
+        assert msg != "open-one"
+
+    def test_middle_click_mousedown_autoscroll_prevented(self):
+        load_view(self.page, tabs=[{"name": "A", "url": "https://a.com"}])
+        self.page.evaluate("""
+          window.__mdPrevented = null;
+          document.addEventListener('mousedown', (e) => {
+            if (e.button === 1 && e.target.closest('.tab-card')) {
+              window.__mdPrevented = e.defaultPrevented;
+            }
+          }, false);
+        """)
+        self.page.locator(".tab-card").click(button="middle")
+        assert self.page.evaluate("window.__mdPrevented") is True
+
+    def test_middle_click_on_name_opens_background(self):
+        load_view(self.page, tabs=[{"name": "Wiki", "url": "https://wiki.example"}])
+        self.page.locator(".tab-card .tab-name").click(button="middle")
+        last = json.loads(self.page.evaluate("JSON.stringify(window.lastTabCreated)"))
+        assert last == {"url": "https://wiki.example", "active": False}
+        assert self.page.locator(".tab-card .tab-name").inner_text() == "Wiki"
+
+    def test_middle_click_on_hover_buttons_no_open(self):
+        load_view(self.page, tabs=[{"name": "A", "url": "https://a.com"}])
+        self.page.locator(".tab-card").hover()
+        for sel in (".tab-select", ".tab-remove", ".tab-edit"):
+            self.page.locator(sel).first.click(button="middle")
+        assert self.page.evaluate("chrome.tabs.createdTabs.length") == 0
+
+    def test_middle_click_left_click_unchanged(self):
+        load_view(self.page, tabs=[{"name": "A", "url": "https://a.com"}])
+        self.page.locator(".tab-card").click()
+        msg = json.loads(self.page.evaluate("JSON.stringify(window.lastMessage)"))
+        assert msg["action"] == "open-one"
+        last = json.loads(self.page.evaluate("JSON.stringify(window.lastTabCreated)"))
+        assert last["active"] is True
+
+# ==========================================
 #  РЕЛИЗ: zip-сборка, иконки, описание магазина
 # ==========================================
 
@@ -7319,9 +7384,12 @@ class TestRelease:
         "background.js",
         "popup.html",
         "popup.js",
+        "i18n.js",
         "view.html",
         "view.js",
         "theme.css",
+        "_locales/ru/messages.json",
+        "_locales/en/messages.json",
         "icons/icon16.png",
         "icons/icon48.png",
         "icons/icon128.png",
@@ -20183,7 +20251,7 @@ class TestDeviceFlowPolling:
             self.page.wait_for_timeout(200)
         assert label == "GitHub: roach", label
 
-    def test_verify_fail_no_cache_shows_verifying(self):
+    def test_verify_fail_no_cache_shows_error(self):
         load_view(self.page)
         self.page.wait_for_timeout(150)
         self.page.evaluate("""() => {
@@ -20204,11 +20272,11 @@ class TestDeviceFlowPolling:
               label: document.querySelector('#account-slot .a-t').textContent,
               sub: document.querySelector('#account-slot .a-s').textContent
             })"""))
-            if d["sub"] == "Подключено · проверяем аккаунт…":
+            if d["sub"] == "GitHub недоступен — проверьте сеть":
                 break
             self.page.wait_for_timeout(200)
-        assert d["label"] == "GitHub", d
-        assert d["sub"] == "Подключено · проверяем аккаунт…", d
+        assert d["label"] == "Аккаунт", d
+        assert d["sub"] == "GitHub недоступен — проверьте сеть", d
 
     def test_verify_fail_no_token_present_shows_error(self):
         load_view(self.page)
@@ -20586,18 +20654,18 @@ class TestVerifyAuthErrorAndRetry:
           retry: document.getElementById('github-retry-btn').style.display
         })"""))
 
-    def test_rail_network_error_shows_verifying(self):
+    def test_rail_network_error_shows_error(self):
         self._load_view()
         self._install_verify_mock([
             {"success": False, "token_present": True, "error": "network"}])
         d = {}
         for _ in range(10):
             d = self._rail()
-            if d["sub"] == "Подключено · проверяем аккаунт…":
+            if d["sub"] == "GitHub недоступен — проверьте сеть":
                 break
             self.page.wait_for_timeout(200)
-        assert d["sub"] == "Подключено · проверяем аккаунт…", d
-        assert d["label"] == "GitHub", d
+        assert d["sub"] == "GitHub недоступен — проверьте сеть", d
+        assert d["label"] == "Аккаунт", d
 
     def test_rail_network_retry_recovers(self):
         self._load_view()
@@ -20670,10 +20738,10 @@ class TestVerifyAuthErrorAndRetry:
         d = {}
         for _ in range(10):
             d = self._modal()
-            if d["status"] == "Подключено · проверяем аккаунт…":
+            if d["status"] == "GitHub недоступен — проверьте сеть":
                 break
             self.page.wait_for_timeout(200)
-        assert d["status"] == "Подключено · проверяем аккаунт…", d
+        assert d["status"] == "GitHub недоступен — проверьте сеть", d
         assert d["retry"] != "none", d
 
     def test_modal_401_shows_invalid(self):
@@ -20716,7 +20784,7 @@ class TestVerifyAuthErrorAndRetry:
         ])
         self._open_modal()
         for _ in range(10):
-            if self._modal()["status"] == "Подключено · проверяем аккаунт…":
+            if self._modal()["status"] == "GitHub недоступен — проверьте сеть":
                 break
             self.page.wait_for_timeout(200)
         before = self.page.evaluate("window.__verifyCalls")
@@ -20771,6 +20839,259 @@ class TestVerifyAuthErrorAndRetry:
         """)
         res = call_msg(self.page, "verify-github")
         assert res == {"success": False, "token_present": True, "error": "network"}, res
+
+
+class TestVerifyErrorSteadyState:
+    """Стейди-стейт устойчивого провала verify (сеть, токен есть, кэша
+    логина нет): рейка и модалка показывают ошибку account_verify_error
+    вместо вечного «проверяем»; тихий авто-retry (хук __verifyRetryMs =
+    250 ms) — модалка не мигает «проверяем» (renderGitHubModal(false));
+    401/403 и success — без изменений. (Не наследуется от
+    TestVerifyAuthErrorAndRetry: pytest исполняет наследованные тесты
+    повторно — счёт сьюта бы вырос на число тестов родителя.)"""
+
+    ERR = "GitHub недоступен — проверьте сеть"
+    VERIFYING = "Подключено · проверяем аккаунт…"
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self._errors = []
+        page.on("pageerror", self._on_err)
+        yield
+        assert not self._errors, self._errors
+        page.remove_listener("pageerror", self._on_err)
+
+    def _on_err(self, err):
+        self._errors.append(str(err))
+
+    def _load_view(self, lang=None):
+        load_view(self.page, lang=lang)
+        self.page.wait_for_timeout(150)
+
+    def _rail(self):
+        return json.loads(self.page.evaluate("""JSON.stringify({
+          label: document.querySelector('#account-slot .a-t').textContent,
+          sub: document.querySelector('#account-slot .a-s').textContent
+        })"""))
+
+    def _install_verify_mock(self, queue, token=True, retry_ms=250):
+        self.page.evaluate("""(args) => {
+          const orig = chrome.runtime.sendMessage.bind(chrome.runtime);
+          window.__verifyCalls = 0;
+          window.__verifyQueue = args.queue;
+          window.__verifyRetryMs = args.retryMs;
+          chrome.runtime.sendMessage = function (msg, cb) {
+            if (msg && msg.action === 'verify-github') {
+              window.__verifyCalls += 1;
+              const r = window.__verifyQueue.length
+                ? window.__verifyQueue.shift()
+                : { success: false, token_present: true, error: 'network' };
+              if (cb) cb(r);
+              return Promise.resolve(r);
+            }
+            if (msg && msg.action === 'check-sync-status') {
+              if (cb) cb('synced');
+              return Promise.resolve('synced');
+            }
+            return orig(msg, cb);
+          };
+          if (args.token) chrome.storage.local.set({ 'github-token': 't' });
+        }""", {"queue": queue, "retryMs": retry_ms, "token": token})
+
+    def _open_modal(self):
+        self.page.click("#account-slot")
+        self.page.wait_for_timeout(100)
+
+    def _modal(self):
+        return json.loads(self.page.evaluate("""JSON.stringify({
+          status: document.getElementById('github-modal-status').textContent,
+          retry: document.getElementById('github-retry-btn').style.display
+        })"""))
+
+    def _install_delayed_verify_mock(self, delay_ms=400):
+        """Как _install_verify_mock, но ответ verify-github с задержкой
+        (delay_ms) — in-flight-состояние «проверяем» наблюдаемо."""
+        self.page.evaluate("""(args) => {
+          const orig = chrome.runtime.sendMessage.bind(chrome.runtime);
+          window.__verifyCalls = 0;
+          window.__verifyRetryMs = args.retryMs;
+          window.__verifyDelayMs = args.delayMs;
+          chrome.runtime.sendMessage = function (msg, cb) {
+            if (msg && msg.action === 'verify-github') {
+              window.__verifyCalls += 1;
+              const r = { success: false, token_present: true, error: 'network' };
+              setTimeout(function () { if (cb) cb(r); }, window.__verifyDelayMs);
+              return Promise.resolve(r);
+            }
+            if (msg && msg.action === 'check-sync-status') {
+              if (cb) cb('synced');
+              return Promise.resolve('synced');
+            }
+            return orig(msg, cb);
+          };
+          if (args.token) chrome.storage.local.set({ 'github-token': 't' });
+        }""", {"retryMs": 250, "delayMs": delay_ms, "token": True})
+
+    def _wait_modal_status(self, text, tries=15, step=100):
+        d = {}
+        for _ in range(tries):
+            d = self._modal()
+            if d["status"] == text:
+                break
+            self.page.wait_for_timeout(step)
+        return d
+
+    # --- a. Рейка: устойчивый network-провал ---
+
+    def test_rail_network_error_steady_error(self):
+        """Устойчивый провал, кэша нет: стабильная account_verify_error
+        (без спиннера), подпись «Аккаунт» (логина нет)."""
+        self._load_view()
+        self._install_verify_mock([
+            {"success": False, "token_present": True, "error": "network"}])
+        d = {}
+        for _ in range(10):
+            d = self._rail()
+            if d["sub"] == self.ERR:
+                break
+            self.page.wait_for_timeout(200)
+        assert d["sub"] == self.ERR, d
+        assert d["label"] == "Аккаунт", d
+
+    def test_rail_network_error_retry_scheduled(self):
+        """В ошибочном стабейте авто-retry жив (хук 250 ms): счётчик
+        verify продолжает расти после провала."""
+        self._load_view()
+        self._install_verify_mock([
+            {"success": False, "token_present": True, "error": "network"}])
+        d = {}
+        for _ in range(10):
+            d = self._rail()
+            if d["sub"] == self.ERR:
+                break
+            self.page.wait_for_timeout(200)
+        assert d["sub"] == self.ERR, d
+        first = self.page.evaluate("window.__verifyCalls")
+        self.page.wait_for_timeout(700)
+        assert self.page.evaluate("window.__verifyCalls") > first
+
+    # --- b. 401/403: регрессия ---
+
+    def test_rail_401_stays_invalid_no_retry(self):
+        """401 — не сеть: «Токен недействителен», авто-retry НЕ
+        запланирован (мёртвый токен повтором не лечится)."""
+        self._load_view()
+        self._install_verify_mock([
+            {"success": False, "token_present": True, "error": "api 401"}])
+        d = {}
+        for _ in range(10):
+            d = self._rail()
+            if d["sub"] == "Токен недействителен — войдите заново":
+                break
+            self.page.wait_for_timeout(200)
+        assert d["sub"] == "Токен недействителен — войдите заново", d
+        # retry-хук 250 ms: если retry был бы — счётчик стал бы ≥ 2
+        self.page.wait_for_timeout(700)
+        assert self.page.evaluate("window.__verifyCalls") == 1
+
+    # --- c. Модалка: устойчивый network-провал ---
+
+    def test_modal_network_error_shows_error_text(self):
+        """После network-провала статус модалки = account_verify_error,
+        кнопка «Проверить ещё раз» видна."""
+        self._load_view()
+        self._install_verify_mock([
+            {"success": False, "token_present": True, "error": "network"},
+            {"success": False, "token_present": True, "error": "network"}])
+        self._open_modal()
+        d = self._wait_modal_status(self.ERR)
+        assert d["status"] == self.ERR, d
+        assert d["retry"] != "none", d
+
+    # --- d. Модалка: тихий retry ---
+
+    def test_modal_quiet_retry_no_verifying_flash(self):
+        """Отокрытая модалка + устойчивый провал: авто-retry делает verify
+        БЕЗ вспышки «проверяем» — статус остаётся ошибкой и в in-flight
+        окне verify, и после повторного провала."""
+        self._load_view()
+        self._install_delayed_verify_mock()
+        self._open_modal()
+        d = self._wait_modal_status(self.ERR)
+        assert d["status"] == self.ERR, d
+        # Тихий retry уже выстрелил: 3-й verify in-flight (400 ms окно)
+        for _ in range(30):
+            if self.page.evaluate("window.__verifyCalls") >= 3:
+                break
+            self.page.wait_for_timeout(50)
+        assert self.page.evaluate("window.__verifyCalls") >= 3
+        assert self._modal()["status"] == self.ERR
+        self.page.wait_for_timeout(600)
+        assert self._modal()["status"] == self.ERR
+
+    # --- e. Восстановление после транзитного провала ---
+
+    def test_recovery_after_transient_network_error(self):
+        """1-й verify — network, 2-й (авто-retry) — success: рейка
+        показывает логин, кэш blattam-github-login записан, pending-retry
+        снят (verify больше не идёт)."""
+        self._load_view()
+        self._install_verify_mock([
+            {"success": False, "token_present": True, "error": "network"},
+            {"success": True, "user": {"login": "testuser"}},
+        ])
+        d = {}
+        for _ in range(15):
+            d = self._rail()
+            if d["label"] == "GitHub: testuser":
+                break
+            self.page.wait_for_timeout(100)
+        assert d["label"] == "GitHub: testuser", d
+        assert read_local(self.page, "blattam-github-login") == "testuser"
+        n = self.page.evaluate("window.__verifyCalls")
+        self.page.wait_for_timeout(700)  # хук 250 ms: прилететь не должно
+        assert self.page.evaluate("window.__verifyCalls") == n
+
+    # --- f. Кнопка «Проверить ещё раз» ---
+
+    def test_retry_btn_click_verifying_flash_then_verify(self):
+        """Пользовательская проверка: «проверяем» мгновенно
+        (showChecking=true по умолчанию), счётчик verify растёт, финальный
+        статус при провале — ошибка."""
+        self._load_view()
+        self._install_delayed_verify_mock()
+        self._open_modal()
+        d = self._wait_modal_status(self.ERR)
+        assert d["status"] == self.ERR, d
+        before = self.page.evaluate("window.__verifyCalls")
+        self.page.click("#github-retry-btn")
+        for _ in range(20):
+            d = self._modal()
+            if d["status"] == self.VERIFYING:
+                break
+            self.page.wait_for_timeout(50)
+        assert d["status"] == self.VERIFYING, d
+        self.page.wait_for_timeout(700)
+        after = self.page.evaluate("window.__verifyCalls")
+        assert after > before, (before, after)
+        assert self._modal()["status"] == self.ERR
+
+    # --- g. en-локаль ---
+
+    def test_en_locale_network_error(self):
+        """Рейка при network-провале (en): «GitHub unreachable — check
+        your network»."""
+        self._load_view(lang="en")
+        self._install_verify_mock([
+            {"success": False, "token_present": True, "error": "network"}])
+        d = {}
+        for _ in range(10):
+            d = self._rail()
+            if d["sub"] == "GitHub unreachable — check your network":
+                break
+            self.page.wait_for_timeout(200)
+        assert d["sub"] == "GitHub unreachable — check your network", d
 
 
 class TestGithubModalSync:
