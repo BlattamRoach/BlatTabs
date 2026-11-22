@@ -10,7 +10,7 @@
 
 Сохраняйте вкладки одним кликом из popup или горячей клавишей **Ctrl+Shift+S** — и мгновенно возвращайтесь к ним на новой вкладке (Ctrl+T). Пространства и группы синхронизируются между устройствами через `chrome.storage.sync`.
 
-Дизайн — минималистичный монохром в духе Vercel: чёрный/белый/серый, шрифт Geist, тонкие 1px-границы; тёмная тема одним кликом.
+Дизайн — минималистичный монохром в духе Vercel: чёрный/белый/серый, системный шрифт, тонкие 1px-границы; тёмная тема одним кликом.
 
 ### Возможности
 
@@ -46,7 +46,7 @@
 
 Save tabs with one click from the popup or the **Ctrl+Shift+S** hotkey — and jump back to them instantly on the new-tab page (Ctrl+T). Spaces and groups are synchronized across devices via `chrome.storage.sync`.
 
-The design is minimal monochrome, Vercel-style: black/white/grey, Geist font, crisp 1px borders; dark theme in one click.
+The design is minimal monochrome, Vercel-style: black/white/grey, system font, crisp 1px borders; dark theme in one click.
 
 ### Features
 

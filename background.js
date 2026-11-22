@@ -1034,7 +1034,7 @@ purgeStaleScopeToken();
 // Правая рейка newtab-страницы дублирует открытые вкладки (все окна, в
 // порядке верхней полосы). Единственный реальный источник зеркала — здесь
 // (слушатели chrome.tabs, дебаунс ~200 мс); view этот ключ не записывает.
-// Вкладки самой newtab-страницы (view.html) не показываются.
+// Вкладки самой newtab-страницы (view.html) и инкогнито-вкладки не показываются.
 const BROWSER_TABS_KEY = 'blattam-browser-tabs';
 let browserTabsTimer = null;
 function refreshBrowserTabsMirror() {
@@ -1045,7 +1045,7 @@ function refreshBrowserTabsMirror() {
       const tabs = await new Promise((resolve) =>
         chrome.tabs.query({}, (ts) => resolve(ts || [])));
       const list = tabs
-        .filter(t => t && t.url !== selfUrl && t.pendingUrl !== selfUrl)
+        .filter(t => t && !t.incognito && t.url !== selfUrl && t.pendingUrl !== selfUrl)
         .map(t => ({ id: t.id, title: t.title || '', url: t.url || '',
                      favIconUrl: t.favIconUrl || '', windowId: t.windowId, index: t.index }))
         .sort((a, b) => (a.windowId - b.windowId) || (a.index - b.index));
@@ -1104,7 +1104,8 @@ if (chrome.tabs && chrome.tabs.onCreated) {
 // Opera держит в каждом окне, API расширений не видит (нет в chrome.tabs.query, без
 // onCreated/onUpdated) — её нельзя удалить/перенаправить. Скан повторяется каждые
 // 500 мс ~10 секунд, чтобы подхватить видимые startpage-вкладки, проскочившие события.
-if (chrome.tabs && chrome.tabs.query) {
+// Скан только в Opera (userAgent содержит OPR/): в Chrome на старте SW холостых chrome.tabs.query нет (С3.14). Слушатели onCreated/onUpdated (hijackStartpageToView) остаются безусловными — в Chrome это no-op (startpage-URL не встречается).
+if (chrome.tabs && chrome.tabs.query && /OPR\//.test(navigator.userAgent)) {
   function sweepStartpageTabs() {
     chrome.tabs.query({}, (tabs) => {
       (tabs || []).forEach((tab) => hijackStartpageToView(tab.id, tab));
