@@ -11,6 +11,7 @@ import json
 import os
 import re
 import socketserver
+import tempfile
 import threading
 import pytest
 import struct
@@ -24207,3 +24208,177 @@ class TestFaqSyncScope:
         assert data["text"] == data["en"]
         for word in ("github", "tabs", "spaces", "groups", "theme", "per-device"):
             assert word.lower() in data["en"].lower(), (word, data["en"])
+
+
+# ==========================================
+#  VIEW.JS: ЭКСПОРТ/ИМПОРТ ПРЕСЕТОВ (JSON-ФАЙЛ)
+# ==========================================
+
+class TestPresetImportExport:
+    """Кастомизация → «Пресеты»: экспорт ТЕКУЩЕГО вида в blatttabs-preset.json
+    (app/type/version/data, data = формат пресета — 6 полей) + импорт
+    JSON-файла → новый пресет с дефолтным именем. Валидация: data-объект
+    + типы 6 полей (theme строго light/dark), чужие поля отбрасываются.
+    Статус-строка #preset-status (ok/err, авто-скрытие 3s)."""
+
+    VALID_DATA = {"theme": None, "customTheme": {"--bg": "#102030"},
+                  "bgImage": None, "bgImageLeft": None, "bgImageRight": None,
+                  "tabColor": None}
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        self._errors = []
+        page.on("pageerror", self._on_err)
+        self._orig_viewport = page.viewport_size
+        page.set_viewport_size({"width": 1280, "height": 900})
+        yield
+        assert not self._errors, self._errors
+        page.remove_listener("pageerror", self._on_err)
+        page.set_viewport_size(self._orig_viewport)
+
+    def _on_err(self, err):
+        self._errors.append(str(err))
+
+    def _open(self):
+        self.page.locator("#settings-btn").click()
+
+    def _write(self, name, text):
+        path = os.path.join(tempfile.gettempdir(), name)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        return path
+
+    def _set_file(self, path):
+        with open(path, "rb") as f:
+            buf = f.read()
+        self.page.set_input_files("#preset-file-input",
+                                  [{"name": os.path.basename(path),
+                                    "mimeType": "application/json", "buffer": buf}])
+
+    def _wait_presets(self, n):
+        # FileReader в harness'е реальный — импорт async
+        self.page.wait_for_function(
+            "(chrome.storage.local._data['blattam-presets'] || []).length === %d" % n,
+            timeout=5000)
+
+    def _wait_status(self, mode):
+        self.page.wait_for_function(
+            "document.getElementById('preset-status').textContent.length " +
+            ("> 0" if mode == "nonempty" else "=== 0"),
+            timeout=6000)
+
+    def test_export_downloads_json(self):
+        load_view(self.page)
+        self._open()
+        with self.page.expect_download() as dl:
+            self.page.locator("#preset-export-btn").click()
+        download = dl.value
+        assert download.suggested_filename == "blatttabs-preset.json"
+        path = os.path.join(tempfile.gettempdir(), "blatttabs-export-test.json")
+        download.save_as(path)
+        with open(path, encoding="utf-8") as f:
+            obj = json.load(f)
+        assert obj["app"] == "blatttabs"
+        assert obj["type"] == "preset"
+        assert obj["version"] == 1
+        assert set(obj["data"].keys()) == {"theme", "customTheme", "bgImage",
+                                           "bgImageLeft", "bgImageRight", "tabColor"}
+        # пустой view — все шесть полей null
+        assert obj["data"] == {"theme": None, "customTheme": None, "bgImage": None,
+                               "bgImageLeft": None, "bgImageRight": None, "tabColor": None}
+
+    def test_export_reflects_state(self):
+        load_view(self.page, theme="dark", custom_theme={"--bg": "#112233"},
+                  tab_color="#445566")
+        self._open()
+        with self.page.expect_download() as dl:
+            self.page.locator("#preset-export-btn").click()
+        path = os.path.join(tempfile.gettempdir(), "blatttabs-export-state.json")
+        dl.value.save_as(path)
+        with open(path, encoding="utf-8") as f:
+            obj = json.load(f)
+        assert obj["data"]["theme"] == "dark"
+        assert obj["data"]["customTheme"] == {"--bg": "#112233"}
+        assert obj["data"]["tabColor"] == "#445566"
+
+    def test_import_valid_adds_preset(self):
+        load_view(self.page)
+        self._open()
+        payload = {"app": "blatttabs", "type": "preset", "version": 1,
+                   "data": self.VALID_DATA}
+        self._set_file(self._write("import-ok.json", json.dumps(payload)))
+        self._wait_presets(1)
+        presets = self.page.evaluate("chrome.storage.local._data['blattam-presets']")
+        assert len(presets) == 1
+        assert presets[0]["data"] == self.VALID_DATA
+        assert presets[0]["id"].startswith("p")
+        # имя = t('preset_default_name') с {n}=1 (словарь в странице — истина)
+        assert presets[0]["name"] == self.page.evaluate(
+            "t('preset_default_name', {n: 1})")
+        assert self.page.evaluate(
+            "document.querySelectorAll('#preset-list .preset-row').length") == 1
+
+    def test_imported_preset_applies_look(self):
+        load_view(self.page)
+        self._open()
+        payload = {"app": "blatttabs", "type": "preset", "version": 1,
+                   "data": self.VALID_DATA}
+        self._set_file(self._write("import-apply.json", json.dumps(payload)))
+        self._wait_presets(1)
+        self.page.locator("#preset-list .preset-apply").first.click()
+        self.page.wait_for_timeout(50)
+        assert self.page.evaluate(
+            "chrome.storage.local._data['blattam-custom-theme']") == {"--bg": "#102030"}
+        presets = self.page.evaluate("chrome.storage.local._data['blattam-presets']")
+        assert self.page.evaluate(
+            "chrome.storage.local._data['blattam-active-preset']") == presets[0]["id"]
+
+    def test_import_garbage_shows_error(self):
+        load_view(self.page)
+        self._open()
+        self._set_file(self._write("import-garbage.json", "это не json"))
+        self._wait_status("nonempty")
+        assert self.page.evaluate(
+            "document.getElementById('preset-status').textContent") == \
+            self.page.evaluate("I18N.ru['preset_import_err']")
+        assert not self.page.evaluate("chrome.storage.local._data['blattam-presets']")
+
+    def test_import_missing_data_shows_error(self):
+        load_view(self.page)
+        self._open()
+        self._set_file(self._write("import-nodata.json", "{}"))
+        self._wait_status("nonempty")
+        assert self.page.evaluate(
+            "document.getElementById('preset-status').textContent") == \
+            self.page.evaluate("I18N.ru['preset_import_err']")
+        assert not self.page.evaluate("chrome.storage.local._data['blattam-presets']")
+
+    def test_import_bad_field_type_shows_error(self):
+        # theme = 'purple' — не light/dark/null → валидация типов
+        payload = {"app": "blatttabs", "type": "preset", "version": 1,
+                   "data": {"theme": "purple", "customTheme": None, "bgImage": None,
+                            "bgImageLeft": None, "bgImageRight": None, "tabColor": None}}
+        load_view(self.page)
+        self._open()
+        self._set_file(self._write("import-badtype.json", json.dumps(payload)))
+        self._wait_status("nonempty")
+        assert self.page.evaluate(
+            "document.getElementById('preset-status').textContent") == \
+            self.page.evaluate("I18N.ru['preset_import_err']")
+        assert not self.page.evaluate("chrome.storage.local._data['blattam-presets']")
+
+    def test_import_ok_status_and_autohide_en(self):
+        load_view(self.page, lang="en")
+        self._open()
+        payload = {"app": "blatttabs", "type": "preset", "version": 1,
+                   "data": self.VALID_DATA}
+        self._set_file(self._write("import-en.json", json.dumps(payload)))
+        self._wait_status("nonempty")
+        assert self.page.evaluate(
+            "document.getElementById('preset-status').textContent") == \
+            self.page.evaluate("I18N.en['preset_import_ok']")
+        # авто-скрытие через 3s
+        self._wait_status("empty")
+        assert self.page.evaluate(
+            "document.getElementById('preset-status').textContent") == ""

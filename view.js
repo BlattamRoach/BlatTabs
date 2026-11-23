@@ -902,6 +902,81 @@ function syncActivePreset() {
 const presetSaveBtn = document.getElementById('preset-save-btn');
 presetSaveBtn.addEventListener('click', savePresetAsNew);
 
+// Экспорт/импорт пресетов: JSON-файл blatttabs-preset.json (app/type/version/data,
+// data = та же структура, что у preset.data — 6 полей). Экспорт = ТЕКУЩИЙ вид
+// (не привязан к сохранённому пресету).
+const PRESET_FILE_NAME = 'blatttabs-preset.json';
+function buildPresetExport() {
+  const r = {};
+  return new Promise((resolve) => {
+    chrome.storage.local.get(PRESET_KEYS, (res) => {
+      resolve({ app: 'blatttabs', type: 'preset', version: 1, data: presetCollectData(res) });
+    });
+  });
+}
+function exportPreset() {
+  buildPresetExport().then((obj) => {
+    const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = PRESET_FILE_NAME;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+}
+function presetStatus(msg) {
+  const el = document.getElementById('preset-status');
+  if (!el) return;
+  el.textContent = msg || '';
+  clearTimeout(presetStatus._t);
+  presetStatus._t = setTimeout(() => { el.textContent = ''; }, 3000);
+}
+function importPresetFile(file) {
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    let obj = null;
+    try { obj = JSON.parse(String(ev.target.result || '')); } catch (err) { obj = null; }
+    const d = (obj && typeof obj === 'object' && !Array.isArray(obj)) ? obj.data : null;
+    const ok = d && typeof d === 'object' && !Array.isArray(d) &&
+      (d.theme === null || d.theme === 'light' || d.theme === 'dark') &&
+      (d.customTheme === null || (typeof d.customTheme === 'object' && !Array.isArray(d.customTheme))) &&
+      (d.bgImage === null || typeof d.bgImage === 'string') &&
+      (d.bgImageLeft === null || typeof d.bgImageLeft === 'string') &&
+      (d.bgImageRight === null || typeof d.bgImageRight === 'string') &&
+      (d.tabColor === null || typeof d.tabColor === 'string');
+    if (!ok) { presetStatus(t('preset_import_err')); return; }
+    const clean = {
+      theme: (d.theme === 'light' || d.theme === 'dark') ? d.theme : null,
+      customTheme: (d.customTheme && typeof d.customTheme === 'object' && !Array.isArray(d.customTheme)) ? d.customTheme : null,
+      bgImage: (typeof d.bgImage === 'string' && d.bgImage) ? d.bgImage : null,
+      bgImageLeft: (typeof d.bgImageLeft === 'string' && d.bgImageLeft) ? d.bgImageLeft : null,
+      bgImageRight: (typeof d.bgImageRight === 'string' && d.bgImageRight) ? d.bgImageRight : null,
+      tabColor: (typeof d.tabColor === 'string' && d.tabColor) ? d.tabColor : null
+    };
+    chrome.storage.local.get(['blattam-presets'], (r) => {
+      const presets = r['blattam-presets'] || [];
+      const preset = { id: genId('p'), name: t('preset_default_name', { n: presets.length + 1 }), createdAt: Date.now(), data: clean };
+      presets.push(preset);
+      chrome.storage.local.set({ 'blattam-presets': presets });
+      presetStatus(t('preset_import_ok'));
+      renderPresetList();
+    });
+  };
+  reader.readAsText(file);
+}
+document.getElementById('preset-export-btn').addEventListener('click', exportPreset);
+const presetFileInput = document.getElementById('preset-file-input');
+document.getElementById('preset-import-btn').addEventListener('click', () => presetFileInput.click());
+presetFileInput.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  importPresetFile(file);
+});
+
 // «Фон» в настройках: картинка → data URL → blattam-bg-image (local).
 const bgFileBtn = document.getElementById('bg-file-btn');
 const bgFileInput = document.getElementById('bg-file-input');
