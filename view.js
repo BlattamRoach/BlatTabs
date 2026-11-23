@@ -4573,6 +4573,36 @@ function a_click(url, download) {
   a.click();
 }
 
+// Валидация импорта (общая для «Импорт» и «Импорт с заменой»), С2.8:
+// небезопасные/чрезмерные данные не пропускаются (только http/https,
+// url ≤ 2048, name ≤ 200, comment ≤ 1000, ≤ 5000 вкладок). Возвращает
+// { ok: true, tabs } либо { ok: false, error } — i18n-ключ alert'а.
+function validateImportTabs(fileTabs) {
+  if (!Array.isArray(fileTabs) || fileTabs.length > 5000) {
+    return { ok: false, error: 'import_too_many_tabs' };
+  }
+  for (const tab of fileTabs) {
+    if (!tab) continue; // не-объекты и так отбрасывает импорт-фильтр (t.url && t.name)
+    if (tab.url != null && tab.url !== '') {
+      let urlOk = false;
+      if (typeof tab.url === 'string' && tab.url.length <= 2048) {
+        try {
+          const pu = new URL(tab.url);
+          urlOk = pu.protocol === 'http:' || pu.protocol === 'https:';
+        } catch (e) { urlOk = false; }
+      }
+      if (!urlOk) return { ok: false, error: 'import_invalid_url' };
+    }
+    if (tab.name != null && (typeof tab.name !== 'string' || tab.name.length > 200)) {
+      return { ok: false, error: 'import_invalid_name' };
+    }
+    if (tab.comment != null && String(tab.comment).length > 1000) {
+      return { ok: false, error: 'import_invalid_comment' };
+    }
+  }
+  return { ok: true, tabs: fileTabs };
+}
+
 document.getElementById('import-btn').addEventListener('click', () => {
   document.getElementById('import-input').click();
 });
@@ -4599,27 +4629,9 @@ document.getElementById('import-input').addEventListener('change', (e) => {
 
       // С2.8: валидация импорта — небезопасные/чрезмерные данные НЕ импортируем
       // (alert и выход, ничего не записываем): только http/https, url ≤ 2048,
-      // name ≤ 200, comment ≤ 1000, ≤ 5000 вкладок
-      if (fileTabs.length > 5000) { alert(t('import_too_many_tabs')); return; }
-      for (const tab of fileTabs) {
-        if (!tab) continue; // не-объекты и так отбрасывает импорт-фильтр (t.url && t.name)
-        if (tab.url != null && tab.url !== '') {
-          let urlOk = false;
-          if (typeof tab.url === 'string' && tab.url.length <= 2048) {
-            try {
-              const pu = new URL(tab.url);
-              urlOk = pu.protocol === 'http:' || pu.protocol === 'https:';
-            } catch (e) { urlOk = false; }
-          }
-          if (!urlOk) { alert(t('import_invalid_url')); return; }
-        }
-        if (tab.name != null && (typeof tab.name !== 'string' || tab.name.length > 200)) {
-          alert(t('import_invalid_name')); return;
-        }
-        if (tab.comment != null && String(tab.comment).length > 1000) {
-          alert(t('import_invalid_comment')); return;
-        }
-      }
+      // name ≤ 200, comment ≤ 1000, ≤ 5000 вкладок — общий хелпер
+      const validation = validateImportTabs(fileTabs);
+      if (!validation.ok) { alert(t(validation.error)); return; }
 
       if (fileSpaces === null && (Array.isArray(data.folders) || fileTabs.some(t => t && t.folderId != null))) {
         fileSpaces = [];
@@ -4685,6 +4697,91 @@ document.getElementById('import-input').addEventListener('change', (e) => {
         delete t.folderId; // legacy-поле — больше не хранится
         allTabs.push(t);
       });
+
+      chrome.storage.local.set({ 'blattam-tabs': allTabs });
+      chrome.storage.sync.set({
+        'blattam-spaces': allSpaces,
+        'blattam-groups': allGroups
+      });
+    } catch (err) {
+      alert(t('import_bad_json'));
+    }
+  };
+  reader.readAsText(file);
+  e.target.value = '';
+});
+
+// «Импорт с заменой»: та же механика чтения файла, что у обычного импорта
+// (FileReader + JSON.parse + validateImportTabs), но ПОЛНАЯ ЗАМЕНА
+// blattam-tabs/spaces/groups данными файла — без merge по именам/URL.
+// Формат файла = формат экспорта (spaces/groups/tabs). Запись — в те же
+// области storage, что и импорт; перерисовка — через тот же onChanged.
+document.getElementById('import-replace-btn').addEventListener('click', () => {
+  document.getElementById('import-replace-input').click();
+});
+
+document.getElementById('import-replace-input').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = (event) => {
+    try {
+      const data = JSON.parse(event.target.result);
+
+      if (!data.tabs || !Array.isArray(data.tabs)) {
+        alert(t('import_bad_format'));
+        return;
+      }
+
+      const fileTabs = data.tabs;
+
+      // Валидация — общий хелпер (http/https, url ≤ 2048, name ≤ 200,
+      // comment ≤ 1000, ≤ 5000 вкладок)
+      const validation = validateImportTabs(fileTabs);
+      if (!validation.ok) { alert(t(validation.error)); return; }
+
+      if (!confirm(t('import_replace_confirm'))) {
+        return;
+      }
+
+      // Нормализация элементов — 1:1 как в импорте (только с именем,
+      // id || genId, spaceId через remap, legacy folderId — не хранится),
+      // но без merge: массивы берутся целиком. Если в файле нет массива
+      // spaces/groups — свои остаются (и в remap уходят их id).
+      const sourceSpaces = Array.isArray(data.spaces) ? data.spaces : allSpaces;
+      const spaceIdRemap = new Map();
+      allSpaces = sourceSpaces.map(s => {
+        if (!s || !s.name) return null;
+        const sp = { id: s.id || genId('sp'), name: s.name };
+        spaceIdRemap.set(s.id, sp.id);
+        return sp;
+      }).filter(Boolean);
+      const fallbackSpaceId = allSpaces[0] ? allSpaces[0].id : null;
+
+      const sourceGroups = Array.isArray(data.groups) ? data.groups : allGroups;
+      const groupIdRemap = new Map();
+      allGroups = sourceGroups.map(g => {
+        if (!g || !g.name) return null;
+        const ng = {
+          id: g.id || genId('g'),
+          name: g.name,
+          spaceId: spaceIdRemap.get(g.spaceId) || fallbackSpaceId,
+          collapsed: !!g.collapsed
+        };
+        groupIdRemap.set(g.id, ng.id);
+        return ng;
+      }).filter(Boolean);
+
+      allTabs = fileTabs
+        .filter(tb => tb && tb.url && tb.name)
+        .map(tb => {
+          const nt = Object.assign({}, tb);
+          nt.spaceId = spaceIdRemap.get(nt.spaceId) || fallbackSpaceId;
+          if (nt.groupId) nt.groupId = groupIdRemap.get(nt.groupId) || null;
+          delete nt.folderId; // legacy-поле — больше не хранится
+          return nt;
+        });
 
       chrome.storage.local.set({ 'blattam-tabs': allTabs });
       chrome.storage.sync.set({
@@ -5792,7 +5889,7 @@ loadLang().then(function () {
     if (ghModal.classList.contains('open') && e.key === 'Escape') closeGitHubModal();
   });
 
-  ghConnect.addEventListener('click', () => startGitHubLogin());
+  ghConnect.addEventListener('click', () => startDeviceFlowLogin());
 
   // «Проверить ещё раз» — немедленный повтор verify (авто-retry и так
   // крутится каждые 30 с; кнопка — ручное ускорение)
@@ -5849,4 +5946,8 @@ loadLang().then(function () {
   });
 
   refreshAccount();
+
+  // Экспорт в глобал: web-flow (startGitHubLogin) вызывают напрямую тесты
+  // харнеса (кнопка подключения теперь запускает device flow)
+  window.startGitHubLogin = startGitHubLogin;
 })();

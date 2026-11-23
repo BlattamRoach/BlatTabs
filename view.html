@@ -684,6 +684,11 @@
           <span class="lbl"><span class="t" data-i18n="import_label">Импорт</span><span class="s" data-i18n="import_sub">Загрузить JSON</span></span>
           <span class="go">→</span>
         </button>
+        <button class="rail-item" id="import-replace-btn" data-i18n-title="import_replace_title" title="Импортировать JSON (полная замена)">
+          <span class="ico"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21V9"/><path d="m7 13 5-5 5 5"/><path d="M5 3h14"/></svg></span>
+          <span class="lbl"><span class="t" data-i18n="import_replace">Импорт с заменой</span><span class="s" data-i18n="import_replace_sub">Полная замена данными файла</span></span>
+          <span class="go">→</span>
+        </button>
         <button class="rail-item" id="settings-btn" data-i18n-title="settings_title" title="Настройки">
           <span class="ico"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>
           <span class="lbl"><span class="t" data-i18n="settings_title">Настройки</span><span class="s" data-i18n="settings_sub">Параметры</span></span>
@@ -770,6 +775,7 @@
     </div>
   </div>
   <input type="file" id="import-input" accept=".json" style="display:none;">
+  <input type="file" id="import-replace-input" accept=".json" style="display:none;">
   <input type="file" id="bg-file-input" accept="image/*" style="display:none;">
 <input type="file" id="bg-left-file-input" accept="image/*" style="display:none;">
 <input type="file" id="bg-right-file-input" accept="image/*" style="display:none;">
@@ -1056,6 +1062,10 @@
           <div class="faq-item">
             <p class="faq-q" data-i18n="faq5_q">Где хранятся данные?</p>
             <p class="faq-a" data-i18n="faq5_a">На этом устройстве (chrome.storage.local). Между устройствами через GitHub-аккаунт синхронизируются: сохранённые вкладки, пространства и группы. Тема, язык и остальные настройки остаются на каждом устройстве отдельно.</p>
+          </div>
+          <div class="faq-item">
+            <p class="faq-q" data-i18n="faq6_q">Как перенести данные на другое устройство файлом?</p>
+            <p class="faq-a" data-i18n="faq6_a">Кнопка «Экспорт» (левая рейка) выгружает данные в JSON-файл. Положите его в папку, которую синхронизирует ваш облачный диск (Яндекс.Диск, Облако Mail.ru, Google Диск). На другом устройстве импортируйте файл кнопкой «Импорт с заменой» — сохранённые вкладки, пространства и группы будут полностью заменены данными файла.</p>
           </div>
         </div>
       </section>

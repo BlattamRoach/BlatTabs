@@ -460,10 +460,27 @@ async function getSyncPayload() {
 async function mergeTabs(localTabs, remoteTabs) {
   const merged = [...localTabs];
   const localMap = new Map(localTabs.map(t => [`${t.spaceId}|${t.url}`, t]));
+  // Надгробия (blattam-trash, chrome.storage.local): удалённые локально вкладки
+  // НЕ должны «воскресать» из облака — remote-вкладка, которой НЕТ локально (!lt)
+  // и чей url есть в корзине (МАКСИМУМ deletedAt по url > (rt.updatedAt || 0))
+  // не добавляется (continue). Корзина читается ОДИН раз до цикла; ветка
+  // «локальная есть» (lt) не трогается (latest-wins по updatedAt).
+  const trashData = await chrome.storage.local.get(['blattam-trash']);
+  const trash = Array.isArray(trashData['blattam-trash']) ? trashData['blattam-trash'] : [];
+  const tombstones = new Map();
+  for (const r of trash) {
+    if (r && r.url && typeof r.deletedAt === 'number') {
+      tombstones.set(r.url, Math.max(tombstones.get(r.url) || 0, r.deletedAt));
+    }
+  }
   for (const rt of remoteTabs) {
     const key = `${rt.spaceId}|${rt.url}`;
     const lt = localMap.get(key);
-    if (!lt) { merged.push(rt); } else if (rt.updatedAt > (lt.updatedAt || 0)) {
+    if (!lt) {
+      const tombstoneAt = tombstones.get(rt.url);
+      if (tombstoneAt !== undefined && tombstoneAt > (rt.updatedAt || 0)) continue;
+      merged.push(rt);
+    } else if (rt.updatedAt > (lt.updatedAt || 0)) {
       const idx = merged.findIndex(t => t.spaceId === rt.spaceId && t.url === rt.url);
       merged[idx] = rt;
     }
@@ -496,6 +513,9 @@ async function applySyncPayload(payload) {
     if (typeof legacySettings[LAST_SPACE_KEY] === 'string' && !syncSet[LAST_SPACE_KEY]) syncSet[LAST_SPACE_KEY] = legacySettings[LAST_SPACE_KEY];
   }
 
+  // Волна M: собственные записи pull'а — гасим события listener'а один в один
+  pendingSyncWrites += (STORAGE_KEY in localSet) ? 1 : 0;
+  pendingSyncWrites += (SPACES_KEY in syncSet || GROUPS_KEY in syncSet || LAST_SPACE_KEY in syncSet) ? 1 : 0;
   await chrome.storage.local.set(localSet);
   await chrome.storage.sync.set(syncSet);
 }
@@ -585,9 +605,17 @@ async function pullFromGitHub() {
 // Debounced Sync Trigger — С2.11: setTimeout(5000) умирал вместе с MV3
 // service worker (~30 с простоя) — дебаунс перенесён на chrome.alarms (тот же
 // паттерн, что у Device Flow-аларма): аларм будит SW и делает push.
-// Повторный create сбрасывает отсчёт (дебаунс). В unpacked-расширениях Chrome
-// клампит delay < 1 мин до ~1 мин — приемлемо (критерий роадмапа: сохранил
-// вкладку → сразу закрыл newtab → через минуту gist обновлён).
+// Повторный create сбрасывает отсчёт (дебаунс). debounce = 5 секунд
+// (delayInMinutes: 5000/60000); браузер может клампить одноразовый аларм до
+// своего минимума (в свежих Chrome ~30 с, в unpacked/dev-режиме кламп мягче)
+// — критерий «сохранил вкладку → сразу закрыл newtab → через минуту gist
+// обновлён» выполняется.
+// Волна M: pull-гашение — applySyncPayload пишет local+sync, и listener
+// storage.onChanged видит собственные записи pull'а; без гашения каждый синк
+// лишним ставил аларм push (запрос к API). Каждый реально записанный
+// keysToSync-ключ гасит ровно одно push-событие listener'а (UPDATED_AT_KEY
+// в записях pull'а НЕ считается).
+let pendingSyncWrites = 0;
 const SYNC_ALARM = 'blattam-sync-push';
 function triggerDebouncedPush() {
   chrome.alarms.create(SYNC_ALARM, { delayInMinutes: 5000 / 60000 });
@@ -604,7 +632,9 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     chrome.storage.local.set({ [UPDATED_AT_KEY]: Date.now() });
   }
   if (isDataChange && (areaName !== 'local' || STORAGE_KEY in changes)) {
-    triggerDebouncedPush();
+    // Волна M: событие от собственной записи pull'а — гасим, не пушим лишним
+    if (pendingSyncWrites > 0) pendingSyncWrites--;
+    else triggerDebouncedPush();
   }
 });
 
