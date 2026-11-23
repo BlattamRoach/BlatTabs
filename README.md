@@ -2,10 +2,10 @@
 
 **Менеджер сохранённых вкладок для Chrome.** Страница «новой вкладки» (`Ctrl+T`) становится трёхколоночной библиотекой: сохранённые вкладки, пространства и группы — с живым зеркалом открытых вкладок.
 
-- **Версия:** 2.5.5
+- **Версия:** 2.5.6
 - **Платформа:** Chrome, Manifest V3 (чистый HTML/CSS/JS, без внешних библиотек)
 - **Данные:** хранятся локально на устройстве (`chrome.storage.local`)
-- **Проверено:** 994 автотестом (Playwright + pytest)
+- **Проверено:** 1010 автотестом (Playwright + pytest)
 
 <!-- Скриншот v2.5.5: реальное UI (тёмная тема), сгенерировано через Playwright с загрузкой unpacked-расширения. -->
 <p align="center">
@@ -52,7 +52,7 @@
 ## Разработка
 
 - **Стек:** чистый HTML/CSS/JS, Manifest V3 (service worker).
-- **Тесты:** `test_plugin.py` — 986 автотестов (Playwright + pytest, Python 3.14).
+- **Тесты:** `test_plugin.py` — 1010 автотестов (Playwright + pytest, Python 3.14).
   ```bash
   PYTHONDONTWRITEBYTECODE=1 C:\Python314\python.exe test_plugin.py
   ```

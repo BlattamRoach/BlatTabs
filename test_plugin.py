@@ -11814,7 +11814,7 @@ class TestRailLayout:
             assert d["right"]["shadow"] == "none", (theme, d)
 
     def test_left_rail_contents(self):
-        # 5 hover-reveal-строк (Создать группу/Экспорт/Импорт/Настройки/Корзина; тема — в настройках)
+        # 6 hover-reveal-строк (Создать группу/Экспорт/Импорт/Импорт с заменой/Настройки/Корзина; тема — в настройках)
         # в #rail-controls; все кнопки — в левой рейке; #import-input скрыт
         load_view(self.page, tabs=self.TABS)
         self._inject_real_styles()
@@ -11838,8 +11838,8 @@ class TestRailLayout:
               && document.getElementById('github-modal').nextElementSibling.id === 'import-input'
           });
         })()"""))
-        assert d["items"] == 5, d
-        assert d["titles"] == ["Создать группу", "Экспорт", "Импорт", "Настройки", "Корзина"], d
+        assert d["items"] == 6, d
+        assert d["titles"] == ["Создать группу", "Экспорт", "Импорт", "Импорт с заменой", "Настройки", "Корзина"], d
         assert d["createGroupFirst"] and d["exportInRail"] and d["importInRail"], d
         assert d["searchInRail"] and d["brandFirst"], d
         assert d["settingsExists"], d
@@ -11860,7 +11860,7 @@ class TestRailLayout:
           });
         })()"""))
         assert d2["settingsOpen"], d2
-        assert d2["faqItems"] == 5, d2
+        assert d2["faqItems"] == 6, d2
 
     def test_account_card_pinned_bottom(self):
         # Аккаунт-карта закреплена внизу левой рейки (margin-top: auto)
@@ -13070,13 +13070,13 @@ class TestSettingsModal:
         assert self.page.evaluate("document.querySelector('#settings-modal .modal h3').textContent") == "Настройки"
         assert self.page.evaluate("document.querySelector('#settings-modal section:has(.faq-list) .settings-section-title').textContent") == "Частые вопросы"
 
-    def test_settings_faq_has_five_items_with_qa(self):
+    def test_settings_faq_has_six_items_with_qa(self):
         load_view(self.page)
         self._open()
         qa = json.loads(self.page.evaluate(
             "JSON.stringify([...document.querySelectorAll('#settings-modal .faq-item')]"
             ".map(i => ({q: i.querySelector('.faq-q').textContent.trim(), a: i.querySelector('.faq-a').textContent.trim()})))"))
-        assert len(qa) == 5
+        assert len(qa) == 6
         assert all(len(x["q"]) > 0 and len(x["a"]) > 0 for x in qa)
 
     def test_settings_faq_content(self):
@@ -13201,8 +13201,8 @@ class TestFaqAboutI18n:
             " qs: [...document.querySelectorAll('#settings-pane-faq .faq-q')].map(e => e.textContent),"
             " as: [...document.querySelectorAll('#settings-pane-faq .faq-a')].map(e => e.textContent),"
             " ru_h4: I18N.ru.faq_title,"
-            " ru_qs: [I18N.ru.faq1_q, I18N.ru.faq2_q, I18N.ru.faq3_q, I18N.ru.faq4_q, I18N.ru.faq5_q],"
-            " ru_as: [I18N.ru.faq1_a, I18N.ru.faq2_a, I18N.ru.faq3_a, I18N.ru.faq4_a, I18N.ru.faq5_a]})"))
+            " ru_qs: [I18N.ru.faq1_q, I18N.ru.faq2_q, I18N.ru.faq3_q, I18N.ru.faq4_q, I18N.ru.faq5_q, I18N.ru.faq6_q],"
+            " ru_as: [I18N.ru.faq1_a, I18N.ru.faq2_a, I18N.ru.faq3_a, I18N.ru.faq4_a, I18N.ru.faq5_a, I18N.ru.faq6_a]})"))
         assert data["h4"] == data["ru_h4"] == "Частые вопросы"
         assert data["qs"] == data["ru_qs"]
         assert data["as"] == data["ru_as"]
@@ -13233,8 +13233,8 @@ class TestFaqAboutI18n:
             " qs: [...document.querySelectorAll('#settings-pane-faq .faq-q')].map(e => e.textContent),"
             " as: [...document.querySelectorAll('#settings-pane-faq .faq-a')].map(e => e.textContent),"
             " en_h4: I18N.en.faq_title,"
-            " en_qs: [I18N.en.faq1_q, I18N.en.faq2_q, I18N.en.faq3_q, I18N.en.faq4_q, I18N.en.faq5_q],"
-            " en_as: [I18N.en.faq1_a, I18N.en.faq2_a, I18N.en.faq3_a, I18N.en.faq4_a, I18N.en.faq5_a]})"))
+            " en_qs: [I18N.en.faq1_q, I18N.en.faq2_q, I18N.en.faq3_q, I18N.en.faq4_q, I18N.en.faq5_q, I18N.en.faq6_q],"
+            " en_as: [I18N.en.faq1_a, I18N.en.faq2_a, I18N.en.faq3_a, I18N.en.faq4_a, I18N.en.faq5_a, I18N.en.faq6_a]})"))
         assert data["h4"] == data["en_h4"] == "Frequently asked questions"
         assert data["qs"] == data["en_qs"]
         assert data["as"] == data["en_as"]
@@ -21777,6 +21777,118 @@ class TestOAuthCallbackPage:
 
 
 # ==========================================
+#  VIEW.JS: CONNECT-BTN → DEVICE FLOW (волна A)
+# ==========================================
+
+class TestConnectButtonDeviceFlow:
+    """Волна A: кнопка «Подключить GitHub» (#github-connect-btn) запускает
+    Device Flow напрямую (startDeviceFlowLogin) — web-flow
+    (chrome.identity.launchWebAuthFlow) НЕ вызывается. Критерий Qwen4-Max:
+    клик = сразу строка кода + вкладка github.com/login/device, без окна
+    авторизации. Web-flow (startGitHubLogin) остался в view.js — его
+    проверяет TestOAuthLoginRedirect прямым вызовом."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    def _install_flow_mocks(self, user_code="ABCD-1234"):
+        """device-flow-start → фиксированный ответ; трек-флаги: __startSent
+        (message ушёл), __webAuthCalls (launchWebAuthFlow — обязан остаться
+        пустым)."""
+        self.page.evaluate("""(uc) => {
+          window.__deviceRes = {
+            user_code: uc,
+            verification_uri: 'https://github.com/login/device',
+            verification_uri_complete: 'https://github.com/login/device#' + uc,
+            interval: 5,
+            expires_at: Date.now() + 900000
+          };
+          window.__startSent = false;
+          window.__webAuthCalls = [];
+          const orig = chrome.runtime.sendMessage.bind(chrome.runtime);
+          chrome.runtime.sendMessage = function (msg, cb) {
+            if (msg && msg.action === 'device-flow-start') {
+              window.__startSent = true;
+              if (cb) cb(window.__deviceRes);
+              return Promise.resolve(window.__deviceRes);
+            }
+            if (msg && msg.action === 'device-flow-poll') {
+              if (window.__pollResponder) {
+                const r = window.__pollResponder(msg);
+                if (cb) cb(r);
+                return Promise.resolve(r);
+              }
+              return Promise.resolve(undefined);
+            }
+            return orig(msg, cb);
+          };
+          chrome.identity = {
+            getRedirectURL: function () { return 'https://mock-extension-id.chromiumapp.org/'; },
+            launchWebAuthFlow: function (opts, cb) {
+              window.__webAuthCalls.push(opts && opts.url);
+              if (cb) cb();
+              return Promise.resolve(undefined);
+            }
+          };
+        }""", user_code)
+
+    def _click_connect(self, user_code="ABCD-1234"):
+        load_view(self.page)
+        self.page.wait_for_timeout(150)
+        self._install_flow_mocks(user_code)
+        self.page.click("#account-slot")
+        self.page.wait_for_timeout(100)
+        self.page.click("#github-connect-btn")
+
+    def _flow_state(self):
+        return json.loads(self.page.evaluate("""(() => JSON.stringify({
+          startSent: window.__startSent,
+          webAuthCalls: window.__webAuthCalls,
+          lastTab: (chrome.tabs.createdTabs.length ? chrome.tabs.createdTabs[chrome.tabs.createdTabs.length - 1].url : null),
+          rowHidden: document.getElementById('account-device').hidden,
+          rowDisplay: getComputedStyle(document.getElementById('account-device')).display,
+          code: document.getElementById('account-device-code').textContent,
+          codeInModal: !!document.getElementById('account-device-code').closest('#github-modal'),
+          sub: document.querySelector('#account-slot .a-s').textContent
+        }))()"""))
+
+    def test_click_starts_device_flow_without_web_auth(self):
+        """Клик отправляет device-flow-start и НЕ вызывает launchWebAuthFlow
+        (окно авторизации не открывается)."""
+        self._click_connect()
+        self.page.wait_for_timeout(150)
+        # sanity harness: top-level-функции view.js — глобальные
+        assert self.page.evaluate("typeof startGitHubLogin") == "function"
+        d = self._flow_state()
+        assert d["startSent"] is True, d
+        assert d["webAuthCalls"] == [], d
+
+    def test_click_opens_prefilled_tab_and_shows_code_row(self):
+        """Клик = сразу вкладка github.com/login/device с подставленным
+        кодом (verification_uri_complete) + строка кода с текстом user_code
+        внутри модалки."""
+        self._click_connect()
+        self.page.wait_for_timeout(150)
+        d = self._flow_state()
+        assert d["lastTab"] == "https://github.com/login/device#ABCD-1234", d
+        assert d["rowHidden"] is False, d
+        assert d["rowDisplay"] != "none", d
+        assert d["code"] == "ABCD-1234", d
+        assert d["codeInModal"] is True, d
+        assert d["sub"] == "Введите код в открытой вкладке", d
+
+    def test_click_row_and_tab_follow_response_code(self):
+        """Текст строки и URL вкладки не захардкожены — берутся из
+        user_code ответа device-flow-start."""
+        self._click_connect("WOLF-7770")
+        self.page.wait_for_timeout(150)
+        d = self._flow_state()
+        assert d["lastTab"] == "https://github.com/login/device#WOLF-7770", d
+        assert d["code"] == "WOLF-7770", d
+
+
+# ==========================================
 #  OAUTH LOGIN: redirectUri из identity (С1.4) + scope gist (С1.5)
 # ==========================================
 
@@ -21784,7 +21896,9 @@ class TestOAuthLoginRedirect:
     """startGitHubLogin: redirect_uri = chrome.identity.getRedirectURL()
     (chromiumapp.org-URL — единственная зарегистрированная в OAuth App
     GitHub); scope в authorize-URL — gist; тот же redirectUri уходит в
-    oauth-exchange."""
+    oauth-exchange. Web-flow проверяется прямым вызовом startGitHubLogin() —
+    кнопка подключения теперь запускает device flow
+    (см. TestConnectButtonDeviceFlow)."""
 
     @pytest.fixture(autouse=True)
     def _setup(self, page):
@@ -21819,7 +21933,7 @@ class TestOAuthLoginRedirect:
         }""")
         self.page.click("#account-slot")
         self.page.wait_for_timeout(100)
-        self.page.click("#github-connect-btn")
+        self.page.evaluate("startGitHubLogin()")  # web-flow прямым вызовом: кнопка теперь запускает device flow
         self.page.wait_for_timeout(150)
         d = json.loads(self.page.evaluate("""JSON.stringify({
           url: window.__authUrl || null,
@@ -22836,7 +22950,7 @@ class TestSettingsNavRestructure:
         load_view(self.page)
         self._open()
         self._open_pane("faq")
-        assert self.page.evaluate("document.querySelectorAll('#settings-pane-faq .faq-item').length") == 5
+        assert self.page.evaluate("document.querySelectorAll('#settings-pane-faq .faq-item').length") == 6
         assert "Что такое BlatTabs?" in self.page.evaluate("document.querySelector('#settings-pane-faq .faq-list').textContent")
         self._open_pane("about")
         assert self.page.evaluate("document.getElementById('about-version').textContent") == "1.0.0"
@@ -23845,14 +23959,16 @@ class TestSyncUpdatedAt:
 
     def test_apply_sync_payload_stamps_from_payload(self):
         """applySyncPayload({updatedAt: 777}) — в local метка == 777 (собственная
-        запись blattam-tabs её не перетирает); push-аларм от изменения данных всё же создаётся."""
+        запись blattam-tabs её не перетирает); push-аларм от записи pull'а НЕ создаётся
+        (Волна M: собственные записи синка гасятся — пользовательскую запись
+        проверяет TestSyncNoPushAfterPull)."""
         n0 = len(self._sync_push_alarms())
         self.page.evaluate("""applySyncPayload({
           tabs: [{name: 'R', url: 'https://r.com', spaceId: 'sp1'}],
           settings: {}, updatedAt: 777
         })""")
         assert self.page.evaluate("chrome.storage.local._data['blattam-data-updated-at']") == 777
-        assert len(self._sync_push_alarms()) == n0 + 1, self._sync_push_alarms()
+        assert len(self._sync_push_alarms()) == n0, self._sync_push_alarms()
 
 
 # ==========================================
@@ -23931,6 +24047,98 @@ class TestEmptyGist:
         assert any(t["url"] == "https://r.com" for t in tabs), tabs
 
 
+class TestSyncTombstones:
+    """background.js: надгробия (blattam-trash) — remote-вкладка, которой НЕТ
+    локально и чей url есть в корзине (deletedAt записи > remote.updatedAt), НЕ
+    воскрешается pull-ом из облака; пересозданная вкладка (updatedAt новее
+    deletedAt) проходит как обычно. Корзина читается один раз до merge-цикла,
+    по url берётся максимум deletedAt (записей с одинаковым url может быть
+    несколько)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        page.goto("about:blank")
+        page.evaluate(MOCK_CHROME)
+
+    def _load_bg(self):
+        self.page.evaluate(load_file("background.js") + "; 'loaded'")
+
+    def _seed(self):
+        # ТОЛЬКО после старта SW: стартовая purgeStaleScopeToken удаляет
+        # токен без маркера blattam-auth-scope
+        self.page.evaluate("""() => {
+          chrome.storage.local._data['github-token'] = 't';
+          chrome.storage.local._data['blattam-auth-scope'] = 'gist-1';
+          chrome.storage.local._data['blattam-gist-id'] = 'g1';
+        }""")
+
+    def _mock_get(self, body):
+        self.page.evaluate("""(body) => {
+          window.__fetchCalls = [];
+          window.__fetchTimeoutMs = 50;
+          window.fetch = async function (url, opts) {
+            window.__fetchCalls.push({ url: String(url), method: (opts && opts.method) || 'GET' });
+            return { ok: true, status: 200, json: async () => body };
+          };
+        }""", body)
+
+    def test_merge_skips_tombstoned_remote_tab(self):
+        """Локально пусто, корзина содержит X (deletedAt 2000), remote X с
+        updatedAt 1000 (старше удаления) — mergeTabs НЕ возвращает её;
+        mergeTabs — top-level function background.js (глобальна)."""
+        self._load_bg()
+        assert self.page.evaluate("typeof mergeTabs") == "function"
+        self.page.evaluate("""() => {
+          chrome.storage.local._data['blattam-trash'] = [
+            {name: 'X', url: 'https://x.com', spaceId: 'sp1', deletedAt: 2000}
+          ];
+        }""")
+        tabs = self.page.evaluate("""mergeTabs([], [
+          {name: 'X', url: 'https://x.com', spaceId: 'sp1', updatedAt: 1000}
+        ])""")
+        assert tabs == [], tabs
+
+    def test_merge_allows_tab_recreated_after_deletion(self):
+        """То же, но remote X с updatedAt 3000 (пересоздана на другом
+        устройстве ПОСЛЕ удаления) — mergeTabs возвращает её."""
+        self._load_bg()
+        self.page.evaluate("""() => {
+          chrome.storage.local._data['blattam-trash'] = [
+            {name: 'X', url: 'https://x.com', spaceId: 'sp1', deletedAt: 2000}
+          ];
+        }""")
+        tabs = self.page.evaluate("""mergeTabs([], [
+          {name: 'X', url: 'https://x.com', spaceId: 'sp1', updatedAt: 3000}
+        ])""")
+        assert len(tabs) == 1 and tabs[0]["url"] == "https://x.com", tabs
+
+    def test_pull_does_not_resurrect_tombstoned_tab(self):
+        """Интеграция: gist содержит X (updatedAt 1000) и R; локально пусто,
+        в корзине X (deletedAt 2000) — после pull blattam-tabs НЕ содержит
+        X, а R при этом применяется."""
+        self._mock_get({"files": {"sync.json": {"content": json.dumps({
+            "tabs": [
+                {"name": "X", "url": "https://x.com", "spaceId": "sp1", "updatedAt": 1000},
+                {"name": "R", "url": "https://r.com", "spaceId": "sp1"}
+            ],
+            "updatedAt": 500
+        })}}})
+        self._load_bg()
+        self._seed()
+        self.page.evaluate("""() => {
+          chrome.storage.local._data['blattam-trash'] = [
+            {name: 'X', url: 'https://x.com', spaceId: 'sp1', deletedAt: 2000}
+          ];
+        }""")
+        res = self.page.evaluate("pullFromGitHub()")
+        assert res == {"ok": True, "pulled": True}, res
+        tabs = read_local(self.page, "blattam-tabs") or []
+        urls = [t["url"] for t in tabs]
+        assert "https://x.com" not in urls, urls
+        assert "https://r.com" in urls, urls
+
+
 # ==========================================
 #  C2.11: Debounced push на chrome.alarms
 # ==========================================
@@ -23985,6 +24193,103 @@ class TestSyncDebounceAlarm:
         body = src[i:src.index("\n}", i)]
         assert "setTimeout" not in body, body
         assert "chrome.alarms.create(SYNC_ALARM" in body, body
+
+# ==========================================
+#  Волна M: лишний push после pull убран (pendingSyncWrites)
+# ==========================================
+
+class TestSyncNoPushAfterPull:
+    """Волна M: pull из gist НЕ создаёт аларм пуша — applySyncPayload пишет
+    local+sync, и listener storage.onChanged видит собственные записи pull'а;
+    без гашения каждый синк лишним ставил аларм blattam-sync-push (лишний
+    запрос к API). pendingSyncWrites гасит события pull'а один в один;
+    пользовательская запись после pull ставит аларм пуша как раньше."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        page.goto("about:blank")
+        page.evaluate(MOCK_CHROME)
+        # spaces ДО загрузки SW: стартовый ensureSpaces() — no-op → чистая база
+        # (стартового пуш-аларма нет)
+        page.evaluate("""() => {
+          chrome.storage._data['blattam-spaces'] = [{id: 'sp1', name: 'S1'}];
+        }""")
+        page.evaluate(load_file("background.js") + "; 'loaded'")
+        # ТОЛЬКО после старта SW: стартовый purgeStaleScopeToken удаляет
+        # токен без маркера blattam-auth-scope
+        page.evaluate("""() => {
+          chrome.storage.local._data['github-token'] = 't';
+          chrome.storage.local._data['blattam-auth-scope'] = 'gist-1';
+          chrome.storage.local._data['blattam-gist-id'] = 'g1';
+        }""")
+        assert json.loads(page.evaluate("JSON.stringify(chrome.alarms.created)")) == []
+
+    def _mock_gist(self, body):
+        self.page.evaluate("""(body) => {
+          window.__fetchCalls = [];
+          window.__fetchTimeoutMs = 50;
+          window.fetch = async function (url, opts) {
+            window.__fetchCalls.push({ url: String(url), method: (opts && opts.method) || 'GET' });
+            return { ok: true, status: 200, json: async () => body };
+          };
+        }""", body)
+
+    def _seed_local_tab(self):
+        # Локальная вкладка СТАРШЕ remote — pull реально меняет данные
+        # (прямая запись в _data — без события onChanged)
+        self.page.evaluate("""() => {
+          chrome.storage.local._data['blattam-tabs'] = [
+            {name: 'L', url: 'https://l.com', spaceId: 'sp1', updatedAt: 1000}
+          ];
+        }""")
+
+    def _pull_gist(self):
+        self._mock_gist({"files": {"sync.json": {"content": json.dumps({
+            "tabs": [{"name": "R", "url": "https://r.com", "spaceId": "sp1", "updatedAt": 2000}],
+            "spaces": [{"id": "sp1", "name": "S1"}],
+            "updatedAt": 111
+        })}}})
+        self._seed_local_tab()
+        return self.page.evaluate("pullFromGitHub()")
+
+    def _alarms_created(self):
+        return json.loads(self.page.evaluate("JSON.stringify(chrome.alarms.created)"))
+
+    def test_pull_no_push_alarm(self):
+        """Pull (remote-вкладка новее локальной) — данные применены, аларм пуша
+        НЕ создан (create == 0), PUT к api.github.com не ушёл: собственные
+        записи pull'а гасятся один в один."""
+        res = self._pull_gist()
+        assert res == {"ok": True, "pulled": True}, res
+        tabs = read_local(self.page, "blattam-tabs") or []
+        assert any(t["url"] == "https://r.com" for t in tabs), tabs
+        assert any(t["url"] == "https://l.com" for t in tabs), tabs
+        spaces = json.loads(self.page.evaluate("JSON.stringify(chrome.storage.sync._data['blattam-spaces'])"))
+        assert any(s["id"] == "sp1" for s in spaces), spaces
+        created = self._alarms_created()
+        assert all(a["name"] != "blattam-sync-push" for a in created), created
+        calls = json.loads(self.page.evaluate("JSON.stringify(window.__fetchCalls)"))
+        assert all(c["method"] != "PUT" for c in calls), calls
+
+    def test_pull_then_user_write_creates_alarm(self):
+        """После pull пользовательская запись blattam-tabs — аларм пуша создан
+        (обычный путь жив: счётчик поглотил записи pull'а, а не запись
+        пользователя)."""
+        res = self._pull_gist()
+        assert res == {"ok": True, "pulled": True}, res
+        created = self._alarms_created()
+        assert created == [], created  # сам pull алармов не оставил
+        # Пользовательская запись — настоящая storage.set (listener срабатывает)
+        self.page.evaluate("""() => {
+          chrome.storage.local.set({'blattam-tabs': [
+            {name: 'U', url: 'https://u.com', spaceId: 'sp1', updatedAt: 3000}
+          ]});
+        }""")
+        created = self._alarms_created()
+        push_alarms = [a for a in created if a["name"] == "blattam-sync-push"]
+        assert len(push_alarms) == 1, created
+        assert push_alarms[0]["info"].get("delayInMinutes") == 5000 / 60000, push_alarms
 
 # ==========================================
 #  C4.18: getSyncPayload/applySyncPayload — явный whitelist + валидация типов
@@ -24382,3 +24687,240 @@ class TestPresetImportExport:
         self._wait_status("empty")
         assert self.page.evaluate(
             "document.getElementById('preset-status').textContent") == ""
+
+
+# ==========================================
+#  Волна E: «Импорт с заменой» — полная замена данных файлом + FAQ faq6
+# ==========================================
+
+class TestImportReplace:
+    """view.js «Импорт с заменой» (#import-replace-btn → скрытый
+    #import-replace-input, строка ПОСЛЕ «Импорт» в левой рейке): ПОЛНАЯ
+    ЗАМЕНА blattam-tabs/spaces/groups данными файла (формат экспорта) —
+    БЕЗ merge по именам/URL; валидация — общий хелпер validateImportTabs
+    (http/https, url ≤ 2048, name ≤ 200, comment ≤ 1000, ≤ 5000 вкладок);
+    confirm false — storage нетронут; запись — в те же области, что и
+    обычный импорт (local blattam-tabs + sync spaces/groups)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    OLD_TABS = [
+        {"name": "Old A", "url": "https://old-a.example", "spaceId": "sp1"},
+        {"name": "Old B", "url": "https://old-b.example", "spaceId": "sp1", "groupId": "g1"},
+    ]
+    OLD_SPACES = [{"id": "sp1", "name": "Old Space"}]
+    OLD_GROUPS = [{"id": "g1", "name": "Old Group", "spaceId": "sp1", "collapsed": False}]
+
+    def _load(self, confirm=False):
+        load_view(self.page, tabs=self.OLD_TABS, spaces=self.OLD_SPACES,
+                  groups=self.OLD_GROUPS, confirm=confirm)
+        self.page.evaluate("""() => {
+          window.__alerts = [];
+          window.alert = (m) => { window.__alerts.push(m); };
+        }""")
+        self.page.wait_for_timeout(80)
+
+    def _load_confirm_false(self):
+        # window.confirm = () => false — посажено ДО загрузки view.js
+        # (паттерн confirm-тестов: инициализация — до view.js, не после)
+        self.page.goto("about:blank")
+        self.page.evaluate(MOCK_CHROME + "\n".join([
+            "chrome.storage.local._data['blattam-tabs'] = " + json.dumps(self.OLD_TABS, ensure_ascii=False) + ";",
+            "chrome.storage._data['blattam-spaces'] = " + json.dumps(self.OLD_SPACES, ensure_ascii=False) + ";",
+            "chrome.storage._data['blattam-groups'] = " + json.dumps(self.OLD_GROUPS, ensure_ascii=False) + ";",
+            "window.__alerts = [];",
+            "window.alert = (m) => { window.__alerts.push(m); };",
+            "window.__cf_msgs = [];",
+            "window.confirm = (m) => { window.__cf_msgs.push(String(m)); return false; };",
+        ]))
+        self.page.evaluate("document.body.innerHTML = " + json.dumps(VIEW_DOM))
+        self.page.evaluate(load_file("i18n.js") + "; 'i18n'")
+        self.page.evaluate(load_file("view.js") + "; 'loaded'")
+        self.page.wait_for_timeout(80)
+
+    def _replace_import(self, data):
+        # Тот же механизм загрузки файла, что у TestImportValidation:
+        # DataTransfer + File → input.files → dispatchEvent('change')
+        payload = json.dumps(data, ensure_ascii=False)
+        self.page.evaluate("""(payload) => {
+          var input = document.getElementById('import-replace-input');
+          var dt = new DataTransfer();
+          dt.items.add(new File([payload], 'blatt-tabs-backup.json', {type: 'application/json'}));
+          input.files = dt.files;
+          input.dispatchEvent(new Event('change'));
+        }""", payload)
+        self.page.wait_for_timeout(250)
+
+    def _alerts(self):
+        return json.loads(self.page.evaluate("JSON.stringify(window.__alerts)"))
+
+    def test_button_and_hidden_input_in_rail_after_import(self):
+        # Кнопка + скрытый input — в левой рейке СРАЗУ ПОСЛЕ строки «Импорт»;
+        # структура строки — как у импорта (.rail-item/.ico/.t/.s/.go)
+        load_view(self.page)
+        self.page.wait_for_timeout(100)
+        d = json.loads(self.page.evaluate("""(() => {
+          const items = [...document.querySelectorAll('#rail-controls .rail-item')];
+          const idxImport = items.findIndex(i => i.id === 'import-btn');
+          const btn = document.getElementById('import-replace-btn');
+          const inp = document.getElementById('import-replace-input');
+          const rail = document.getElementById('rail-left');
+          return JSON.stringify({
+            btnInRail: !!(btn && rail.contains(btn)),
+            afterImport: idxImport >= 0 && !!items[idxImport + 1]
+              && items[idxImport + 1].id === 'import-replace-btn',
+            hasStructure: !!(btn && btn.classList.contains('rail-item')
+              && btn.querySelector('.ico') && btn.querySelector('.t')
+              && btn.querySelector('.s') && btn.querySelector('.go')),
+            t_ru: btn ? btn.querySelector('.t').textContent : null,
+            s_ru: btn ? btn.querySelector('.s').textContent : null,
+            inpInDom: !!inp,
+            inpAccept: inp ? inp.getAttribute('accept') : null,
+            inpHidden: inp ? getComputedStyle(inp).display : null,
+            inpOutsideRail: inp ? !rail.contains(inp) : false
+          });
+        })()"""))
+        assert d["btnInRail"] and d["afterImport"], d
+        assert d["hasStructure"], d
+        assert d["t_ru"] == "Импорт с заменой" and d["s_ru"] == "Полная замена данными файла", d
+        assert d["inpInDom"] and d["inpAccept"] == ".json" and d["inpHidden"] == "none", d
+        assert d["inpOutsideRail"], d
+
+    def test_valid_file_replaces_tabs_spaces_groups(self):
+        # Валидный файл + confirm true — blattam-tabs ПОЛНОСТЬЮ заменены
+        # (старых данных нет), spaces/groups — тоже заменены; карточки отрисовались
+        self._load(confirm=True)
+        self._replace_import({
+            "blatt-tabs": True,
+            "spaces": [{"id": "spf1", "name": "File Space"}],
+            "groups": [{"id": "gf1", "name": "File Group", "spaceId": "spf1", "collapsed": False}],
+            "tabs": [
+                {"name": "F1", "url": "https://f1.example", "spaceId": "spf1", "groupId": "gf1"},
+                {"name": "F2", "url": "https://f2.example", "spaceId": "spf1"}
+            ]
+        })
+        assert self._alerts() == []
+        tabs = read_storage_raw(self.page, "blattam-tabs")
+        assert sorted(t["url"] for t in tabs) == ["https://f1.example", "https://f2.example"], tabs
+        assert not any(t["url"].startswith("https://old-") for t in tabs), tabs
+        by_url = {t["url"]: t for t in tabs}
+        assert by_url["https://f1.example"]["groupId"] == "gf1", by_url
+        assert by_url["https://f2.example"].get("groupId") in (None, ""), by_url
+        spaces = read_storage_raw(self.page, "blattam-spaces")
+        assert [s["id"] for s in spaces] == ["spf1"], spaces
+        assert [s["name"] for s in spaces] == ["File Space"], spaces
+        groups = read_storage_raw(self.page, "blattam-groups")
+        assert [(g["id"], g["name"], g["spaceId"]) for g in groups] == [
+            ("gf1", "File Group", "spf1")], groups
+        # перерисовка: активное пространство → файловое, карточки и чип на месте
+        self.page.wait_for_timeout(150)
+        d = json.loads(self.page.evaluate("""(() => JSON.stringify({
+          cards: document.querySelectorAll('#tabs-list .tab-card').length,
+          chips: document.querySelectorAll('#space-chips .space-chip').length
+        }))()"""))
+        assert d["cards"] == 2, d
+        assert d["chips"] == 1, d
+
+    def test_confirm_false_storage_untouched(self):
+        # confirm false (seed ДО view.js) — storage нетронут, файл не применён
+        self._load_confirm_false()
+        self._replace_import({
+            "blatt-tabs": True,
+            "spaces": [{"id": "spf1", "name": "File Space"}],
+            "tabs": [{"name": "F1", "url": "https://f1.example", "spaceId": "spf1"}]
+        })
+        assert self._alerts() == []
+        assert self.page.evaluate("I18N.ru.import_replace_confirm") in self.page.evaluate("JSON.stringify(window.__cf_msgs)"), self.page.evaluate("JSON.stringify(window.__cf_msgs)")
+        assert [t["url"] for t in read_storage_raw(self.page, "blattam-tabs")] == [
+            "https://old-a.example", "https://old-b.example"]
+        assert [s["id"] for s in read_storage_raw(self.page, "blattam-spaces")] == ["sp1"]
+        assert [g["id"] for g in read_storage_raw(self.page, "blattam-groups")] == ["g1"]
+
+    def test_javascript_url_alerts_and_storage_untouched(self):
+        # javascript:-url — валидация (общий хелпер) — alert, storage нетронут
+        self._load(confirm=True)
+        self._replace_import({"blatt-tabs": True, "tabs": [
+            {"name": "Evil", "url": "javascript:alert(1)"}]})
+        alerts = self._alerts()
+        assert any("Невалидный URL" in a for a in alerts), alerts
+        assert [t["url"] for t in read_storage_raw(self.page, "blattam-tabs")] == [
+            "https://old-a.example", "https://old-b.example"]
+        assert [s["id"] for s in read_storage_raw(self.page, "blattam-spaces")] == ["sp1"]
+
+    def test_no_tabs_array_alerts_and_untouched(self):
+        # Файл без массива вкладок — import_bad_format, storage нетронут
+        self._load(confirm=True)
+        self._replace_import({"blatt-tabs": True, "spaces": [{"id": "spf1", "name": "File Space"}]})
+        alerts = self._alerts()
+        assert any("Неверный формат файла" in a for a in alerts), alerts
+        assert [t["url"] for t in read_storage_raw(self.page, "blattam-tabs")] == [
+            "https://old-a.example", "https://old-b.example"]
+        assert [s["id"] for s in read_storage_raw(self.page, "blattam-spaces")] == ["sp1"]
+        assert [g["id"] for g in read_storage_raw(self.page, "blattam-groups")] == ["g1"]
+
+    def test_i18n_en_button_label(self):
+        # i18n en: label/подпись/title кнопки == I18N.en.* (словарь В СТРАНИЦЕ —
+        # источник истины) + паритет ключей ru/en
+        load_view(self.page, lang="en")
+        self.page.wait_for_timeout(150)
+        d = json.loads(self.page.evaluate("""(() => {
+          const btn = document.getElementById('import-replace-btn');
+          return JSON.stringify({
+            t: btn.querySelector('.t').textContent,
+            s: btn.querySelector('.s').textContent,
+            title: btn.getAttribute('title'),
+            en_t: I18N.en.import_replace,
+            en_s: I18N.en.import_replace_sub,
+            en_title: I18N.en.import_replace_title,
+            parity: Object.keys(I18N.ru).sort().join('|') === Object.keys(I18N.en).sort().join('|')
+          });
+        })()"""))
+        assert d["t"] == d["en_t"], d
+        assert d["s"] == d["en_s"], d
+        assert d["title"] == d["en_title"], d
+        assert d["parity"] is True, d
+
+
+class TestFaqFileSync:
+    """FAQ-пункт №6 (перенос данных на другое устройство файлом):
+    data-i18n-маркверы faq6_q/faq6_a == словарь i18n.js (I18N.ru/I18N.en —
+    словарь В СТРАНИЦЕ — источник истины) + live-свитч на EN
+    (switchLanguage → setLang + applyI18n пере-переводит статичный markup)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        yield
+
+    def _open_faq(self):
+        self.page.locator("#settings-btn").click()
+        self.page.locator("#settings-modal .settings-nav-item[data-section='faq']").click()
+
+    def test_faq6_ru_markup_equals_dict(self):
+        load_view(self.page)  # default ru
+        self._open_faq()
+        data = json.loads(self.page.evaluate(
+            "JSON.stringify({q: document.querySelectorAll('#settings-pane-faq .faq-q')[5].textContent,"
+            " a: document.querySelectorAll('#settings-pane-faq .faq-a')[5].textContent,"
+            " ru_q: I18N.ru.faq6_q, ru_a: I18N.ru.faq6_a})"))
+        assert data["q"] == data["ru_q"], data
+        assert data["a"] == data["ru_a"], data
+
+    def test_faq6_live_switch_en_markup_equals_dict(self):
+        load_view(self.page)  # ru
+        self._open_faq()
+        assert self.page.evaluate(
+            "document.querySelectorAll('#settings-pane-faq .faq-q')[5].textContent") == \
+            self.page.evaluate("I18N.ru.faq6_q")
+        # Переключатель языка — в «Общих»; клик EN
+        self.page.locator("#settings-modal .settings-nav-item[data-section='general']").click()
+        self.page.click("#lang-btn-en")
+        self.page.wait_for_timeout(150)
+        data = json.loads(self.page.evaluate(
+            "JSON.stringify({q: document.querySelectorAll('#settings-pane-faq .faq-q')[5].textContent,"
+            " a: document.querySelectorAll('#settings-pane-faq .faq-a')[5].textContent,"
+            " en_q: I18N.en.faq6_q, en_a: I18N.en.faq6_a})"))
+        assert data["q"] == data["en_q"], data
+        assert data["a"] == data["en_a"], data
