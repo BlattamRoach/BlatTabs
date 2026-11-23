@@ -5601,8 +5601,9 @@ class TestRailWarmOnCardDrag:
     (drop-here: дроп откроет сайт фоновой вкладкой). Класс .rail-drag-over на
     #rail-right ставится ОБОИМИ путями драга (HTML5-sинтетика + pointer —
     реальная мышь) и снимается на dragleave / drop / dragend — без остатков.
-    Тон — тёплая гамма ghost-слота: фон --rail-warm + inset-контур
-    --ghost-ring, заметнее базового --rail-bg в обеих темах. Собственный драг
+    Тон — цвет призрачной вкладки из настроек: фон --ghost-bg (кастомизируется
+    в «Внешний вид» → «Цвета») + inset-контур --ghost-ring, отличается от
+    базового --rail-bg в обеих темах. Собственный драг
     рейки (dragSourceBrowserTab) и драг шапки группы (dragSourceGroupId)
     рейку НЕ греют. Дроп-поведение (openSavedUrlsInBackground, карточка не
     тронута) — без изменений."""
@@ -5631,9 +5632,9 @@ class TestRailWarmOnCardDrag:
     def _on_err(self, err):
         self._errors.append(str(err))
 
-    def _load(self):
+    def _load(self, **kw):
         load_view(self.page, spaces=self.SP, groups=self.GROUPS, tabs=self.TABS,
-                  last_space="sp1", browser_tabs=self.BT)
+                  last_space="sp1", browser_tabs=self.BT, **kw)
         # CSS view.html + theme.css — как в TestCardDropToRail: без него
         # computed-фоны и лейаут рейки не настоящие
         css = load_file("theme.css")
@@ -5852,8 +5853,8 @@ class TestRailWarmOnCardDrag:
         assert self._warm_state()["cls"] is False
 
     def test_warm_tone_differs_in_both_themes(self):
-        # В обеих темах тёплый фон отличается от базового фона рейки и равен
-        # токену --rail-warm (inset-контур --ghost-ring)
+        # В обеих темах тон под карточкой отличается от базового фона рейки и
+        # равен токену --ghost-bg (inset-контур --ghost-ring)
         pg = self.page
         self._load()
         base_l = self._warm_state()["bg"]
@@ -5862,7 +5863,7 @@ class TestRailWarmOnCardDrag:
         warm_l = self._warm_state()
         self._end_drag()
         assert warm_l["cls"] is True and warm_l["bg"] != base_l, (base_l, warm_l)
-        assert warm_l["bg"] == self._probe_token_bg("--rail-warm"), warm_l
+        assert warm_l["bg"] == self._probe_token_bg("--ghost-bg"), warm_l
         assert warm_l["ring"] != "none", warm_l
         pg.evaluate("setTheme('dark')")  # тёмная тема (функция переключателя из настроек)
         self.page.wait_for_timeout(50)
@@ -5872,7 +5873,7 @@ class TestRailWarmOnCardDrag:
         warm_d = self._warm_state()
         self._end_drag()
         assert warm_d["cls"] is True and warm_d["bg"] != base_d, (base_d, warm_d)
-        assert warm_d["bg"] == self._probe_token_bg("--rail-warm"), warm_d
+        assert warm_d["bg"] == self._probe_token_bg("--ghost-bg"), warm_d
         assert warm_d["ring"] != "none", warm_d
 
     def test_rail_warm_rule_tokens_only_no_hex(self):
@@ -5888,10 +5889,77 @@ class TestRailWarmOnCardDrag:
           return css.slice(start, end + 1);
         }""")
         assert rule, "правило .rail-right.rail-drag-over не найдено в <style>"
-        assert "var(--rail-warm)" in rule, rule
+        assert "var(--ghost-bg)" in rule, rule
         assert "var(--ghost-ring)" in rule, rule
         assert not re.search(r"#[0-9a-fA-F]{6}", rule), rule
         assert "rgb(" not in rule, rule
+
+    # --- Тон рейки при драге = цвет призрачной вкладки из настроек --------
+    # (--ghost-bg, «Внешний вид» → «Цвета»): фиксированного --rail-warm больше
+    # нет — кастомный цвет призрака перекрашивает рейку, картинка фона рейки
+    # под тоном не затирается
+
+    def test_custom_ghost_color_used_for_rail_drop_tone(self):
+        # Кастомный --ghost-bg + кастомный --rail-bg: под карточкой рейка
+        # становится цветом призрака пользователя (не цветом рейки),
+        # inset-контур на месте, после dragend чисто
+        self._load(custom_theme={"--rail-bg": "#4a5fd0", "--ghost-bg": "#ff5566"})
+        rail_bg = self._probe_token_bg("--rail-bg")
+        ghost = self._probe_token_bg("--ghost-bg")
+        assert ghost != rail_bg, (ghost, rail_bg)
+        self._start_card_drag("T1")
+        self._dragover_rail()
+        st = self._warm_state()
+        assert st["cls"] is True, st
+        assert st["bg"] == ghost, st
+        assert st["bg"] != rail_bg, st
+        assert st["ring"] != "none", st
+        self._end_drag()
+        after = self._warm_state()
+        assert after["cls"] is False and after["bg"] == rail_bg, after
+
+    def test_ghost_color_removed_live_returns_to_default(self):
+        # Кастомизацию сняли на лету (blattam-custom-theme = {}): тон рейки
+        # снова дефолтный --ghost-bg темы
+        self._load(custom_theme={"--ghost-bg": "#ff5566"})
+        self._start_card_drag("T1")
+        self._dragover_rail()
+        custom_bg = self._warm_state()["bg"]
+        self._end_drag()
+        self.page.evaluate("chrome.storage.local.set({'blattam-custom-theme': {}})")
+        self.page.wait_for_timeout(50)
+        default_ghost = self._probe_token_bg("--ghost-bg")
+        assert custom_bg != default_ghost, (custom_bg, default_ghost)
+        self._start_card_drag("T1")
+        self._dragover_rail()
+        st = self._warm_state()
+        assert st["cls"] is True and st["bg"] == default_ghost, st
+        self._end_drag()
+        assert self._warm_state()["cls"] is False
+
+    def test_rail_bg_image_kept_during_dragover(self):
+        # «Фон правой рейки» → картинка: под карточкой картинка остаётся
+        # (инлайн-стиль не снят), цвет — тон призрака --ghost-bg, inset-контур на месте
+        img = "data:image/png;base64," + "Q" * 100
+        self._load(bg_right=img)
+        self._start_card_drag("T1")
+        self._dragover_rail()
+        st = json.loads(self.page.evaluate("""() => {
+          const r = document.getElementById('rail-right');
+          const cs = getComputedStyle(r);
+          return JSON.stringify({
+            cls: r.classList.contains('rail-drag-over'),
+            img: cs.backgroundImage,
+            bg: cs.backgroundColor,
+            ring: cs.boxShadow
+          });
+        }"""))
+        assert st["cls"] is True, st
+        assert st["img"].startswith("url(") and img in st["img"], st
+        assert st["bg"] == self._probe_token_bg("--ghost-bg"), st
+        assert st["ring"] != "none", st
+        self._end_drag()
+        assert self._warm_state()["cls"] is False
 
 
 class TestOnlyTabHomeDrop:
