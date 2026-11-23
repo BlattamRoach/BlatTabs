@@ -443,13 +443,15 @@ const GIST_ID_KEY = 'blattam-gist-id';
 
 async function getSyncPayload() {
   const localData = await chrome.storage.local.get([STORAGE_KEY, GIST_ID_KEY, UPDATED_AT_KEY]);
-  const syncData = await chrome.storage.sync.get(null); // Get all sync storage (settings + spaces/groups)
-  
+  // С4.18: явный whitelist sync-ключей (было: get(null) — весь дамп sync-хранилища
+  // в payload.settings; applySyncPayload зеркалил его обратно без проверки)
+  const syncData = await chrome.storage.sync.get([SPACES_KEY, GROUPS_KEY, LAST_SPACE_KEY]);
+  const lastSpaceId = syncData[LAST_SPACE_KEY];
   return {
     tabs: localData[STORAGE_KEY] || [],
     spaces: syncData[SPACES_KEY] || [],
     groups: syncData[GROUPS_KEY] || [],
-    settings: { ...syncData },
+    lastSpaceId: (typeof lastSpaceId === 'string' && lastSpaceId) ? lastSpaceId : null,
     updatedAt: localData[UPDATED_AT_KEY] || 0 // С2.9: сохранённая метка (не Date.now() в момент чтения)
   };
 }
@@ -469,14 +471,30 @@ async function mergeTabs(localTabs, remoteTabs) {
   return merged;
 }
 async function applySyncPayload(payload) {
-  if (!payload) return;
+  if (!payload || typeof payload !== 'object') return;
   const localSet = {};
-  const syncSet = { ...payload.settings };
-  
-  if (payload.tabs) localSet[STORAGE_KEY] = payload.tabs;
-  if (payload.spaces) syncSet[SPACES_KEY] = payload.spaces;
-  if (payload.groups) syncSet[GROUPS_KEY] = payload.groups;
-  if (payload.updatedAt) localSet[UPDATED_AT_KEY] = payload.updatedAt; // С2.9: метка — из полученного payload
+  const syncSet = {};
+
+  // С4.18: валидация типов по каждому ключу — пишем только то, что прошло
+  if (Array.isArray(payload.tabs)) localSet[STORAGE_KEY] = payload.tabs;
+  if (Array.isArray(payload.spaces)) syncSet[SPACES_KEY] = payload.spaces;
+  if (Array.isArray(payload.groups)) syncSet[GROUPS_KEY] = payload.groups;
+  if (typeof payload.lastSpaceId === 'string' && payload.lastSpaceId) syncSet[LAST_SPACE_KEY] = payload.lastSpaceId;
+  if (typeof payload.updatedAt === 'number' && payload.updatedAt > 0) localSet[UPDATED_AT_KEY] = payload.updatedAt; // С2.9: метка — из полученного payload
+  // С2.9: метка дублируется в sync-запись — listener storage.onChanged видит её в той же записи
+  // и не перетирает payload-метку своей Date.now() (sync-часть данных пишется отдельной записью)
+  if (localSet[UPDATED_AT_KEY]) syncSet[UPDATED_AT_KEY] = localSet[UPDATED_AT_KEY];
+
+  // С4.18: обратная совместимость со старым форматом gist (payload.settings —
+  // дамп sync-хранилища до С4.18): берём из него те же три whitelisted-ключа —
+  // дамп выигрывает и у пустых top-level-массивов (в старых gist top-level —
+  // дубликат дампа); чужие ключи НЕ зеркалируем
+  const legacySettings = payload.settings;
+  if (legacySettings && typeof legacySettings === 'object' && !Array.isArray(legacySettings)) {
+    if (Array.isArray(legacySettings[SPACES_KEY]) && (!syncSet[SPACES_KEY] || !syncSet[SPACES_KEY].length)) syncSet[SPACES_KEY] = legacySettings[SPACES_KEY];
+    if (Array.isArray(legacySettings[GROUPS_KEY]) && (!syncSet[GROUPS_KEY] || !syncSet[GROUPS_KEY].length)) syncSet[GROUPS_KEY] = legacySettings[GROUPS_KEY];
+    if (typeof legacySettings[LAST_SPACE_KEY] === 'string' && !syncSet[LAST_SPACE_KEY]) syncSet[LAST_SPACE_KEY] = legacySettings[LAST_SPACE_KEY];
+  }
 
   await chrome.storage.local.set(localSet);
   await chrome.storage.sync.set(syncSet);

@@ -641,9 +641,10 @@ class TestManifest:
         }
         assert m["action"]["default_icon"]["128"] == "icons/icon128.png"
 
-    def test_update_url(self):
+    def test_no_update_url(self):
+        # С4.15: автообновление убрано — в манифесте нет update_url (обновление ручное — через Releases)
         m = json.load(open(f"{EXT_PATH}/manifest.json"))
-        assert m["update_url"] == "https://blattamroach.github.io/BlatTabs/update.json"
+        assert "update_url" not in m
 
     def test_key_pinned_stable_id(self):
         # ID = SHA-256 публичного ключа (первые 16 байт, a-p) — зафиксирован: смена ключа = смена ID
@@ -654,20 +655,9 @@ class TestManifest:
         eid = "".join(chr(ord("a") + b // 16) + chr(ord("a") + b % 16) for b in h)
         assert eid == "jbhpnhgbhaaijinlokaplonmffafbfhi"
 
-    def test_update_json_feed_matches_release(self):
-        # фид update.json: версия = версии manifest, zip в releases/ существует с той же версией
-        m = json.load(open(f"{EXT_PATH}/manifest.json"))
-        ver = m["version"]
-        feed = json.load(open(f"{EXT_PATH}/update.json", encoding="utf-8"))
-        app = feed["apps"][0]
-        assert app["name"] == "BlatTabs"
-        assert app["version"] == ver
-        assert app["update_url"] == f"https://blattamroach.github.io/BlatTabs/releases/BlatTabs-v{ver}.zip"
-        zip_path = os.path.join(EXT_PATH, "releases", f"BlatTabs-v{ver}.zip")
-        assert os.path.isfile(zip_path), f"release zip not found: {zip_path}"
-        with zipfile.ZipFile(zip_path) as zf:
-            zmanifest = json.loads(zf.read("manifest.json").decode("utf-8"))
-            assert zmanifest["version"] == ver
+    def test_update_json_removed(self):
+        # С4.15: фид update.json удалён из репозитория
+        assert not os.path.exists(os.path.join(EXT_PATH, "update.json"))
 
     def test_oauth2_scopes_gist(self):
         # С1.5: scope сужен repo → gist (синку нужны только gist-API)
@@ -13051,12 +13041,12 @@ class TestSettingsModal:
 
 
 # ==========================================
-#  VIEW.JS: О ПРОГРАММЕ (версия + автообновление)
+#  VIEW.JS: О ПРОГРАММЕ (версия + обновление через Releases)
 # ==========================================
 
 class TestAboutSection:
-    """«О программе» в настройках: версия (из манифеста) + «Проверить обновления»
-    (chrome.runtime.requestUpdateCheck → статус)."""
+    """«О программе»: версия (из манифеста) + «Открыть страницу Releases»
+    (обновление ручное, автообновление убрано — С4.15)."""
 
     @pytest.fixture(autouse=True)
     def _setup(self, page):
@@ -13070,11 +13060,6 @@ class TestAboutSection:
         self._open()
         self.page.locator("#settings-modal .settings-nav-item[data-section='about']").click()
 
-    def _status(self):
-        return self.page.evaluate(
-            "(() => { const el = document.getElementById('update-status'); "
-            "return { text: el.textContent.trim(), cls: el.className }; })()")
-
     def test_about_nav_item_present(self):
         load_view(self.page)
         self._open()
@@ -13086,7 +13071,8 @@ class TestAboutSection:
         self._open_about()
         # mock-манифест: version '1.0.0'
         assert self.page.evaluate("document.getElementById('about-version').textContent") == "1.0.0"
-        assert self.page.evaluate("document.getElementById('check-update-btn').textContent.trim()") == "Проверить обновления"
+        assert self.page.evaluate("document.getElementById('check-update-btn').textContent.trim()") == "Открыть страницу Releases"
+        assert self.page.evaluate("document.getElementById('update-status')") is None
 
     def test_about_pane_hidden_by_default(self):
         for theme in (None, "dark"):
@@ -13101,50 +13087,124 @@ class TestAboutSection:
         assert self.page.evaluate("document.getElementById('settings-pane-about').style.display") != "none"
         assert self.page.evaluate("document.getElementById('settings-pane-faq').style.display") == "none"
 
-    def test_check_update_no_update(self):
+    def test_releases_btn_opens_releases_page(self):
+        # С4.15: клик по кнопке — страница GitHub Releases (open-one → chrome.tabs.create в моке)
         load_view(self.page)
         self._open_about()
-        self.page.evaluate("chrome.runtime.__mockUpdateCheck = 'no_update'")
         self.page.locator("#check-update-btn").click()
         self.page.wait_for_timeout(100)
-        s = self._status()
-        assert s["text"] == "Актуальная версия"
-        assert "ok" in s["cls"]
+        created = self.page.evaluate("JSON.stringify(chrome.tabs.createdTabs)")
+        tabs = json.loads(created)
+        assert len(tabs) == 1, tabs
+        assert tabs[0]["url"] == "https://github.com/BlattamRoach/BlatTabs/releases", tabs
 
-    def test_check_update_available(self):
+    def test_about_text_manual_update(self):
+        # С4.15: честный текст — нет «автоматически», есть «Releases»
         load_view(self.page)
         self._open_about()
-        self.page.evaluate("chrome.runtime.__mockUpdateCheck = 'update_available'")
-        self.page.locator("#check-update-btn").click()
-        self.page.wait_for_timeout(100)
-        s = self._status()
-        assert s["text"] == "Доступно обновление"
-        assert "available" in s["cls"]
+        text = self.page.evaluate("document.querySelector('#settings-pane-about .about-text').textContent")
+        assert "Releases" in text
+        assert "автоматически" not in text
 
-    def test_check_update_downloading(self):
-        load_view(self.page)
-        self._open_about()
-        self.page.evaluate("chrome.runtime.__mockUpdateCheck = 'update_downloading'")
-        self.page.locator("#check-update-btn").click()
-        self.page.wait_for_timeout(100)
-        assert self._status()["text"] == "Скачивание обновления…"
 
-    def test_check_update_ready(self):
-        load_view(self.page)
-        self._open_about()
-        self.page.evaluate("chrome.runtime.__mockUpdateCheck = 'update_ready'")
-        self.page.locator("#check-update-btn").click()
-        self.page.wait_for_timeout(100)
-        assert "перезапустите" in self._status()["text"].lower()
+# ==========================================
+#  VIEW.JS: FAQ/ABOUT I18N (С4.16)
+# ==========================================
 
-    def test_button_reenables_after_check(self):
+class TestFaqAboutI18n:
+    """С4.16: проводка data-i18n markup ↔ словарь i18n.js (I18N.ru/I18N.en) —
+    FAQ + «О программе»: статичный markup пере-переводится applyI18n/switchLanguage."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        yield
+
+    def _open(self, section):
+        self.page.locator("#settings-btn").click()
+        self.page.locator("#settings-modal .settings-nav-item[data-section='" + section + "']").click()
+
+    def test_faq_pane_ru(self):
+        load_view(self.page)  # default ru
+        self._open("faq")
+        data = json.loads(self.page.evaluate(
+            "JSON.stringify({h4: document.querySelector('#settings-pane-faq .settings-section-title').textContent,"
+            " qs: [...document.querySelectorAll('#settings-pane-faq .faq-q')].map(e => e.textContent),"
+            " as: [...document.querySelectorAll('#settings-pane-faq .faq-a')].map(e => e.textContent),"
+            " ru_h4: I18N.ru.faq_title,"
+            " ru_qs: [I18N.ru.faq1_q, I18N.ru.faq2_q, I18N.ru.faq3_q, I18N.ru.faq4_q, I18N.ru.faq5_q],"
+            " ru_as: [I18N.ru.faq1_a, I18N.ru.faq2_a, I18N.ru.faq3_a, I18N.ru.faq4_a, I18N.ru.faq5_a]})"))
+        assert data["h4"] == data["ru_h4"] == "Частые вопросы"
+        assert data["qs"] == data["ru_qs"]
+        assert data["as"] == data["ru_as"]
+
+    def test_about_pane_ru(self):
         load_view(self.page)
-        self._open_about()
-        assert self.page.evaluate("document.getElementById('check-update-btn').disabled") is False
-        self.page.evaluate("chrome.runtime.__mockUpdateCheck = 'no_update'")
-        self.page.locator("#check-update-btn").click()
-        self.page.wait_for_timeout(100)
-        assert self.page.evaluate("document.getElementById('check-update-btn').disabled") is False
+        self._open("about")
+        data = json.loads(self.page.evaluate(
+            "JSON.stringify({h4: document.querySelector('#settings-pane-about .settings-section-title').textContent,"
+            " label: document.querySelector('#settings-pane-about .about-label').textContent,"
+            " text: document.querySelector('#settings-pane-about .about-text').textContent,"
+            " btn: document.getElementById('check-update-btn').textContent.trim(),"
+            " ru_h4: I18N.ru.about_title,"
+            " ru_label: I18N.ru.about_version,"
+            " ru_text: I18N.ru.about_text,"
+            " ru_btn: I18N.ru.about_check})"))
+        assert data["h4"] == data["ru_h4"] == "О программе"
+        assert data["label"] == data["ru_label"] == "Версия"
+        assert data["text"] == data["ru_text"]
+        assert data["btn"] == data["ru_btn"]
+        assert "автоматически" not in data["text"]  # регрессия: старый текст С4.15
+
+    def test_faq_about_panes_en(self):
+        load_view(self.page, lang="en")
+        self._open("faq")
+        data = json.loads(self.page.evaluate(
+            "JSON.stringify({h4: document.querySelector('#settings-pane-faq .settings-section-title').textContent,"
+            " qs: [...document.querySelectorAll('#settings-pane-faq .faq-q')].map(e => e.textContent),"
+            " as: [...document.querySelectorAll('#settings-pane-faq .faq-a')].map(e => e.textContent),"
+            " en_h4: I18N.en.faq_title,"
+            " en_qs: [I18N.en.faq1_q, I18N.en.faq2_q, I18N.en.faq3_q, I18N.en.faq4_q, I18N.en.faq5_q],"
+            " en_as: [I18N.en.faq1_a, I18N.en.faq2_a, I18N.en.faq3_a, I18N.en.faq4_a, I18N.en.faq5_a]})"))
+        assert data["h4"] == data["en_h4"] == "Frequently asked questions"
+        assert data["qs"] == data["en_qs"]
+        assert data["as"] == data["en_as"]
+        # «О программе» — та же страница, переключаем раздел
+        self.page.locator("#settings-modal .settings-nav-item[data-section='about']").click()
+        data = json.loads(self.page.evaluate(
+            "JSON.stringify({h4: document.querySelector('#settings-pane-about .settings-section-title').textContent,"
+            " label: document.querySelector('#settings-pane-about .about-label').textContent,"
+            " text: document.querySelector('#settings-pane-about .about-text').textContent,"
+            " btn: document.getElementById('check-update-btn').textContent.trim(),"
+            " en_h4: I18N.en.about_title,"
+            " en_label: I18N.en.about_version,"
+            " en_text: I18N.en.about_text,"
+            " en_btn: I18N.en.about_check})"))
+        assert data["h4"] == data["en_h4"] == "About"
+        assert data["label"] == data["en_label"] == "Version"
+        assert data["text"] == data["en_text"]
+        assert data["btn"] == data["en_btn"] == "Open the Releases page"
+
+    def test_switch_lang_live_reapplies(self):
+        load_view(self.page)  # ru
+        self._open("faq")
+        assert self.page.evaluate(
+            "document.querySelector('#settings-pane-faq .settings-section-title').textContent") == "Частые вопросы"
+        # Переключатель языка — в «Общих»; клик EN
+        self.page.locator("#settings-modal .settings-nav-item[data-section='general']").click()
+        self.page.click("#lang-btn-en")
+        self.page.wait_for_timeout(150)
+        # FAQ: live-пере-перевод (switchLanguage → setLang + applyI18n)
+        assert self.page.evaluate(
+            "document.querySelector('#settings-pane-faq .settings-section-title').textContent") == "Frequently asked questions"
+        # «О программе»: кнопка + текст тоже пере-переведены
+        self.page.locator("#settings-modal .settings-nav-item[data-section='about']").click()
+        data = json.loads(self.page.evaluate(
+            "JSON.stringify({btn: document.getElementById('check-update-btn').textContent.trim(),"
+            " text: document.querySelector('#settings-pane-about .about-text').textContent,"
+            " en_btn: I18N.en.about_check, en_text: I18N.en.about_text})"))
+        assert data["btn"] == data["en_btn"]
+        assert data["text"] == data["en_text"]
 
 
 def _tiny_png_bytes():
@@ -23856,3 +23916,226 @@ class TestSyncDebounceAlarm:
         body = src[i:src.index("\n}", i)]
         assert "setTimeout" not in body, body
         assert "chrome.alarms.create(SYNC_ALARM" in body, body
+
+# ==========================================
+#  C4.18: getSyncPayload/applySyncPayload — явный whitelist + валидация типов
+# ==========================================
+
+class TestSyncPayloadWhitelist:
+    """background.js С4.18: синк-пейлоад больше не несёт дамп всего
+    chrome.storage.sync (settings: {...syncData}): явный whitelist —
+    tabs/spaces/groups/lastSpaceId/updatedAt; applySyncPayload пишет только
+    поля, прошедшие валидацию типов (Array.isArray / string / number), чужие
+    ключи в sync не зеркалируются; gist в СТАРОМ формате (settings-дампы)
+    по-прежнему применяется — из дампа берутся те же три whitelisted-ключа."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        page.goto("about:blank")
+        page.evaluate(MOCK_CHROME)
+
+    def _load_bg(self):
+        self.page.evaluate(load_file("background.js") + "; 'loaded'")
+
+    def _seed(self):
+        # ТОЛЬКО после старта SW: стартовая purgeStaleScopeToken удаляет
+        # токен без маркера blattam-auth-scope
+        self.page.evaluate("""() => {
+          chrome.storage.local._data['github-token'] = 't';
+          chrome.storage.local._data['blattam-auth-scope'] = 'gist-1';
+          chrome.storage.local._data['blattam-gist-id'] = 'g1';
+        }""")
+
+    def _mock_get(self, body):
+        self.page.evaluate("""(body) => {
+          window.__fetchCalls = [];
+          window.__fetchTimeoutMs = 50;
+          window.fetch = async function (url, opts) {
+            window.__fetchCalls.push({ url: String(url), method: (opts && opts.method) || 'GET' });
+            return { ok: true, status: 200, json: async () => body };
+          };
+        }""", body)
+
+    def test_get_payload_explicit_whitelist_no_settings_dump(self):
+        """getSyncPayload: ровно ключи tabs/spaces/groups/lastSpaceId/updatedAt —
+        нет settings-дампа, чужой sync-ключ в пейлоад не попадает."""
+        self.page.evaluate("""() => {
+          chrome.storage.local._data['blattam-tabs'] = [{name: 'A', url: 'https://a.com'}];
+          chrome.storage.local._data['blattam-data-updated-at'] = 4242;
+          chrome.storage.sync._data['blattam-spaces'] = [{id: 'sp1', name: 'S'}];
+          chrome.storage.sync._data['blattam-groups'] = [];
+          chrome.storage.sync._data['blattam-last-space'] = 'sp1';
+          chrome.storage.sync._data['blattam-unknown'] = {x: 1};
+        }""")
+        self._load_bg()
+        p = self.page.evaluate("getSyncPayload()")
+        assert set(p.keys()) == {"tabs", "spaces", "groups", "lastSpaceId", "updatedAt"}, p
+        assert p["lastSpaceId"] == "sp1"
+        assert p["updatedAt"] == 4242
+        assert p["tabs"][0]["url"] == "https://a.com"
+
+    def test_get_payload_last_space_absent_is_null(self):
+        """blattam-last-space в sync отсутствует — lastSpaceId = null (не undefined/отсутствие ключа)."""
+        self._load_bg()
+        p = self.page.evaluate("getSyncPayload()")
+        assert p["lastSpaceId"] is None
+        assert p["tabs"] == []
+
+    def test_apply_new_shape_writes_whitelist_only(self):
+        """applySyncPayload (новый формат): tabs + updatedAt — в local,
+        spaces/groups/lastSpaceId — в sync."""
+        self._load_bg()
+        self.page.evaluate("""applySyncPayload({
+          tabs: [{name: 'R', url: 'https://r.com', spaceId: 'sp1'}],
+          spaces: [{id: 'sp1', name: 'S'}],
+          groups: [{id: 'g1', name: 'G', spaceId: 'sp1', collapsed: false}],
+          lastSpaceId: 'sp1',
+          updatedAt: 777
+        })""")
+        assert read_local(self.page, "blattam-tabs")[0]["url"] == "https://r.com"
+        assert read_local(self.page, "blattam-data-updated-at") == 777
+        assert read_storage_raw(self.page, "blattam-spaces")[0]["id"] == "sp1"
+        assert read_storage_raw(self.page, "blattam-groups")[0]["id"] == "g1"
+        assert read_storage_raw(self.page, "blattam-last-space") == "sp1"
+
+    def test_apply_no_blind_settings_mirror(self):
+        """Чужой ключ в старом settings-дампе НЕ записывается в sync —
+        берутся только три whitelisted-ключа."""
+        self._load_bg()
+        self.page.evaluate("""applySyncPayload({
+          settings: {
+            'blattam-spaces': [{id: 'sp9', name: 'X'}],
+            'blattam-groups': [],
+            'blattam-last-space': 'sp9',
+            'blattam-rogue': {evil: 1}
+          }
+        })""")
+        assert read_storage_raw(self.page, "blattam-spaces")[0]["id"] == "sp9"
+        assert read_storage_raw(self.page, "blattam-last-space") == "sp9"
+        assert self.page.evaluate("'blattam-rogue' in chrome.storage.sync._data") is False
+
+    def test_apply_type_validation_skips_bad_fields(self):
+        """Поле с неверным типом НЕ пишется (текущие данные не перетираются)."""
+        self._load_bg()
+        self.page.evaluate("""() => {
+          chrome.storage.local._data['blattam-tabs'] = [{name: 'KEEP', url: 'https://keep.com'}];
+          chrome.storage.local._data['blattam-data-updated-at'] = 555;
+          chrome.storage.sync._data['blattam-last-space'] = 'old';
+        }""")
+        self.page.evaluate("""applySyncPayload({
+          tabs: 'not-an-array',
+          spaces: 42,
+          lastSpaceId: 42,
+          updatedAt: '777'
+        })""")
+        tabs = read_local(self.page, "blattam-tabs")
+        assert tabs[0]["name"] == "KEEP"
+        assert read_local(self.page, "blattam-data-updated-at") == 555
+        assert read_storage_raw(self.page, "blattam-last-space") == "old"
+
+    def test_pull_old_format_gist_applies_settings_whitelist(self):
+        """Gist в СТАРОМ формате (settings-дампы, без ключа lastSpaceId):
+        pull применяет whitelisted-ключи из дампа, rogue — нет."""
+        self._mock_get({"files": {"sync.json": {"content": json.dumps({
+            "tabs": [{"name": "R", "url": "https://r.com", "spaceId": "sp1"}],
+            "spaces": [],
+            "groups": [],
+            "settings": {
+                "blattam-spaces": [{"id": "sp1", "name": "S"}],
+                "blattam-groups": [{"id": "g1", "name": "G", "spaceId": "sp1", "collapsed": False}],
+                "blattam-last-space": "sp1",
+                "blattam-rogue": {"evil": 1}
+            },
+            "updatedAt": 123
+        })}}})
+        self._load_bg()
+        self._seed()
+        res = self.page.evaluate("pullFromGitHub()")
+        assert res == {"ok": True, "pulled": True}, res
+        assert read_storage_raw(self.page, "blattam-last-space") == "sp1"
+        assert read_storage_raw(self.page, "blattam-spaces")[0]["id"] == "sp1"
+        assert read_storage_raw(self.page, "blattam-groups")[0]["id"] == "g1"
+        assert self.page.evaluate("'blattam-rogue' in chrome.storage.sync._data") is False
+
+    def test_pull_new_format_gist_last_space_id(self):
+        """Gist в НОВОМ формате: lastSpaceId применяется в sync."""
+        self._mock_get({"files": {"sync.json": {"content": json.dumps({
+            "tabs": [{"name": "R", "url": "https://r.com", "spaceId": "sp1"}],
+            "spaces": [{"id": "sp1", "name": "S"}],
+            "groups": [],
+            "lastSpaceId": "sp1",
+            "updatedAt": 123
+        })}}})
+        self._load_bg()
+        self._seed()
+        res = self.page.evaluate("pullFromGitHub()")
+        assert res == {"ok": True, "pulled": True}, res
+        assert read_storage_raw(self.page, "blattam-last-space") == "sp1"
+        assert read_storage_raw(self.page, "blattam-spaces")[0]["id"] == "sp1"
+
+    def test_push_body_has_no_settings_key(self):
+        """push: тело sync.json — без ключа settings, c lastSpaceId (новый формат)."""
+        self.page.evaluate("""() => {
+          chrome.storage.local._data['blattam-tabs'] = [{name: 'A', url: 'https://a.com'}];
+          chrome.storage.sync._data['blattam-last-space'] = 'sp1';
+        }""")
+        self._load_bg()
+        self._seed()
+        self.page.evaluate("""() => {
+          window.__putBody = null;
+          window.__fetchTimeoutMs = 50;
+          window.fetch = async function (url, opts) {
+            if (opts && opts.method === 'PUT') window.__putBody = opts.body;
+            return { ok: true, status: 200, json: async () => ({id: 'g1'}) };
+          };
+        }""")
+        self.page.evaluate("pushToGitHub()")
+        self.page.wait_for_timeout(100)
+        body = json.loads(self.page.evaluate("window.__putBody"))
+        content = json.loads(body["files"]["sync.json"]["content"])
+        assert "settings" not in content, content
+        assert content["lastSpaceId"] == "sp1"
+        assert content["tabs"][0]["url"] == "https://a.com"
+
+
+# ==========================================
+#  C4.18: FAQ — честный скоуп синхронизации (faq5_a)
+# ==========================================
+
+class TestFaqSyncScope:
+    """С4.18: FAQ faq5_a честно называет скоуп синка: через GitHub-аккаунт —
+    вкладки/пространства/группы; тема/язык/настройки — per-device (не синкаются)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    def _open_faq(self):
+        self.page.locator("#settings-btn").click()
+        self.page.locator("#settings-modal .settings-nav-item[data-section='faq']").click()
+
+    def _faq5(self):
+        return self.page.evaluate("""JSON.stringify({
+          text: document.querySelectorAll('#settings-pane-faq .faq-a')[4].textContent,
+          ru: I18N.ru.faq5_a,
+          en: I18N.en.faq5_a
+        })""")
+
+    def test_faq5_ru_markup_equals_dict_and_states_scope(self):
+        """RU: markup == словарь; названы синкаемые и per-device части."""
+        load_view(self.page)  # default ru
+        self._open_faq()
+        data = json.loads(self._faq5())
+        assert data["text"] == data["ru"]
+        for word in ("GitHub", "вкладки", "пространства", "группы", "Тема", "язык"):
+            assert word in data["ru"], (word, data["ru"])
+
+    def test_faq5_en_markup_equals_dict_and_states_scope(self):
+        """EN: markup == словарь; названы синкаемые и per-device части."""
+        load_view(self.page, lang="en")
+        self._open_faq()
+        data = json.loads(self._faq5())
+        assert data["text"] == data["en"]
+        for word in ("github", "tabs", "spaces", "groups", "theme", "per-device"):
+            assert word.lower() in data["en"].lower(), (word, data["en"])

@@ -1025,42 +1025,41 @@
           </div>
           <div class="settings-pane" id="settings-pane-faq" style="display:none;">
       <section class="settings-section">
-        <h4 class="settings-section-title">Частые вопросы</h4>
+        <h4 class="settings-section-title" data-i18n="faq_title">Частые вопросы</h4>
         <div class="faq-list">
           <div class="faq-item">
-            <p class="faq-q">Что такое BlatTabs?</p>
-            <p class="faq-a">Это страница «новой вкладки», где хранятся сохранённые вкладки: с именами, комментариями, группами и пространствами.</p>
+            <p class="faq-q" data-i18n="faq1_q">Что такое BlatTabs?</p>
+            <p class="faq-a" data-i18n="faq1_a">Это страница «новой вкладки», где хранятся сохранённые вкладки: с именами, комментариями, группами и пространствами.</p>
           </div>
           <div class="faq-item">
-            <p class="faq-q">Как сохранить открытую вкладку?</p>
-            <p class="faq-a">Перетащите её из правой рейки (список открытых вкладок) в центр; вкладки из центра можно перетаскивать и между группами.</p>
+            <p class="faq-q" data-i18n="faq2_q">Как сохранить открытую вкладку?</p>
+            <p class="faq-a" data-i18n="faq2_a">Перетащите её из правой рейки (список открытых вкладок) в центр; вкладки из центра можно перетаскивать и между группами.</p>
           </div>
           <div class="faq-item">
-            <p class="faq-q">Что такое пространства и группы?</p>
-            <p class="faq-a">Пространства — верхние чипы для разделки библиотеки; группы — секции вкладок внутри пространства, которые можно сворачивать.</p>
+            <p class="faq-q" data-i18n="faq3_q">Что такое пространства и группы?</p>
+            <p class="faq-a" data-i18n="faq3_a">Пространства — верхние чипы для разделки библиотеки; группы — секции вкладок внутри пространства, которые можно сворачивать.</p>
           </div>
           <div class="faq-item">
-            <p class="faq-q">Как выгрузить и загрузить данные?</p>
-            <p class="faq-a">Кнопки «Экспорт» (JSON) и «Импорт» в левой рейке.</p>
+            <p class="faq-q" data-i18n="faq4_q">Как выгрузить и загрузить данные?</p>
+            <p class="faq-a" data-i18n="faq4_a">Кнопки «Экспорт» (JSON) и «Импорт» в левой рейке.</p>
           </div>
           <div class="faq-item">
-            <p class="faq-q">Где хранятся данные?</p>
-            <p class="faq-a">На этом устройстве (chrome.storage.local); синхронизация между устройствами появится вместе с аккаунтом.</p>
+            <p class="faq-q" data-i18n="faq5_q">Где хранятся данные?</p>
+            <p class="faq-a" data-i18n="faq5_a">На этом устройстве (chrome.storage.local). Между устройствами через GitHub-аккаунт синхронизируются: сохранённые вкладки, пространства и группы. Тема, язык и остальные настройки остаются на каждом устройстве отдельно.</p>
           </div>
         </div>
       </section>
           </div>
           <div class="settings-pane" id="settings-pane-about" style="display:none;">
       <section class="settings-section">
-        <h4 class="settings-section-title">О программе</h4>
+        <h4 class="settings-section-title" data-i18n="about_title">О программе</h4>
         <div class="about-row">
-          <span class="about-label">Версия</span>
+          <span class="about-label" data-i18n="about_version">Версия</span>
           <span class="about-value" id="about-version">—</span>
         </div>
-        <p class="about-text">BlatTabs автоматически обновляется из репозитория: Chrome проверяет фид обновлений (≈раз в сутки и при запуске браузера) и подменяет установленную копию на месте. Данные привязаны к ID расширения и переживают обновление.</p>
+        <p class="about-text" data-i18n="about_text">BlatTabs не имеет автообновлений: обновляйте вручную через страницу Releases на GitHub — скачайте свежий zip и подставьте расширение (Load unpacked). Данные привязаны к ID расширения и переживают обновление.</p>
         <div class="about-row">
-          <button class="btn btn-ghost" id="check-update-btn">Проверить обновления</button>
-          <span class="about-status" id="update-status"></span>
+          <button class="btn btn-ghost" id="check-update-btn" data-i18n="about_check">Открыть страницу Releases</button>
         </div>
       </section>
           </div>

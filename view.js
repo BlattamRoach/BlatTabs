@@ -1046,11 +1046,9 @@ if (qsToggle) {
 }
 
 // «О программе»: версия (из манифеста) + «Проверить обновления»
-// (chrome.runtime.requestUpdateCheck → статус). Подмена копии на месте и
-// активация нового кода — задача Chrome (происходит при перезапуске браузера).
+// (кнопка открывает страницу GitHub Releases — обновление ручное, С4.15).
 const aboutVersion = document.getElementById('about-version');
 const checkUpdateBtn = document.getElementById('check-update-btn');
-const updateStatus = document.getElementById('update-status');
 
 if (aboutVersion) {
   aboutVersion.textContent = chrome.runtime.getManifest().version;
@@ -1060,38 +1058,11 @@ if (aboutVersion) {
 const railVersion = document.getElementById('rail-version');
 if (railVersion) railVersion.textContent = chrome.runtime.getManifest().version;
 
-if (checkUpdateBtn && updateStatus) {
-  const finishUpdateCheck = (res) => {
-    let text, cls = 'about-status';
-    if (res === 'update_available') {
-      text = t('update_available'); cls += ' available';
-    } else if (res === 'update_downloading') {
-      text = t('update_downloading');
-    } else if (res === 'update_ready') {
-      text = t('update_ready');
-    } else if (res === 'no_update') {
-      text = t('update_current'); cls += ' ok';
-    } else {
-      text = t('update_error');
-    }
-    updateStatus.className = cls;
-    updateStatus.textContent = text;
-    checkUpdateBtn.disabled = false;
-  };
-  checkUpdateBtn.addEventListener('click', () => {
-    checkUpdateBtn.disabled = true;
-    updateStatus.className = 'about-status';
-    updateStatus.textContent = t('update_checking');
-    try {
-      if (typeof chrome.runtime.requestUpdateCheck === 'function') {
-        chrome.runtime.requestUpdateCheck(finishUpdateCheck);
-      } else {
-        finishUpdateCheck(null);
-      }
-    } catch (e) {
-      finishUpdateCheck(null);
-    }
-  });
+// С4.15: автообновление убрано (update_url из манифеста). Кнопка открывает страницу
+// Releases — обновление ручное: скачать свежий zip → подменить расширение (Load unpacked).
+const RELEASES_URL = 'https://github.com/BlattamRoach/BlatTabs/releases';
+if (checkUpdateBtn) {
+  checkUpdateBtn.addEventListener('click', () => { openUrl(RELEASES_URL); });
 }
 
 // === Открытие вкладок (единый путь: background создаёт browser-tab) ===
