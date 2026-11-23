@@ -5,7 +5,7 @@
 - **Версия:** 2.5.5
 - **Платформа:** Chrome, Manifest V3 (чистый HTML/CSS/JS, без внешних библиотек)
 - **Данные:** хранятся локально на устройстве (`chrome.storage.local`)
-- **Проверено:** 983 автотестом (Playwright + pytest)
+- **Проверено:** 986 автотестом (Playwright + pytest)
 
 <!-- Скриншот v2.5.5: реальное UI (тёмная тема), сгенерировано через Playwright с загрузкой unpacked-расширения. -->
 <p align="center">
@@ -52,7 +52,7 @@
 ## Разработка
 
 - **Стек:** чистый HTML/CSS/JS, Manifest V3 (service worker).
-- **Тесты:** `test_plugin.py` — 983 автотестов (Playwright + pytest, Python 3.14).
+- **Тесты:** `test_plugin.py` — 986 автотестов (Playwright + pytest, Python 3.14).
   ```bash
   PYTHONDONTWRITEBYTECODE=1 C:\Python314\python.exe test_plugin.py
   ```
