@@ -23,6 +23,7 @@
 - **Зеркало вкладок браузера** — правая рейка выводит открытые вкладки браузера в том же порядке, что и верхняя полоса (перетаскивание в рейке переставляет реальные вкладки; открытие и закрытие вкладок обновляет рейку сразу). Перетащите вкладку из рейки в сетку карточек — она сохранится карточкой, браузерная вкладка останется открытой.
 - **Перестановка пространств** — перетащите чип пространства на другой чип: по ряду за курсором идёт тёплая слот-заглушка (единственный индикатор вставки, как при перетаскивании карточек); левая половина цели — вставить перед, правая — после; порядок чипов меняется, вкладки и активное пространство остаются на своих местах; дроп в любом месте ряда (зазор между чипами, отступы, кнопка «+ Пространство») — в позицию заглушки (как при перетаскивании карточек). Дроп карточки на чип пространства (перенос вкладки в пространство) — как раньше.
 - **Открытие всех вкладок группы** — ⧉ на шапке группы (появляется при наведении): открывает все вкладки группы в новых вкладках браузера; работает и у свёрнутой группы.
+- **Открытие всех вкладок пространства** — ⧉ в мета-строке пространства (ряд чипов): открывает все вкладки активного пространства новыми вкладками в ТЕКУЩЕМ окне (фоновые).
 - **Открытие в фоне** — средний клик (колесо мыши) по карточке открывает сайт новой фоновой вкладкой, вы остаётесь на странице BlatTabs.
 - **Reorder карточек** — перетаскивание карточки на другую карточку меняет порядок (верхняя/нижняя половина — перед/после).
 - **Массовое открытие и удаление** — чекбоксы на карточках + панель «N выбрано / Открыть / Сбросить / Удалить»; «✕ Удалить» — выбранные вкладки удаляются (с подтверждением).
@@ -58,6 +59,7 @@ The design is minimal monochrome, Vercel-style: black/white/grey, system font, c
 - **Drag & drop** — drag cards onto folder chips (native HTML5 DnD, no libraries).
 - **Browser tabs mirror** — the right rail lists your open browser tabs in the same order as the top strip (dragging them in the rail reorders the real tabs; new tabs and closes update the rail live). Drag a tab from the rail into the card grid to save it as a card — the browser tab stays open.
 - **Open all tabs of a group** — the ⧉ button on a group's header (revealed on hover) opens every tab of that group in new browser tabs; works for collapsed groups too.
+- **Open all tabs of a space** — the ⧉ button in the space meta-row (chips row) opens every tab of the active space as new background tabs in the CURRENT window.
 - **Bulk open & delete** — checkboxes on cards + «N selected / Open / Clear / Delete» panel; «✕ Delete» removes the selection (with confirmation).
 - **Keyboard navigation** — arrow keys across cards (wrapping), Enter to open, Delete to remove, Esc to reset.
 - **Dark theme** — 🌙/☀️ toggle in the header, choice is persisted.

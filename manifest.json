@@ -9,7 +9,8 @@
     "tabs",
     "storage",
     "identity",
-    "alarms"
+    "alarms",
+    "windows"
   ],
   "host_permissions": [
     "https://github.com/*",
