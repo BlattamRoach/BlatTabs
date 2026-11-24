@@ -130,6 +130,11 @@ var chrome = {
       if (callback) { callback(list); return undefined; }
       return Promise.resolve(list);
     },
+    // remove: закрывает вкладку по id (chrome.tabs.remove — реальный метод в background.js)
+    remove: function(tabId) {
+      this._tabs = this._tabs.filter(function (t) { return t.id !== tabId; });
+      return Promise.resolve(true);
+    },
     // move: переставляет в _tabs (индексы per-window пересчитывает), fire onMoved и
     // эмулирует background: обновляет mirror blattam-browser-tabs (без newtab-страницы)
     move: function(tabId, opts) {
@@ -181,6 +186,9 @@ var chrome = {
         chrome.tabs._tabs = chrome.tabs._tabs.concat([tab]);
         return tab;
       });
+      // начало окна — с одной пустой начальной вкладкой (как в настоящем Chrome)
+      var initTab = { id: 'wintab' + id + '_init', windowId: id, index: 0, status: 'loading', url: '' };
+      chrome.tabs._tabs = chrome.tabs._tabs.concat([initTab]);
       self._created = self._created.concat([{ id: id, opts: opts, tabs: created }]);
       return Promise.resolve({ id: id, tabs: created });
     },
@@ -641,6 +649,12 @@ class TestManifest:
         m = json.load(open(f"{EXT_PATH}/manifest.json"))
         assert "tabs" in m["permissions"]
         assert "storage" in m["permissions"]
+
+    def test_windows_permission_present(self):
+        # Регрессия: view.js использует chrome.windows.getCurrent/update —
+        # в манифесте обязателен permission 'windows', иначе Windows API недоступен.
+        m = json.load(open(f"{EXT_PATH}/manifest.json"))
+        assert "windows" in m["permissions"]
 
     def test_service_worker(self):
         m = json.load(open(f"{EXT_PATH}/manifest.json"))
@@ -1980,6 +1994,11 @@ class TestCollapsedGroupDropExpand:
     @pytest.fixture(autouse=True)
     def _setup(self, page):
         self.page = page
+        self.page_errors = []
+        self._on_pageerror = lambda exc: self.page_errors.append(str(exc))
+        self.page.on("pageerror", self._on_pageerror)
+        yield
+        self.page.remove_listener("pageerror", self._on_pageerror)
 
     SP = [{"id": "sp1", "name": "Main"}]
 
@@ -2083,6 +2102,105 @@ class TestCollapsedGroupDropExpand:
         assert "gbar-collapsed" not in d["barClass"]
         assert d["g1Cards"] == 1
         assert self.page.evaluate("chrome.tabs._tabs.map(t => t.id)") == ["bt3"]
+
+    def _inject_real_styles(self):
+        # Реальные стили (theme.css + <style> view.html) — для computed-цветов арма
+        theme = load_file("theme.css")
+        html = load_file("view.html")
+        style = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate(
+            "(styles) => { var st = document.createElement('style'); st.textContent = styles; document.head.appendChild(st); }",
+            [theme + "\n" + style])
+
+    def _ghost_bg_token(self):
+        css = load_file("theme.css")
+        dark_at = css.index('[data-theme="dark"] {')
+        m = re.search(r"--ghost-bg:\s*(#[0-9a-fA-F]{3,8}|rgba?\([^)]*\))", css[:dark_at])
+        assert m
+        v = m.group(1)
+        if v.startswith("#"):
+            h = v[1:]
+            if len(h) == 3:
+                h = "".join(c2 * 2 for c2 in h)
+            return "rgb({0}, {1}, {2})".format(int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+        nums = [x.strip() for x in v.split("(", 1)[1].strip().strip("()").split(",")]
+        return "rgba({0}, {1}, {2}, {3})".format(nums[0], nums[1], nums[2], nums[3])
+
+    def test_rail_dragover_arms_ghost_on_collapsed_group(self):
+        # Драг вкладки рейки на СВЁРНУТУЮ группу: во время dragover шапка
+        # вооружается тёплым .drop-over (фон --ghost-bg из настроек «Цвета»),
+        # после dragend arm снимается
+        BT = [{"id": "bt3", "title": "News", "url": "https://news.example",
+               "favIconUrl": "https://fav.example/3.ico", "windowId": 1, "index": 2}]
+        load_view(self.page, spaces=self.SP, groups=[
+            {"id": "g1", "name": "Dev", "spaceId": "sp1", "collapsed": True},
+        ], tabs=[{"name": "T", "url": "https://t.com", "spaceId": "sp1"}], browser_tabs=BT)
+        self._inject_real_styles()
+        self.page.wait_for_timeout(60)
+        self.page.evaluate("""() => {
+          const src = document.querySelector('.bt-tab[data-id="bt3"]');
+          const bar = document.querySelector('.gbar[data-group-id="g1"]');
+          const r = bar.getBoundingClientRect();
+          const dt = new DataTransfer();
+          src.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true, cancelable: true}));
+          bar.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true,
+                                                       clientX: r.left + 10, clientY: r.top + 5}));
+          window.__dt = dt; window.__bar = bar; window.__src = src;
+        }""")
+        self.page.wait_for_timeout(150)  # transition .1s на фоне — вычислить computed-цвет с точностью
+        armed = self.page.evaluate("window.__bar.classList.contains('drop-over')")
+        bg = self.page.evaluate("getComputedStyle(window.__bar).backgroundColor")
+        self.page.evaluate("""() => {
+          window.__src.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        }""")
+        self.page.wait_for_timeout(50)
+        armed_after = self.page.evaluate("window.__bar.classList.contains('drop-over')")
+        assert armed is True, "шапка свёрнутой группы должна вооружиться при dragover рейки"
+        assert bg == self._ghost_bg_token(), (bg, self._ghost_bg_token())
+        assert armed_after is False, "arm должен сниматься по dragend"
+        assert self.page_errors == [], self.page_errors
+
+    def test_rail_drag_on_expanded_group_not_armed_not_saved(self):
+        # Драг вкладки рейки на шапку РАЗВЁРНУТОЙ группы с видимыми карточками —
+        # без arm, без preventDefault (no-drop), дроп не срабатывает: ни двига
+        # вкладки, ни развёртывания, ни сообщений
+        BT = [{"id": "bt3", "title": "News", "url": "https://news.example",
+               "favIconUrl": "https://fav.example/3.ico", "windowId": 1, "index": 2}]
+        load_view(self.page, spaces=self.SP, groups=[
+            {"id": "g1", "name": "Dev", "spaceId": "sp1", "collapsed": False},
+        ], tabs=[
+            {"name": "M", "url": "https://m.com", "spaceId": "sp1", "groupId": "g1"},
+            {"name": "T", "url": "https://t.com", "spaceId": "sp1"},
+        ], browser_tabs=BT)
+        self._inject_real_styles()
+        self.page.wait_for_timeout(60)
+        before_tabs = json.dumps(read_storage_raw(self.page, "blattam-tabs"), sort_keys=True)
+        before_groups = json.dumps(read_storage_raw(self.page, "blattam-groups"), sort_keys=True)
+        self.page.evaluate("""() => {
+          const src = document.querySelector('.bt-tab[data-id="bt3"]');
+          const bar = document.querySelector('.gbar[data-group-id="g1"]');
+          const r = bar.getBoundingClientRect();
+          const dt = new DataTransfer();
+          src.dispatchEvent(new DragEvent('dragstart', {dataTransfer: dt, bubbles: true, cancelable: true}));
+          const ev = new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true,
+                                                clientX: r.left + 10, clientY: r.top + 5});
+          bar.dispatchEvent(ev);
+          window.__prevented = ev.defaultPrevented;
+          window.__armed_after_dragover = bar.classList.contains('drop-over');
+          const dropEv = new DragEvent('drop', {dataTransfer: dt, bubbles: true, cancelable: true,
+                                               clientX: r.left + 10, clientY: r.top + 5});
+          bar.dispatchEvent(dropEv);
+          window.__dropped = dropEv.defaultPrevented;
+          src.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+        }""")
+        self.page.wait_for_timeout(100)
+        assert self.page.evaluate("window.__prevented") is False
+        assert self.page.evaluate("window.__armed_after_dragover") is False
+        assert self.page.evaluate("window.__dropped") is False
+        assert json.dumps(read_storage_raw(self.page, "blattam-tabs"), sort_keys=True) == before_tabs
+        assert json.dumps(read_storage_raw(self.page, "blattam-groups"), sort_keys=True) == before_groups
+        assert self.page.evaluate("window.lastMessage ? window.lastMessage.action : null") != "open-many"
+        assert self.page_errors == [], self.page_errors
 
     def test_drop_on_empty_group_bar_expands_with_tab(self):
         # Пустая группа (свёрнутый вид, данных о раскрытии нет): дроп карточки
@@ -12851,17 +12969,22 @@ class TestRailPostDropClick:
         assert self.page.evaluate("chrome.storage.sync._data['blattam-last-space']") != before
 
     def test_rail_drop_on_gbar_no_toggle(self):
+        # Рейка → шапка РАЗВЁРНУТОЙ группы с видимыми карточками — НЕ цель:
+        # вкладка НЕ сохраняется в группу, ложный клик по шапке не сворачивает
+        # группу (дроп отменён — флаг открытия реального клика сохранён, но
+        # клик всё равно по шапке, не по рейке)
         gtabs = [dict(self.TABS[0], groupId="g1"), dict(self.TABS[1], groupId="g1")]
         load_view(self.page, tabs=gtabs, spaces=[{"id": "sp1", "name": "Alpha"}],
                   groups=self.GROUPS, browser_tabs=self.BT)
         self.page.wait_for_timeout(80)
+        before = json.loads(self.page.evaluate("JSON.stringify(chrome.storage.local._data['blattam-tabs'])"))
         self._rail_drag("bt3", "#tabs-list .gbar", 'after')
         self._rail_over_and_drop("#tabs-list .gbar", 'after')
         self._synthetic_click("#tabs-list .gbar")
         groups = json.loads(self.page.evaluate("JSON.stringify(chrome.storage.sync._data['blattam-groups'])"))
         assert groups[0]["collapsed"] is False, groups
-        data = json.loads(self.page.evaluate("JSON.stringify(chrome.storage.local._data)"))
-        assert data["blattam-tabs"][-1]["groupId"] == "g1", data["blattam-tabs"]
+        data = json.loads(self.page.evaluate("JSON.stringify(chrome.storage.local._data['blattam-tabs'])"))
+        assert data == before, (before, data)
 
     def test_rail_reorder_committed_real_click_still_focuses(self):
         load_view(self.page, tabs=self.TABS, spaces=[{"id": "sp1", "name": "Alpha"}], browser_tabs=self.BT)
@@ -13347,7 +13470,7 @@ class TestSettingsBackground:
             titles = json.loads(self.page.evaluate(
                 "JSON.stringify([...document.querySelectorAll('#settings-modal .settings-section-title')]"
                 ".map(el => el.textContent.trim()))"))
-            assert titles == ["Пресеты", "Тема", "Цвета", "Размер и форма", "Шрифт", "Фон", "Фон левой рейки", "Фон правой рейки", "Цвет вкладок", "Язык", "Горячие клавиши", "Экспериментальное", "Частые вопросы", "О программе"]
+            assert titles == ["Пресеты", "Тема", "Цвета", "Размер и форма", "Шрифт", "Фон", "Фон левой рейки", "Фон правой рейки", "Язык", "Горячие клавиши", "Экспериментальное", "Частые вопросы", "О программе"]
             assert self.page.evaluate("document.getElementById('bg-file-btn').textContent.trim()") == "Выбрать картинку"
             assert self.page.evaluate("document.getElementById('bg-clear-btn').textContent.trim()") == "Убрать"
             # скрытый input-файла рядом с #import-input
@@ -13513,11 +13636,11 @@ class TestSettingsTabColor:
                                        ("dark", self.DARK_DEFAULT, "#36312d")):
             self._load(tabs=self._tabs(), theme=theme)
             self._open()
-            # «Цвет вкладок» — раздел между «Фоном» и «Частыми вопросами»
+            # «Цвет вкладок» — РЯД внутри «Цвета» (НЕ отдельный раздел): заголовков секций без него
             titles = json.loads(self.page.evaluate(
                 "JSON.stringify([...document.querySelectorAll('#settings-modal .settings-section-title')]"
                 ".map(el => el.textContent.trim()))"))
-            assert titles == ["Пресеты", "Тема", "Цвета", "Размер и форма", "Шрифт", "Фон", "Фон левой рейки", "Фон правой рейки", "Цвет вкладок", "Язык", "Горячие клавиши", "Экспериментальное", "Частые вопросы", "О программе"]
+            assert titles == ["Пресеты", "Тема", "Цвета", "Размер и форма", "Шрифт", "Фон", "Фон левой рейки", "Фон правой рейки", "Язык", "Горячие клавиши", "Экспериментальное", "Частые вопросы", "О программе"]
             assert self.page.evaluate("document.getElementById('tab-color-input').type") == "color"
             assert self.page.evaluate(
                 "document.getElementById('tab-color-reset').textContent.trim()") == "Сбросить"
@@ -13526,6 +13649,29 @@ class TestSettingsTabColor:
             assert self._card_bg() == default
             assert self.page.evaluate("document.getElementById('tab-color-input').value") == picker
             assert self._stored() is None
+
+    def test_tab_color_row_first_inside_cust_colors_section(self):
+        # «Цвет вкладок» — ПЕРВАЯ строка в «Цветах» (перед «Фон страницы»)
+        self._load(tabs=self._tabs())
+        self._open()
+        d = json.loads(self.page.evaluate("(() => {           const sec = document.getElementById('cust-colors-section');           const rows = [...sec.querySelectorAll('.cust-row')];           const t = document.getElementById('tab-color-input');           const r = document.getElementById('tab-color-reset');           const h = sec.querySelector('.settings-section-title');           return JSON.stringify({             sectionHasTabColorInput: !!t,             inputInSection: !!sec.contains(t),             inputIsFirstRow: rows.length > 0 && rows[0].contains(t),             resetInSection: !!sec.contains(r),             sectionTitle: h ? h.textContent.trim() : null,             noSeparateSection: !document.getElementById('tab-color-section')           });         })()"))
+        assert d["sectionHasTabColorInput"] is True
+        assert d["inputInSection"] is True
+        assert d["inputIsFirstRow"] is True
+        assert d["resetInSection"] is True
+        assert d["sectionTitle"] == "Цвета"
+        assert d["noSeparateSection"] is True
+
+    def test_tab_color_reset_button_still_works(self):
+        # Работоспособность #tab-color-reset (в строке «Цвета») — как раньше
+        self._load(tabs=self._tabs())
+        self._open()
+        self._set_color("#336699")
+        assert self._reset_visible()
+        self.page.locator("#tab-color-reset").click()
+        assert self._stored() is None
+        assert not self._reset_visible()
+        assert self._card_bg() == self.LIGHT_DEFAULT
 
     def test_tab_color_set_applies(self):
         self._load(tabs=self._tabs())
@@ -14040,6 +14186,32 @@ class TestRailPointerDrag:
         self.page.wait_for_timeout(100)
         assert self._central_ghost_count() == 0  # central ghost removed
         assert self._tabs_order() == ["bt1", "bt2", "bt3"]  # rail unchanged
+
+    def test_pointer_drop_on_expanded_gbar_cancels_no_save(self):
+        # Pointer-драг вкладки рейки на шапку РАЗВЁРНУТОЙ группы с видимыми
+        # карточками: без arm шапки, дроп отменяется — вкладка НЕ сохраняется,
+        # группа НЕ разворачивается, порядок рейки не меняется
+        load_view(self.page, spaces=self.SPACES,
+                  groups=[{"id": "g1", "name": "Grp", "spaceId": "sp1", "collapsed": False}],
+                  tabs=[{"name": "M", "url": "https://m.example", "spaceId": "sp1", "groupId": "g1"},
+                        {"name": "Saved", "url": "https://saved.example", "spaceId": "sp1"}],
+                  browser_tabs=self.BT)
+        self.page.wait_for_timeout(80)
+        before = json.loads(self.page.evaluate("JSON.stringify(chrome.storage.local._data['blattam-tabs'])"))
+        gbar = self._gbar_box()
+        b1 = self._item_box('bt1')
+        self._pd_move(b1, {"x": gbar["x"], "y": gbar["y"]}, steps=10)
+        # курсор над шапкой — arm НЕ вооружается (группа не пуста)
+        armed = self.page.evaluate("document.querySelectorAll('.gbar.drop-over').length")
+        self.page.mouse.up()
+        self.page.wait_for_timeout(100)
+        after = json.loads(self.page.evaluate("JSON.stringify(chrome.storage.local._data['blattam-tabs'])"))
+        assert armed == 0, armed
+        assert after == before, (before, after)
+        assert self.page.evaluate("chrome.storage._data['blattam-groups'][0].collapsed") is False
+        assert self._tabs_order() == ["bt1", "bt2", "bt3"]
+        self.page.wait_for_timeout(400)
+        assert self._clone_state() is None
 
 
 # ==========================================
@@ -19901,9 +20073,11 @@ class TestRailCenterTerritories:
         assert len(wiki) == 1 and wiki[0].get("groupId") == "g1"
         assert self._slot() is None
 
-    def test_pointer_gbar_hover_hides_central_ghost(self):
-        # Crossing the group header: the central ghost is hidden (drop-into-
-        # group semantics); releasing on the header — to the group
+    def test_pointer_gbar_hover_expanded_group_no_save(self):
+        # Crossing the header of an EXPANDED group (with visible cards): the
+        # header is NOT a drop target — no arm, no ghost-hiding (layout
+        # stable); release cancels — nothing is saved, the group is not
+        # toggled, the ghost is removed
         tabs = [dict(t, groupId="g1") for t in self.TABS3]
         self._load(tabs=tabs, groups=self.GROUPS)
         self._touch_b()
@@ -19914,12 +20088,14 @@ class TestRailCenterTerritories:
             return {x: r.left + r.width / 2, y: r.top + r.height / 2};
         })()""")
         self._hover(gbar["x"], gbar["y"])
+        armed = self.page.evaluate("document.querySelectorAll('.gbar.drop-over').length")
+        assert armed == 0, armed
         s = self._slot()
-        assert s and s["display"] == "none"
+        assert s is not None and s["display"] != "none"
         self.page.mouse.up()
         self.page.wait_for_timeout(150)
         wiki = [t for t in self._stored() if t["url"] == "https://wiki.example"]
-        assert len(wiki) == 1 and wiki[0].get("groupId") == "g1"
+        assert len(wiki) == 0, wiki
         assert self._slot() is None
 
     def test_pointer_flip_on_central_anchor_change(self):
@@ -20042,7 +20218,7 @@ class TestCustomTheme:
               "--card-name", "--ink", "--ghost-bg", "--ghost-ring",
               "--card-radius", "--card-gap", "--card-min", "--card-name-size", "--font-ui"]
     TITLES = ["Пресеты", "Тема", "Цвета", "Размер и форма", "Шрифт", "Фон", "Фон левой рейки", "Фон правой рейки",
-              "Цвет вкладок", "Язык", "Горячие клавиши", "Экспериментальное",
+              "Язык", "Горячие клавиши", "Экспериментальное",
               "Частые вопросы", "О программе"]
 
     @pytest.fixture(autouse=True)
@@ -22726,9 +22902,9 @@ class TestRailBackgrounds:
         for theme in (None, "dark"):
             load_view(self.page, theme=theme)
             self._open()
-            # новые разделы сразу после «Фона», до «Цвет вкладок»
+            # новые разделы сразу после «Фона» («Цвет вкладок» больше не раздел)
             assert self._titles() == ["Пресеты", "Тема", "Цвета", "Размер и форма", "Шрифт", "Фон", "Фон левой рейки",
-                                      "Фон правой рейки", "Цвет вкладок", "Язык", "Горячие клавиши", "Экспериментальное",
+                                      "Фон правой рейки", "Язык", "Горячие клавиши", "Экспериментальное",
                                       "Частые вопросы", "О программе"]
             for which in ("left", "right"):
                 assert self.page.evaluate(
@@ -22836,7 +23012,11 @@ class TestRailBackgrounds:
         titles = self._titles()
         assert titles[6] == "Left rail background"
         assert titles[7] == "Right rail background"
-        assert "Background" in titles and "Tab color" in titles
+        assert "Background" in titles
+        # «Tab color» — строка внутри «Colors», не раздел-заголовок
+        assert "Tab color" not in titles
+        assert self.page.evaluate(
+            "document.querySelector('#cust-colors-section .cust-lbl[data-i18n=\"tab_color_title\"]').textContent.trim()") == "Tab color"
 
     def test_no_pageerrors(self):
         for theme in (None, "dark"):
@@ -22861,7 +23041,7 @@ class TestSettingsNavRestructure:
     RU_LABELS = ["Внешний вид", "Общие", "Горячие клавиши", "Экспериментальное", "FAQ", "О программе"]
     EN_LABELS = ["Appearance", "General", "Hotkeys", "Experimental", "FAQ", "About"]
     TITLES = ["Пресеты", "Тема", "Цвета", "Размер и форма", "Шрифт", "Фон", "Фон левой рейки", "Фон правой рейки",
-              "Цвет вкладок", "Язык", "Горячие клавиши", "Экспериментальное", "Частые вопросы", "О программе"]
+              "Язык", "Горячие клавиши", "Экспериментальное", "Частые вопросы", "О программе"]
 
     @pytest.fixture(autouse=True)
     def _setup(self, page):
@@ -22937,7 +23117,11 @@ class TestSettingsNavRestructure:
             bg: inPane('bg-section'),
             bgLeft: inPane('bg-left-section'),
             bgRight: inPane('bg-right-section'),
-            tabColor: inPane('tab-color-section'),
+            tabColor: inPane('tab-color-input'),
+            tabColorInColors: (() => { const sec = document.getElementById('cust-colors-section');
+              const t = document.getElementById('tab-color-input');
+              return !!sec && !!t && sec.contains(t) ? 'in-colors' : 'nowhere'; })(),
+            separateSectionGone: !document.getElementById('tab-color-section'),
             lang: inPane('lang-section'),
             qs: inPane('qs-section'),
             oldPane: !!document.getElementById('settings-pane-customization'),
@@ -22951,6 +23135,8 @@ class TestSettingsNavRestructure:
         assert d["bgLeft"] == "settings-pane-appearance", d
         assert d["bgRight"] == "settings-pane-appearance", d
         assert d["tabColor"] == "settings-pane-appearance", d
+        assert d["tabColorInColors"] == "in-colors", d
+        assert d["separateSectionGone"] is True, d
         assert d["lang"] == "settings-pane-general", d
         assert d["qs"] == "settings-pane-experimental", d
         assert d["oldPane"] is False, d
@@ -24950,17 +25136,17 @@ class TestFaqFileSync:
         assert data["a"] == data["en_a"], data
 
 # ==========================================
-#  Wave 1: «Открыть всё пространство в новом окне» (⧉ в мета-строке)
+#  «Открыть все вкладки пространства» (⧉ в мета-строке, в ТЕКУЩЕМ окне)
 # ==========================================
 
 class TestSpaceOpenAllWindow:
-    """Wave 1: ⧉ в мета-строке (#meta-openall-btn, ПЕРВАЯ в .meta-actions) —
-    все сохранённые вкладки АКТИВНОГО пространства открываются в НОВОМ окне
-    браузера (первая вкладка активна, остальные фоном, focused:true). view:
-    сообщение open-space-window с urls в порядке allTabs (пустое пространство
-    — no-op, сообщение не шлётся); background: chrome.windows.create(tabs,
-    focused:true), небезопасные URL отбрасываются isSafeOpenUrl (пустой список
-    после фильтра — окно не создаётся)."""
+    """⧉ в мета-строке (#meta-openall-btn, ПЕРВАЯ в .meta-actions) — все
+    сохранённые вкладки АКТИВНОГО пространства открываются в ТЕКУЩЕМ окне
+    браузера (те же семантики, что у ⧉ группы: open-many, активность не
+    ставим — фоновые вкладки). view: ровно одно сообщение open-many с urls в
+    порядке allTabs (пустое пространство — no-op, сообщение не шлётся);
+    background: open-many (chrome.tabs.create активность false, unsafe-фильтр
+    — покрыто существующими open-many-тестами)."""
 
     @pytest.fixture(autouse=True)
     def _setup(self, page):
@@ -24972,12 +25158,6 @@ class TestSpaceOpenAllWindow:
         load_view(self.page, tabs=tabs if tabs is not None else [],
                   spaces=spaces, lang=lang, last_space=last_space)
         self.page.wait_for_timeout(100)
-
-    def _load_bg(self):
-        self.page.evaluate(load_file("background.js") + "; 'loaded'")
-
-    def _windows_created(self):
-        return json.loads(self.page.evaluate("JSON.stringify(chrome.windows._created)"))
 
     TABS = [
         {"name": "A", "url": "https://a.com", "spaceId": "sp1"},
@@ -24992,7 +25172,7 @@ class TestSpaceOpenAllWindow:
 
     def test_meta_openall_btn_markup(self):
         """#meta-openall-btn — ПЕРВАЯ в .meta-actions (перед #meta-rename-btn),
-        глиф ⧉ (U+29C9), title == I18N.ru.open_space_window (словарь в
+        глиф ⧉ (U+29C9), title == I18N.ru.open_space_tabs (словарь в
         странице — источник истины)."""
         self._load_view(spaces=self.SPACES)
         d = self.page.evaluate("""(() => {
@@ -25007,32 +25187,32 @@ class TestSpaceOpenAllWindow:
             beforeRename: !!ren && kids.indexOf(btn) < kids.indexOf(ren),
             glyph: btn ? btn.textContent : null,
             title: btn ? btn.title : null,
-            dictRu: I18N.ru.open_space_window
+            dictRu: I18N.ru.open_space_tabs
           };
         })()""")
         assert d["exists"] and d["inRow"], d
         assert d["first"] and d["beforeRename"], d
-        assert d["glyph"] == "\u29c9", d
+        assert d["glyph"] == "⧉", d
         assert d["title"] == d["dictRu"], d
 
     def test_i18n_en(self):
         self._load_view(spaces=self.SPACES, lang="en")
         d = self.page.evaluate("""(() => {
           const btn = document.getElementById('meta-openall-btn');
-          return { title: btn ? btn.title : null, dictEn: I18N.en.open_space_window };
+          return { title: btn ? btn.title : null, dictEn: I18N.en.open_space_tabs };
         })()""")
         assert d["title"] == d["dictEn"], d
 
-    def test_click_opens_space_in_new_window_message(self):
+    def test_click_opens_space_tabs_in_current_window_message(self):
         self._load_view(tabs=self.TABS, spaces=self.SPACES, last_space="sp1")
         self.page.evaluate("document.getElementById('meta-openall-btn').click()")
         d = json.loads(self.page.evaluate("""JSON.stringify({
-          openAll: chrome.runtime.messagesSent.filter(m => m.action === 'open-space-window'),
-          others: chrome.runtime.messagesSent.filter(m => m.action === 'open-one' || m.action === 'open-many')
+          openMany: chrome.runtime.messagesSent.filter(m => m.action === 'open-many'),
+          legacy: chrome.runtime.messagesSent.filter(m => m.action === 'open-space-window')
         })"""))
-        assert len(d["openAll"]) == 1, d
-        assert d["openAll"][0]["urls"] == ["https://a.com", "https://b.com", "https://c.com"], d
-        assert d["others"] == [], d
+        assert len(d["openMany"]) == 1, d
+        assert d["openMany"][0]["urls"] == ["https://a.com", "https://b.com", "https://c.com"], d
+        assert d["legacy"] == [], d
 
     def test_empty_space_no_message(self):
         self._load_view(tabs=[], spaces=self.SPACES, last_space="sp1")
@@ -25051,35 +25231,6 @@ class TestSpaceOpenAllWindow:
         self.page.evaluate("document.getElementById('meta-openall-btn').click()")
         after = snap()
         assert after == before, (before, after)
-
-    # --- background-уровень ---
-
-    def test_background_creates_window_with_tabs(self):
-        self._load_bg()
-        resp = call_msg(self.page, "open-space-window",
-                        urls=["https://a.com", "https://b.com"])
-        assert resp == {"ok": True, "opened": 2, "windowId": 1001}, resp
-        created = self._windows_created()
-        assert len(created) == 1, created
-        assert created[0]["opts"]["tabs"] == [{"url": "https://a.com"}, {"url": "https://b.com"}], created
-        assert created[0]["opts"]["focused"] is True, created
-
-    def test_background_filters_unsafe_urls(self):
-        self._load_bg()
-        resp = call_msg(self.page, "open-space-window",
-                        urls=["https://a.com", "javascript:alert(1)", "chrome://extensions"])
-        assert resp == {"ok": True, "opened": 1, "windowId": 1001}, resp
-        created = self._windows_created()
-        assert len(created) == 1, created
-        assert created[0]["opts"]["tabs"] == [{"url": "https://a.com"}], created
-
-    def test_background_no_window_for_unsafe_or_empty(self):
-        self._load_bg()
-        r1 = call_msg(self.page, "open-space-window", urls=["javascript:x"])
-        assert r1 == {"ok": True, "opened": 0}, r1
-        r2 = call_msg(self.page, "open-space-window", urls=[])
-        assert r2 == {"ok": True, "opened": 0}, r2
-        assert self.page.evaluate("chrome.windows._created.length") == 0
 
 # ==========================================
 #  Регрессия: pull + метка UPDATED_AT_KEY (без счётчика pendingSyncWrites)

@@ -877,15 +877,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         chrome.tabs.create({ url, active: false });
       }
       break;
-    // Открыть всё пространство в новом окне: первая вкладка активна, остальные
-    // фоном; небезопасные URL (С2.7) отбрасываются; пустой список — без окна
-    case 'open-space-window': {
-      const urls = (Array.isArray(msg.urls) ? msg.urls : []).filter((u) => isSafeOpenUrl(u));
-      if (!urls.length) return Promise.resolve({ ok: true, opened: 0 });
-      return chrome.windows.create({ tabs: urls.map((u) => ({ url: u })), focused: true })
-        .then((win) => ({ ok: true, opened: urls.length, windowId: win.id }))
-        .catch(() => ({ ok: true, opened: 0 }));
-    }
     case 'delete':
       deleteTab(msg.index);
       break;

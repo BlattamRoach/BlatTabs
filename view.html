@@ -582,11 +582,6 @@
     /* i18n: переключатель языка в настройках */
     #settings-modal .lang-row { display: flex; gap: 8px; }
     #settings-modal .lang-row .btn.active { background: var(--ink); color: var(--on-ink); box-shadow: none; }
-    #settings-modal .tab-color-row { display: flex; align-items: center; gap: 8px; }
-    #settings-modal #tab-color-input {
-      width: 34px; height: 28px; padding: 2px; border: 0; border-radius: 6px;
-      box-shadow: 0 0 0 1px var(--line); background: var(--bg); cursor: pointer;
-    }
     /* Кастомизация: строки «Цвета»/«Размер и форма»/«Шрифт» (только токены) */
     #settings-modal .cust-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
     #settings-modal .cust-lbl { flex: 1 1 auto; min-width: 0; font: 400 12.5px/1.4 var(--font-ui); color: var(--text-soft); }
@@ -729,7 +724,7 @@
         <div class="metarow">
           <div class="metatitle"><span id="meta-label" data-i18n="meta_label">Мои вкладки</span><span class="n" id="meta-count">0</span></div>
           <div class="meta-actions">
-            <button class="meta-icon-btn" id="meta-openall-btn" data-i18n-title="open_space_window" title="Открыть всё пространство в новом окне">⧉</button>
+            <button class="meta-icon-btn" id="meta-openall-btn" data-i18n-title="open_space_tabs" title="Открыть все вкладки пространства">⧉</button>
             <button class="meta-icon-btn" id="meta-rename-btn" data-i18n-title="rename" title="Переименовать">✎</button>
             <button class="meta-icon-btn" id="meta-delete-btn" data-i18n-title="delete_space" title="Удалить пространство">✕</button>
           </div>
@@ -863,6 +858,11 @@
       <section class="settings-section" id="cust-colors-section">
         <h4 class="settings-section-title" data-i18n="cust_colors_title">Цвета</h4>
         <label class="cust-row">
+          <span class="cust-lbl" data-i18n="tab_color_title">Цвет вкладок</span>
+          <input type="color" id="tab-color-input" data-i18n-title="tab_color_input_title" title="Цвет карточек сохранённых вкладок">
+          <button class="btn btn-ghost cust-reset" id="tab-color-reset" style="display:none;" data-i18n="cust_reset">Сбросить</button>
+        </label>
+        <label class="cust-row">
           <span class="cust-lbl" data-i18n="cust_bg">Фон страницы</span>
           <input type="color" id="cust-color-bg">
           <button class="btn btn-ghost cust-reset" data-cust-reset="bg" style="display:none;" data-i18n="cust_reset">Сбросить</button>
@@ -992,14 +992,6 @@
           <button class="btn btn-ghost" id="bg-right-clear-btn" data-i18n="bg_clear" style="display:none;">Убрать</button>
         </div>
         <img id="bg-right-preview" style="display:none;" alt="Превью фона правой рейки" data-i18n-alt="bg_right_preview_alt">
-      </section>
-      <!-- Цвет вкладок — кастомный фон карточек (blattam-tab-color, hex, local) -->
-      <section class="settings-section" id="tab-color-section">
-        <h4 class="settings-section-title" data-i18n="tab_color_title">Цвет вкладок</h4>
-        <div class="tab-color-row">
-          <input type="color" id="tab-color-input" data-i18n-title="tab_color_input_title" title="Цвет карточек сохранённых вкладок">
-          <button class="btn btn-ghost" id="tab-color-reset" data-i18n="tab_color_reset" style="display:none;">Сбросить</button>
-        </div>
       </section>
           </div>
           <div class="settings-pane" id="settings-pane-general" style="display:none;">

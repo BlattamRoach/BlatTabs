@@ -295,14 +295,15 @@ if (metaDeleteBtn) metaDeleteBtn.addEventListener('click', () => {
 });
 
 const metaOpenallBtn = document.getElementById('meta-openall-btn');
-// ⧉ в мета-строке — открыть ВСЁ активное пространство в новом окне браузера
-// (аналог .gopenall у группы, но scope = все вкладки пространства)
+// ⧉ в мета-строке — открыть ВСЁ активное пространство в ТЕКУЩЕМ окне браузера
+// (те же семантики, что у ⧉ группы — open-many в текущем окне, scope = все
+// вкладки пространства)
 if (metaOpenallBtn) metaOpenallBtn.addEventListener('click', () => {
   const sp = allSpaces.find(x => x.id === activeSpaceId);
   if (!sp) return;
   const urls = allTabs.filter(t => t.spaceId === sp.id).map(t => t.url).filter(u => u && typeof u === 'string');
   if (!urls.length) return; // пустое пространство — no-op, сообщение не шлём
-  chrome.runtime.sendMessage({ action: 'open-space-window', urls: urls });
+  openMany(urls);
 });
 
 // Модалка (создание/переименование пространства, создание группы)
@@ -393,7 +394,14 @@ let openModalId = null; // id открытой модалки — чтобы г�
 let browserTabs = []; // все открытые вкладки браузера (blattam-browser-tabs, все окна)
 let browserWindowId = null; // id этого окна — рейка показывает вкладки только его
 let dragSourceBrowserTab = null; // вкладки рейки, которую тянут: {id,url,title,favIconUrl,windowId,index}
-let dragBrowserTabGhost = null;const browserTabsList = document.getElementById('browser-tabs-list'); // рейка: список открытых вкладок
+let dragBrowserTabGhost = null;
+let armedGbar = null; // вооруженная шапка группы (drop-over) — снимается при выходе/дропе/отмене
+// Снимаем тёплую заглушку-арм со всех .gbar (и гасим трекер). Идемпотентно.
+function clearGbarArms() {
+  document.querySelectorAll('.gbar.drop-over').forEach(b => b.classList.remove('drop-over'));
+  armedGbar = null;
+}
+const browserTabsList = document.getElementById('browser-tabs-list'); // рейка: список открытых вкладок
 const railRight = document.getElementById('rail-right'); // правая рейка — цель дропа карточки (открыть сайт фоном)
 let btDragItem = null; // элемент рейки, который тащат (cleanup по id переживает перерисовку)
 let btDragHeight = 30; // высота элемента ДО display:none (размер заглушки)
@@ -1364,6 +1372,9 @@ function appendGroupBar(g, memberCount) {
   // до/после). Карточка, сброшенная на шапку, больше не уходит в группу
   // (свою семантику дропа карточки сохранил только чип пространства)
   bar.addEventListener('dragover', (e) => {
+    // Рейка → шапка группы С видимыми карточками: не цель — без preventDefault
+    // (браузер покажет no-drop курсор, дроп не срабатывает)
+    if (dragSourceBrowserTab && groupVisibleCardCount(g.id)) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     if (dragSourceGroupId) {
@@ -1379,6 +1390,8 @@ function appendGroupBar(g, memberCount) {
   });
   bar.addEventListener('dragleave', () => bar.classList.remove('drop-over', 'drop-before', 'drop-after'));
   bar.addEventListener('drop', (e) => {
+    // Рейка → шапка группы С видимыми карточками: не цель — без preventDefault
+    if (dragSourceBrowserTab && groupVisibleCardCount(g.id)) return;
     e.preventDefault();
     bar.classList.remove('drop-over', 'drop-before', 'drop-after');
     // Ложный клик по шапке рождается в этот момент (до dragend источника):
@@ -4970,10 +4983,11 @@ function onBtDragStart(e, item, t) {
   btDragHeight = item.offsetHeight || 30; // меряем ДО display:none
   btDropCommitted = false;
   // Ложный клик по элементу рождается в момент дропа (до dragend) —
-  // вооружаем one-shot-подавление
+  // вооружаем one-shot-подавление (как карточный путь)
   pendingBtClickAfterDrag = true;
   pendingCardClickAfterDrag = true; // дроп в центр: ложный клик не открывает карточку
   pendingChipClickAfterDrag = true; // дроп на чип: ложный клик не переключает пространство
+  pendingGbarClickAfterDrag = true; // дроп на шапку группы: ложный клик не сворачивает
   if (e.dataTransfer) {
     e.dataTransfer.setData('text/plain', String(t.id));
     e.dataTransfer.effectAllowed = 'move';
@@ -4997,6 +5011,7 @@ function onBtDragEnd() {
   const src = dragSourceBrowserTab;
   dragSourceBrowserTab = null;
   btDragItem = null;
+  clearGbarArms(); // снятие тёплой арма шапки группы — при любом завершении драга
   if (!btDropCommitted) pendingBtClickAfterDrag = false; // драг отменён — ложного клика не будет
   btDropCommitted = false;
   if (dragBrowserTabGhost && dragBrowserTabGhost.isConnected) dragBrowserTabGhost.remove();
@@ -5189,14 +5204,29 @@ document.addEventListener('dragover', (e) => {
   if (!dragSourceBrowserTab || !e.dataTransfer) return;
   const t = e.target;
   const closest = (s) => (t && t.closest) ? t.closest(s) : null;
-  if (closest('.space-chip')) return; // no-target
-  if (closest('.gbar') || closest('.group-empty-slot')) {
+  if (closest('.space-chip')) { clearGbarArms(); return; } // no-target
+  const gbar = closest('.gbar');
+  const ges = closest('.group-empty-slot');
+  if (gbar || ges) {
+    const el = gbar || ges;
+    const gid = el.dataset.groupId;
+    if (gid && groupVisibleCardCount(gid)) {
+      // Группа с видимыми карточками — не цель: без preventDefault
+      // (browser no-drop) и без arm — курсор «запрещено»
+      clearGbarArms();
+      return;
+    }
     if (dragGhostSlot) setGhostDisplay('none');
     restoreWrapHiddenCard();
+    // Тёплый армед-подсвет (как у карточного пути — .gbar.drop-over)
+    if (armedGbar && armedGbar !== el) armedGbar.classList.remove('drop-over');
+    el.classList.add('drop-over');
+    armedGbar = el;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     return;
   }
+  clearGbarArms(); // курсор ушёл с шапки группы — снять арм
   if (closest('#browser-tabs-list')) {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
@@ -5230,11 +5260,19 @@ document.addEventListener('drop', (e) => {
   const t = e.target;
   const closest = (s) => (t && t.closest) ? t.closest(s) : null;
   const src = dragSourceBrowserTab;
+  clearGbarArms(); // след какой-либо арма шапки — снимаем (дроп/отмена)
   if (closest('.space-chip')) return; // no-target — отмена
   const gbar = closest('.gbar');
-  if (gbar && gbar.dataset.groupId) { e.preventDefault(); saveBtToGroup(src, gbar.dataset.groupId); return; }
+  if (gbar && gbar.dataset.groupId) {
+    // Группа с видимыми карточками — не цель: без preventDefault, без сохранения
+    if (groupVisibleCardCount(gbar.dataset.groupId)) return;
+    e.preventDefault(); saveBtToGroup(src, gbar.dataset.groupId); return;
+  }
   const ges = closest('.group-empty-slot');
-  if (ges && ges.dataset.groupId) { e.preventDefault(); saveBtToGroup(src, ges.dataset.groupId); return; }
+  if (ges && ges.dataset.groupId) {
+    if (groupVisibleCardCount(ges.dataset.groupId)) return;
+    e.preventDefault(); saveBtToGroup(src, ges.dataset.groupId); return;
+  }
   if (closest('#browser-tabs-list')) { e.preventDefault(); commitBtRailMove(src); return; }
   if (closest('#tabs-list')) {
     e.preventDefault();
@@ -5289,6 +5327,7 @@ function btlTeardown() {
 // по id, как в onBtDragEnd)
 function btlAfterCommit(p) {
   btDropCommitted = true;
+  clearGbarArms(); // снятие тёплой арма шапки группы — при коммите
   // Центральная заглушка (рейка → центр) снимается явно: save-функции
   // центра/группы снимают сами, а коммит в рейку — нет, без неё заглушка
   // остаётся в центральном списке (идемпотентно)
@@ -5310,6 +5349,7 @@ function btlAfterCommit(p) {
 function btlCancelState(p) {
   p = p || btl;
   btl = null;
+  clearGbarArms(); // снятие тёплой арма шапки группы — при отмене
   railPointerPress = false;
   dragSourceBrowserTab = null;
   btDragItem = null;
@@ -5350,6 +5390,8 @@ function btlCommitAt(x, y, p) {
   if (closest('.space-chip')) return null; // no-target — отмена (не переключает пространство)
   const gbar = closest('.gbar');
   if (gbar && gbar.dataset.groupId) {
+    // Группа с видимыми карточками — не цель: дроп отменяется (cancel-путь)
+    if (groupVisibleCardCount(gbar.dataset.groupId)) return null;
     const rect = gbar.getBoundingClientRect();
     saveBtToGroup(src, gbar.dataset.groupId);
     btlAfterCommit(p);
@@ -5357,6 +5399,7 @@ function btlCommitAt(x, y, p) {
   }
   const ges = closest('.group-empty-slot');
   if (ges && ges.dataset.groupId) {
+    if (groupVisibleCardCount(ges.dataset.groupId)) return null;
     const rect = ges.getBoundingClientRect();
     saveBtToGroup(src, ges.dataset.groupId);
     btlAfterCommit(p);
@@ -5475,6 +5518,7 @@ function btlTrackAt(x, y) {
   btlCloneSizeAt(x, y); // размер-состояние клона: полный над центром/левой рейкой
   const t = document.elementFromPoint(x, y);
   if (t && t.closest && t.closest('#browser-tabs-list')) {
+    clearGbarArms(); // курсор ушёл с шапки группы — снять арм
     const anchor = btSlotAnchor(y);
     // FLIP — только при РЕАЛЬНОЙ смене места (заглушка не на якорном месте):
     // повторная установка в ту же позицию слайда не требует
@@ -5493,12 +5537,28 @@ function btlTrackAt(x, y) {
   if (t && t.closest && t.closest('#tabs-list')) {
     // Шапка группы / слот пустой группы: дроп В группу — центральная
     // заглушка скрыта целиком (та же семантика, что у драга карточки)
-    if (t.closest('.gbar') || t.closest('.group-empty-slot')) {
+    const gbar = t.closest('.gbar');
+    const ges = t.closest('.group-empty-slot');
+    if (gbar || ges) {
+      const el = gbar || ges;
+      const gid = el.dataset.groupId;
+      if (gid && groupVisibleCardCount(gid)) {
+        // Группа с видимыми карточками — не цель: без arm, без скрытия
+        // заглушки; дроп отменится (btlCommitAt вернёт null)
+        clearGbarArms();
+        btl.lastAnchor = null;
+        return;
+      }
       if (dragGhostSlot) setGhostDisplay('none');
       restoreWrapHiddenCard();
+      // Тёплый армед-подсвет шапки (как у карточного пути)
+      if (armedGbar && armedGbar !== el) armedGbar.classList.remove('drop-over');
+      el.classList.add('drop-over');
+      armedGbar = el;
       btl.lastAnchor = null;
       return;
     }
+    clearGbarArms(); // курсор ушёл с шапки группы — снять арм
     // Нижняя полоса списка (below the last row): заглушка скрыта,
     // отпускание там — отмена (btlCommitAt вернёт null)
     if (cardAreaEmptyBand(x, y) !== null) {
@@ -5530,6 +5590,7 @@ function btlTrackAt(x, y) {
     }
     return;
   }
+  clearGbarArms(); // вне списка — арм шапки снимается
   btl.lastAnchor = null; // вне рейки — якорь сбрасывается (в рейке заново FLIP-нет)
 }
 
@@ -5550,6 +5611,7 @@ function btlOnMove(e) {
     pendingBtClickAfterDrag = true; // ложный post-drag-клик не открывает вкладку
     pendingCardClickAfterDrag = true; // дроп в центр: ложный клик не открывает карточку
     pendingChipClickAfterDrag = true; // дроп на чип: ложный клик не переключает пространство
+    pendingGbarClickAfterDrag = true; // дроп на шапку группы: ложный клик не сворачивает
     dragBrowserTabGhost = makeBtGhostSlot(btDragHeight);
     item.before(dragBrowserTabGhost);
     item.style.display = 'none';
