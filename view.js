@@ -294,6 +294,17 @@ if (metaDeleteBtn) metaDeleteBtn.addEventListener('click', () => {
   }
 });
 
+const metaOpenallBtn = document.getElementById('meta-openall-btn');
+// ⧉ в мета-строке — открыть ВСЁ активное пространство в новом окне браузера
+// (аналог .gopenall у группы, но scope = все вкладки пространства)
+if (metaOpenallBtn) metaOpenallBtn.addEventListener('click', () => {
+  const sp = allSpaces.find(x => x.id === activeSpaceId);
+  if (!sp) return;
+  const urls = allTabs.filter(t => t.spaceId === sp.id).map(t => t.url).filter(u => u && typeof u === 'string');
+  if (!urls.length) return; // пустое пространство — no-op, сообщение не шлём
+  chrome.runtime.sendMessage({ action: 'open-space-window', urls: urls });
+});
+
 // Модалка (создание/переименование пространства, создание группы)
 const spaceModal = document.getElementById('space-modal');
 const modalTitle = document.getElementById('modal-title');
@@ -1653,12 +1664,27 @@ function restoreFromTrash(records) {
   if (trashModal && trashModal.classList.contains('open')) renderTrashList();
 }
 
+// Надгробия переживают очистку корзины: записи в 'blattam-deleted'
+// (url + deletedAt) хранятся отдельно от blattam-trash — mergeTabs читает
+// оба источника, поэтому удалённая навсегда вкладка не «воскресает» из
+// облака при следующем pull. Пишется ДО записи нового массива корзины —
+// обе ветки («Удалить навсегда» / «Очистить корзину») идут через deleteFromTrash.
+async function rememberTombstones(removed) {
+  const r = await chrome.storage.local.get(['blattam-deleted']);
+  const list = Array.isArray(r['blattam-deleted']) ? r['blattam-deleted'] : [];
+  for (const it of (removed || [])) {
+    if (it && it.url) list.push({ url: it.url, deletedAt: it.deletedAt || Date.now() });
+  }
+  await chrome.storage.local.set({ 'blattam-deleted': list.slice(-2000) });
+}
+
 // «Удалить навсегда»: убрать записи из корзины (безвозвратно). Вызывается
 // только после confirm (одна запись — trash_permanent_confirm, все —
 // trash_clear_confirm)
-function deleteFromTrash(records) {
+async function deleteFromTrash(records) {
   if (!records || records.length === 0) return;
   const urls = new Set(records.map(r => r.url));
+  await rememberTombstones(records);
   trashTabs = trashTabs.filter(x => !urls.has(x.url));
   chrome.storage.local.set({ 'blattam-trash': trashTabs });
   if (trashModal && trashModal.classList.contains('open')) renderTrashList();

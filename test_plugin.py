@@ -168,6 +168,27 @@ var chrome = {
     onActivated: mockEvent('tabs.onActivated'),
   },
   windows: {
+    _wins: 0,
+    _created: [],
+    _removed: [],
+    create: function(opts) {
+      var self = this;
+      var id = 1000 + (++self._wins);
+      var tabs = (opts && Array.isArray(opts.tabs)) ? opts.tabs : [];
+      var created = tabs.map(function (t, i) {
+        var tab = { id: 'wintab' + id + '_' + i, windowId: id, index: i, status: 'loading' };
+        for (var k in t) if (k !== 'status') tab[k] = t[k];
+        chrome.tabs._tabs = chrome.tabs._tabs.concat([tab]);
+        return tab;
+      });
+      self._created = self._created.concat([{ id: id, opts: opts, tabs: created }]);
+      return Promise.resolve({ id: id, tabs: created });
+    },
+    remove: function(winId) {
+      this._removed = this._removed.concat([winId]);
+      chrome.tabs._tabs = chrome.tabs._tabs.filter(function (t) { return t.windowId !== winId; });
+      return Promise.resolve(true);
+    },
     _current: { id: 1 },
     _lastFocus: null,
     update: function(winId, opts) { this._lastFocus = { winId: winId, opts: opts || {} }; return Promise.resolve({ id: winId }); },
@@ -1653,11 +1674,11 @@ class TestSpaceMetaRow:
 
     def test_chip_has_no_actions(self):
         # Регрессия: ✎/✕ убраны с чипа — в чипе нет ни .chip-actions, ни
-        # .chip-icon-btn; кнопки живут только в мета-строке
+        # .chip-icon-btn; кнопки живут только в мета-строке (⧉/✎/✕ — 3, волна 1)
         load_view(self.page, spaces=self.SP)
         assert self.page.evaluate("document.querySelectorAll('.space-chip .chip-actions').length") == 0
         assert self.page.evaluate("document.querySelectorAll('.space-chip .chip-icon-btn').length") == 0
-        assert self.page.evaluate("document.querySelectorAll('.meta-actions .meta-icon-btn').length") == 2
+        assert self.page.evaluate("document.querySelectorAll('.meta-actions .meta-icon-btn').length") == 3
         # Чип остался кнопкой-переключателем: drag-флаг и data-space-id на месте
         assert self.page.evaluate("document.querySelector('.space-chip').draggable") is True
 
@@ -24195,15 +24216,18 @@ class TestSyncDebounceAlarm:
         assert "chrome.alarms.create(SYNC_ALARM" in body, body
 
 # ==========================================
-#  Волна M: лишний push после pull убран (pendingSyncWrites)
+#  Волна M: лишний push после pull убран (метка UPDATED_AT_KEY)
 # ==========================================
 
 class TestSyncNoPushAfterPull:
     """Волна M: pull из gist НЕ создаёт аларм пуша — applySyncPayload пишет
     local+sync, и listener storage.onChanged видит собственные записи pull'а;
     без гашения каждый синк лишним ставил аларм blattam-sync-push (лишний
-    запрос к API). pendingSyncWrites гасит события pull'а один в один;
-    пользовательская запись после pull ставит аларм пуша как раньше."""
+    запрос к API). Гашение — через метку UPDATED_AT_KEY в той же записи
+    (chrome.storage.onChanged: записи pull'а её несут, пользовательские — нет);
+    счётчика больше нет: Chrome не шлёт onChanged для значений, равных прежним,
+    и счётчик "съедал" следующие пользовательские правки.
+    Пользовательская запись после pull ставит аларм пуша как раньше."""
 
     @pytest.fixture(autouse=True)
     def _setup(self, page):
@@ -24924,3 +24948,346 @@ class TestFaqFileSync:
             " en_q: I18N.en.faq6_q, en_a: I18N.en.faq6_a})"))
         assert data["q"] == data["en_q"], data
         assert data["a"] == data["en_a"], data
+
+# ==========================================
+#  Wave 1: «Открыть всё пространство в новом окне» (⧉ в мета-строке)
+# ==========================================
+
+class TestSpaceOpenAllWindow:
+    """Wave 1: ⧉ в мета-строке (#meta-openall-btn, ПЕРВАЯ в .meta-actions) —
+    все сохранённые вкладки АКТИВНОГО пространства открываются в НОВОМ окне
+    браузера (первая вкладка активна, остальные фоном, focused:true). view:
+    сообщение open-space-window с urls в порядке allTabs (пустое пространство
+    — no-op, сообщение не шлётся); background: chrome.windows.create(tabs,
+    focused:true), небезопасные URL отбрасываются isSafeOpenUrl (пустой список
+    после фильтра — окно не создаётся)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        page.goto("about:blank")
+        page.evaluate(MOCK_CHROME)
+
+    def _load_view(self, tabs=None, spaces=None, lang=None, last_space=None):
+        load_view(self.page, tabs=tabs if tabs is not None else [],
+                  spaces=spaces, lang=lang, last_space=last_space)
+        self.page.wait_for_timeout(100)
+
+    def _load_bg(self):
+        self.page.evaluate(load_file("background.js") + "; 'loaded'")
+
+    def _windows_created(self):
+        return json.loads(self.page.evaluate("JSON.stringify(chrome.windows._created)"))
+
+    TABS = [
+        {"name": "A", "url": "https://a.com", "spaceId": "sp1"},
+        {"name": "B", "url": "https://b.com", "spaceId": "sp1"},
+        {"name": "C", "url": "https://c.com", "spaceId": "sp1"},
+        {"name": "X", "url": "https://x.com", "spaceId": "sp2"},
+        {"name": "Y", "url": "https://y.com", "spaceId": "sp2"},
+    ]
+    SPACES = [{"id": "sp1", "name": "S1"}, {"id": "sp2", "name": "S2"}]
+
+    # --- view-уровень ---
+
+    def test_meta_openall_btn_markup(self):
+        """#meta-openall-btn — ПЕРВАЯ в .meta-actions (перед #meta-rename-btn),
+        глиф ⧉ (U+29C9), title == I18N.ru.open_space_window (словарь в
+        странице — источник истины)."""
+        self._load_view(spaces=self.SPACES)
+        d = self.page.evaluate("""(() => {
+          const row = document.querySelector('.meta-actions');
+          const btn = document.getElementById('meta-openall-btn');
+          const ren = document.getElementById('meta-rename-btn');
+          const kids = row ? Array.from(row.children) : [];
+          return {
+            exists: !!btn,
+            inRow: !!(row && btn && row.contains(btn)),
+            first: !!btn && kids[0] === btn,
+            beforeRename: !!ren && kids.indexOf(btn) < kids.indexOf(ren),
+            glyph: btn ? btn.textContent : null,
+            title: btn ? btn.title : null,
+            dictRu: I18N.ru.open_space_window
+          };
+        })()""")
+        assert d["exists"] and d["inRow"], d
+        assert d["first"] and d["beforeRename"], d
+        assert d["glyph"] == "\u29c9", d
+        assert d["title"] == d["dictRu"], d
+
+    def test_i18n_en(self):
+        self._load_view(spaces=self.SPACES, lang="en")
+        d = self.page.evaluate("""(() => {
+          const btn = document.getElementById('meta-openall-btn');
+          return { title: btn ? btn.title : null, dictEn: I18N.en.open_space_window };
+        })()""")
+        assert d["title"] == d["dictEn"], d
+
+    def test_click_opens_space_in_new_window_message(self):
+        self._load_view(tabs=self.TABS, spaces=self.SPACES, last_space="sp1")
+        self.page.evaluate("document.getElementById('meta-openall-btn').click()")
+        d = json.loads(self.page.evaluate("""JSON.stringify({
+          openAll: chrome.runtime.messagesSent.filter(m => m.action === 'open-space-window'),
+          others: chrome.runtime.messagesSent.filter(m => m.action === 'open-one' || m.action === 'open-many')
+        })"""))
+        assert len(d["openAll"]) == 1, d
+        assert d["openAll"][0]["urls"] == ["https://a.com", "https://b.com", "https://c.com"], d
+        assert d["others"] == [], d
+
+    def test_empty_space_no_message(self):
+        self._load_view(tabs=[], spaces=self.SPACES, last_space="sp1")
+        self.page.evaluate("document.getElementById('meta-openall-btn').click()")
+        total = self.page.evaluate("chrome.runtime.messagesSent.length")
+        assert total == 0, total
+
+    def test_click_does_not_change_data(self):
+        self._load_view(tabs=self.TABS, spaces=self.SPACES, last_space="sp1")
+        snap = lambda: self.page.evaluate("""JSON.stringify({
+          tabs: JSON.stringify(chrome.storage.local._data['blattam-tabs']),
+          spaces: JSON.stringify(chrome.storage._data['blattam-spaces']),
+          last: JSON.stringify(chrome.storage._data['blattam-last-space'])
+        })""")
+        before = snap()
+        self.page.evaluate("document.getElementById('meta-openall-btn').click()")
+        after = snap()
+        assert after == before, (before, after)
+
+    # --- background-уровень ---
+
+    def test_background_creates_window_with_tabs(self):
+        self._load_bg()
+        resp = call_msg(self.page, "open-space-window",
+                        urls=["https://a.com", "https://b.com"])
+        assert resp == {"ok": True, "opened": 2, "windowId": 1001}, resp
+        created = self._windows_created()
+        assert len(created) == 1, created
+        assert created[0]["opts"]["tabs"] == [{"url": "https://a.com"}, {"url": "https://b.com"}], created
+        assert created[0]["opts"]["focused"] is True, created
+
+    def test_background_filters_unsafe_urls(self):
+        self._load_bg()
+        resp = call_msg(self.page, "open-space-window",
+                        urls=["https://a.com", "javascript:alert(1)", "chrome://extensions"])
+        assert resp == {"ok": True, "opened": 1, "windowId": 1001}, resp
+        created = self._windows_created()
+        assert len(created) == 1, created
+        assert created[0]["opts"]["tabs"] == [{"url": "https://a.com"}], created
+
+    def test_background_no_window_for_unsafe_or_empty(self):
+        self._load_bg()
+        r1 = call_msg(self.page, "open-space-window", urls=["javascript:x"])
+        assert r1 == {"ok": True, "opened": 0}, r1
+        r2 = call_msg(self.page, "open-space-window", urls=[])
+        assert r2 == {"ok": True, "opened": 0}, r2
+        assert self.page.evaluate("chrome.windows._created.length") == 0
+
+# ==========================================
+#  Регрессия: pull + метка UPDATED_AT_KEY (без счётчика pendingSyncWrites)
+# ==========================================
+
+class TestSyncMarkerNoCounter:
+    """Регрессия: pull из gist без изменений НЕ должен «съесть» следующие
+    пользовательские записи. Старый счётчик (pendingSyncWrites) инкрементировался
+    в applySyncPayload, но Chrome не шлёт onChanged для значений, равных
+    прежним — счётчик не гасился, и ближайшие пользовательские записи не
+    ставили аларм пуша. Сейчас гашение — меткой UPDATED_AT_KEY в той же записи
+    (chrome.storage.onChanged: записи pull'а её несут, пользовательские — нет).
+    Здесь эмулируем реальный Chrome (onChanged пропускает ключи без изменений)
+    через замену chrome.storage._setStore."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        page.goto("about:blank")
+        page.evaluate(MOCK_CHROME)
+        # Эмуляция реального Chrome: событие не шлётся для ключей, значение
+        # которых не изменилось (JSON-сравнение) — именно там ловится старый баг
+        page.evaluate("""() => {
+          chrome.storage._setStore = function(store, data, area) {
+            var changeInfo = {};
+            for (var k in data) {
+              var newV = data[k];
+              var oldV = store[k];
+              var newJson = JSON.stringify(newV === undefined ? null : newV);
+              var oldJson = JSON.stringify(oldV === undefined ? null : oldV);
+              if (oldJson !== newJson) {
+                changeInfo[k] = { newValue: newV, oldValue: oldV === undefined ? undefined : JSON.parse(JSON.stringify(oldV)) };
+                store[k] = newV;
+              }
+            }
+            if (Object.keys(changeInfo).length) chrome.storage._fire(changeInfo, area);
+          };
+        }""")
+        # spaces/tabs — прямые записи в _data (без событий) ДО загрузки SW:
+        # стартовый ensureSpaces() — no-op → чистая база, своих алармов нет
+        page.evaluate("""() => {
+          chrome.storage.local._data['blattam-tabs'] = [
+            {name: 'L', url: 'https://l.com', spaceId: 'sp1', updatedAt: 1000}
+          ];
+          chrome.storage.sync._data['blattam-spaces'] = [{id: 'sp1', name: 'S1'}];
+        }""")
+        page.evaluate(load_file("background.js") + "; 'loaded'")
+        page.evaluate("""() => {
+          chrome.storage.local._data['github-token'] = 't';
+          chrome.storage.local._data['blattam-auth-scope'] = 'gist-1';
+          chrome.storage.local._data['blattam-gist-id'] = 'g1';
+        }""")
+
+    def _created(self):
+        return json.loads(self.page.evaluate("JSON.stringify(chrome.alarms.created)"))
+
+    def test_identical_pull_then_user_write_alarms(self):
+        # gist === локальное состояние: pull применяет нулевые изменения
+        body = {"files": {"sync.json": {"content": json.dumps({
+            "tabs": [{"name": "L", "url": "https://l.com", "spaceId": "sp1", "updatedAt": 1000}],
+            "spaces": [{"id": "sp1", "name": "S1"}],
+            "updatedAt": 500
+        })}}}
+        self.page.evaluate("""(body) => {
+          window.__fetchCalls = [];
+          window.fetch = async function () {
+            return { ok: true, status: 200, json: async () => body };
+          };
+        }""", body)
+        res = self.page.evaluate("pullFromGitHub()")
+        assert res == {"ok": True, "pulled": True}, res
+        # pull не оставил аларм пуша
+        assert self._created() == [], self._created()
+        # Пользовательская правка — аларм пуша появляется
+        self.page.evaluate("""() => {
+          chrome.storage.local.set({'blattam-tabs': [
+            {name: 'U', url: 'https://u.com', spaceId: 'sp1', updatedAt: 3000}
+          ]});
+        }""")
+        push_alarms = [a for a in self._created() if a["name"] == "blattam-sync-push"]
+        assert len(push_alarms) == 1, push_alarms
+
+# ==========================================
+#  Надгробия переживают очистку корзины (blattam-deleted)
+# ==========================================
+
+class TestTombstonesDeletedKey:
+    """view.js + background.js: «Удалить навсегда» / «Очистить корзину» пишут
+    надгробия (url + deletedAt) в blattam-deleted — mergeTabs склеивает
+    blattam-trash и blattam-deleted, поэтому удалённая навсегда вкладка не
+    «воскресает» из облака при следующем pull (корзина пуста — надгробие
+    остаётся). mergeTabs суммирует deletedAt по url — max выигрывает."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+        page.goto("about:blank")
+        page.evaluate(MOCK_CHROME)
+
+    def _confirm_recorder(self, ret):
+        self.page.evaluate("""(ret) => {
+          window.__msgs = [];
+          window.confirm = (m) => { window.__msgs.push(m); return ret; };
+        }""", ret)
+
+    # --- фоновый уровень: mergeTabs читает blattam-deleted ---
+
+    def _load_bg(self):
+        self.page.evaluate(load_file("background.js") + "; 'loaded'")
+
+    def test_merge_skips_tombstoned_remote_tab_via_deleted_key(self):
+        """Корзина пуста, blattam-deleted содержит X (deletedAt 2000), remote X
+        с updatedAt 1000 (старше удаления) — mergeTabs НЕ возвращает её."""
+        self._load_bg()
+        self.page.evaluate("""() => {
+          chrome.storage.local._data['blattam-deleted'] = [
+            {url: 'https://x.com', deletedAt: 2000}
+          ];
+        }""")
+        tabs = self.page.evaluate("""mergeTabs([], [
+          {name: 'X', url: 'https://x.com', spaceId: 'sp1', updatedAt: 1000}
+        ])""")
+        assert tabs == [], tabs
+
+    def test_merge_deleted_takes_max_deleted_at(self):
+        """Trash имеет url со deletedAt 1000, deleted — тот же url со 3000:
+        max (3000) выигрывает — удалённая remote-вкладка (updatedAt 2500) пропускается."""
+        self._load_bg()
+        self.page.evaluate("""() => {
+          chrome.storage.local._data['blattam-trash'] = [
+            {name: 'X', url: 'https://x.com', spaceId: 'sp1', deletedAt: 1000}
+          ];
+          chrome.storage.local._data['blattam-deleted'] = [
+            {url: 'https://x.com', deletedAt: 3000}
+          ];
+        }""")
+        tabs = self.page.evaluate("""mergeTabs([], [
+          {name: 'X', url: 'https://x.com', spaceId: 'sp1', updatedAt: 2500}
+        ])""")
+        assert tabs == [], tabs
+
+    def test_merge_allows_recreated_tab_after_permanent_delete(self):
+        """DeletedAt 1000, remote X updatedAt 2000 — пересоздана позже удаления:
+        возвращается."""
+        self._load_bg()
+        self.page.evaluate("""() => {
+          chrome.storage.local._data['blattam-deleted'] = [
+            {url: 'https://x.com', deletedAt: 1000}
+          ];
+        }""")
+        tabs = self.page.evaluate("""mergeTabs([], [
+          {name: 'X', url: 'https://x.com', spaceId: 'sp1', updatedAt: 2000}
+        ])""")
+        assert len(tabs) == 1 and tabs[0]["url"] == "https://x.com", tabs
+
+    # --- слой view: операции корзины пишут надгробия ---
+
+    def test_delete_forever_writes_tombstone(self):
+        """Одна запись: confirm — blattam-trash пуста, blattam-deleted несёт её."""
+        trash = [{"name": "T1", "url": "https://t1.com", "deletedAt": 1111}]
+        load_view(self.page, tabs=[], trash=trash)
+        self.page.wait_for_timeout(150)
+        self._confirm_recorder(True)
+        self.page.evaluate("document.getElementById('trash-btn').click()")
+        self.page.wait_for_timeout(150)
+        self.page.evaluate("document.querySelectorAll('#trash-list .trash-row button')[1].click()")
+        self.page.wait_for_timeout(150)
+        assert read_storage_raw(self.page, "blattam-trash") == []
+        deleted = read_local(self.page, "blattam-deleted") or []
+        assert deleted == [{"url": "https://t1.com", "deletedAt": 1111}], deleted
+
+    def test_clear_trash_writes_tombstones(self):
+        """Очистить корзину (confirm) — blattam-deleted несёт надгробия ВСЕХ записей."""
+        trash = [{"name": "T1", "url": "https://t1.com", "deletedAt": 1},
+                 {"name": "T2", "url": "https://t2.com", "deletedAt": 2}]
+        load_view(self.page, tabs=[], trash=trash)
+        self.page.wait_for_timeout(150)
+        self._confirm_recorder(True)
+        self.page.evaluate("document.getElementById('trash-btn').click()")
+        self.page.wait_for_timeout(150)
+        self.page.evaluate("document.getElementById('trash-clear').click()")
+        self.page.wait_for_timeout(150)
+        assert read_storage_raw(self.page, "blattam-trash") == []
+        deleted = read_local(self.page, "blattam-deleted") or []
+        assert [d["url"] for d in deleted] == ["https://t1.com", "https://t2.com"], deleted
+        assert [d["deletedAt"] for d in deleted] == [1, 2], deleted
+
+    def test_cancel_permanent_delete_writes_no_tombstone(self):
+        """Отмена — корзина цел, надгробий НЕТ."""
+        trash = [{"name": "T1", "url": "https://t1.com", "deletedAt": 1111}]
+        load_view(self.page, tabs=[], trash=trash)
+        self.page.wait_for_timeout(150)
+        self._confirm_recorder(False)
+        self.page.evaluate("document.getElementById('trash-btn').click()")
+        self.page.wait_for_timeout(150)
+        self.page.evaluate("document.querySelectorAll('#trash-list .trash-row button')[1].click()")
+        self.page.wait_for_timeout(150)
+        assert read_storage_raw(self.page, "blattam-trash") != []
+        assert not (read_local(self.page, "blattam-deleted") or [])
+
+    def test_cancel_clear_trash_writes_no_tombstone(self):
+        trash = [{"name": "T1", "url": "https://t1.com", "deletedAt": 1}]
+        load_view(self.page, tabs=[], trash=trash)
+        self.page.wait_for_timeout(150)
+        self._confirm_recorder(False)
+        self.page.evaluate("document.getElementById('trash-btn').click()")
+        self.page.wait_for_timeout(150)
+        self.page.evaluate("document.getElementById('trash-clear').click()")
+        self.page.wait_for_timeout(150)
+        assert read_storage_raw(self.page, "blattam-trash") != []
+        assert not (read_local(self.page, "blattam-deleted") or [])
