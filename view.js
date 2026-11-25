@@ -2130,7 +2130,7 @@ function renderTabs(filter = '') {
   // «Ничего не найдено» — только при активном поиске: сворачивание групп
   // (visibleCount === 0 без фильтра) его не показывает
   noResults.style.display = (visibleCount === 0 && filter) ? 'block' : 'none';
-  metaCount.textContent = String(visibleCount);
+  metaCount.textContent = String(filter ? visibleCount : sTabs.length);
   updateSelectionBar();
   // Активная карточка видна на экране
   if (activeUrl) {

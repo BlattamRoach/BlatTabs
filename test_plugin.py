@@ -339,7 +339,8 @@ var chrome = {
           response = newsp;
         }
       }
-      // delete-space: удаляем; вкладки и группы удалённого пространства удаляются
+      // delete-space: удаляем; вкладки и группы удалённого пространства
+      // уходят в корзину (каскодно), группы удаляются
       if (msg.action === 'delete-space') {
         var sps2 = chrome.storage._data['blattam-spaces'];
         if (Array.isArray(sps2) && sps2.some(function(s) { return s.id === msg.id; })) {
@@ -347,19 +348,41 @@ var chrome = {
           var target = remaining[0] || null;
           if (!target) { target = { id: 'spmock' + (++mockSeq), name: 'Мои вкладки' }; remaining = [target]; }
           var tabsD = chrome.storage.local._data['blattam-tabs'] || [];
+          var tabsRemoved = tabsD.filter(function(t) { return t && t.spaceId === msg.id; });
           var tabsKept = tabsD.filter(function(t) { return !(t && t.spaceId === msg.id); });
           var gsD = chrome.storage._data['blattam-groups'] || [];
           var gsKept = gsD.filter(function(g) { return g.spaceId !== msg.id; });
+          var oldTrash = Array.isArray(chrome.storage.local._data['blattam-trash']) ? chrome.storage.local._data['blattam-trash'] : [];
+          var newTrash = oldTrash.slice();
+          if (tabsRemoved.length > 0) {
+            var inTrash = new Set(oldTrash.map(function(x) { return x && x.url; }).filter(Boolean));
+            var seen = new Set();
+            var now = Date.now();
+            for (var ti = 0; ti < tabsRemoved.length; ti++) {
+              var tD = tabsRemoved[ti];
+              if (!tD || !tD.url) continue;
+              if (inTrash.has(tD.url) || seen.has(tD.url)) continue;
+              seen.add(tD.url);
+              var recD = JSON.parse(JSON.stringify(tD));
+              delete recD.deletedAt;
+              recD.deletedAt = now;
+              newTrash.push(recD);
+            }
+            chrome.storage.local._data['blattam-trash'] = newTrash;
+          }
           chrome.storage._data['blattam-spaces'] = remaining;
-          chrome.storage.local._data['blattam-tabs'] = tabsKept;
           chrome.storage._data['blattam-groups'] = gsKept;
           chrome.storage._fire({
             'blattam-spaces': { newValue: remaining, oldValue: sps2 },
             'blattam-groups': { newValue: gsKept, oldValue: gsD }
           }, 'sync');
-          chrome.storage._fire({
-            'blattam-tabs': { newValue: tabsKept, oldValue: tabsD }
-          }, 'local');
+          if (tabsRemoved.length > 0) {
+            chrome.storage.local._data['blattam-tabs'] = tabsKept;
+            chrome.storage._fire({
+              'blattam-tabs': { newValue: tabsKept, oldValue: tabsD },
+              'blattam-trash': { newValue: newTrash, oldValue: oldTrash }
+            }, 'local');
+          }
           response = true;
         }
       }
@@ -392,21 +415,43 @@ var chrome = {
           response = ng;
         }
       }
-      // delete-group: удаляем группу; её вкладки удаляются
+      // delete-group: удаляем группу; её вкладки уходят в корзину (каскодно)
       if (msg.action === 'delete-group') {
         var gs3 = chrome.storage._data['blattam-groups'];
         if (Array.isArray(gs3) && gs3.some(function(g) { return g.id === msg.id; })) {
           var gsNew = gs3.filter(function(g) { return g.id !== msg.id; });
           var tabsG = chrome.storage.local._data['blattam-tabs'] || [];
+          var tabsRemovedG = tabsG.filter(function(t) { return t && t.groupId === msg.id; });
           var tabsGKept = tabsG.filter(function(t) { return !(t && t.groupId === msg.id); });
+          var oldTrashG = Array.isArray(chrome.storage.local._data['blattam-trash']) ? chrome.storage.local._data['blattam-trash'] : [];
+          var newTrashG = oldTrashG.slice();
+          if (tabsRemovedG.length > 0) {
+            var inTrashG = new Set(oldTrashG.map(function(x) { return x && x.url; }).filter(Boolean));
+            var seenG = new Set();
+            var nowG = Date.now();
+            for (var gi = 0; gi < tabsRemovedG.length; gi++) {
+              var tG = tabsRemovedG[gi];
+              if (!tG || !tG.url) continue;
+              if (inTrashG.has(tG.url) || seenG.has(tG.url)) continue;
+              seenG.add(tG.url);
+              var recG = JSON.parse(JSON.stringify(tG));
+              delete recG.deletedAt;
+              recG.deletedAt = nowG;
+              newTrashG.push(recG);
+            }
+            chrome.storage.local._data['blattam-trash'] = newTrashG;
+          }
           chrome.storage._data['blattam-groups'] = gsNew;
-          chrome.storage.local._data['blattam-tabs'] = tabsGKept;
           chrome.storage._fire({
             'blattam-groups': { newValue: gsNew, oldValue: gs3 }
           }, 'sync');
-          chrome.storage._fire({
-            'blattam-tabs': { newValue: tabsGKept, oldValue: tabsG }
-          }, 'local');
+          if (tabsRemovedG.length > 0) {
+            chrome.storage.local._data['blattam-tabs'] = tabsGKept;
+            chrome.storage._fire({
+              'blattam-tabs': { newValue: tabsGKept, oldValue: tabsG },
+              'blattam-trash': { newValue: newTrashG, oldValue: oldTrashG }
+            }, 'local');
+          }
           response = true;
         }
       }
@@ -887,6 +932,19 @@ class TestBackgroundSpaces:
         in_c = [t for t in tabs if t["name"] == "InC"][0]
         assert in_c["spaceId"] == c["id"]
         assert all(s["id"] != b["id"] for s in self._spaces())
+        # вкладки удалённого пространства в корзине (url + name + deletedAt > 0)
+        trash = read_storage_raw(self.page, "blattam-trash")
+        trash_names = [t["name"] for t in trash]
+        assert "InB1" in trash_names and "InB2" in trash_names
+        for tn, turl in (("InB1", "https://b1.com"), ("InB2", "https://b2.com")):
+            rec = [t for t in trash if t["name"] == tn][0]
+            assert rec["url"] == turl
+            assert rec.get("deletedAt", 0) > 0
+        # чужие вкладки не тронуты (не в корзине, без deletedAt)
+        for tn in ("InA", "InC"):
+            assert all(t["name"] != tn for t in trash)
+            kept = [t for t in tabs if t["name"] == tn][0]
+            assert "deletedAt" not in kept
 
     def test_delete_space_last_creates_default(self):
         only = self._spaces()[0]
@@ -898,6 +956,11 @@ class TestBackgroundSpaces:
         assert sps[0]["id"] != only["id"]
         tabs = read_storage_raw(self.page, "blattam-tabs")
         assert tabs == []  # вкладка удалённого (единственного) пространства удалена
+        # единственная вкладка — в корзине (url + name + deletedAt > 0)
+        trash = read_storage_raw(self.page, "blattam-trash")
+        assert len(trash) == 1, trash
+        assert trash[0]["name"] == "Lonely" and trash[0]["url"] == "https://lonely.com"
+        assert trash[0].get("deletedAt", 0) > 0
 
     def test_delete_space_deletes_grouped_tabs(self):
         a = self._spaces()[0]
@@ -918,6 +981,12 @@ class TestBackgroundSpaces:
         # чужое пространство не тронуто
         in_a = [t for t in read_storage_raw(self.page, "blattam-tabs") if t["name"] == "InA"][0]
         assert in_a["spaceId"] == a["id"]
+        # свободная и групповая вкладки удалённого пространства в корзине
+        trash = read_storage_raw(self.page, "blattam-trash")
+        trash_by_name = {t["name"]: t for t in trash}
+        assert "BLoose" in trash_by_name and "BG1" in trash_by_name
+        assert trash_by_name["BLoose"]["url"] == "https://bl.com" and trash_by_name["BLoose"].get("deletedAt", 0) > 0
+        assert trash_by_name["BG1"]["url"] == "https://bg1.com" and trash_by_name["BG1"].get("deletedAt", 0) > 0
 
     def test_delete_space_removes_groups(self):
         a = self._spaces()[0]
@@ -1033,6 +1102,11 @@ class TestBackgroundGroups:
         # чужая (вне группы) вкладка осталась
         assert "Loose" in names
         assert self._groups() == []
+        # вкладка удалённой группы в корзине; Loose нет
+        trash = read_storage_raw(self.page, "blattam-trash")
+        trash_by_name = {t["name"]: t for t in trash}
+        assert "InG" in trash_by_name and "Loose" not in trash_by_name
+        assert trash_by_name["InG"]["url"] == "https://ing.com" and trash_by_name["InG"].get("deletedAt", 0) > 0
 
     def test_delete_group_only_deletes_that_groups_tabs(self):
         sp = self._spaces()[0]
@@ -1053,6 +1127,11 @@ class TestBackgroundGroups:
         assert t2["groupId"] == g2["id"]
         # g2 осталась
         assert [g["id"] for g in self._groups()] == [g2["id"]]
+        # вкладка первой группы в корзине; T2 нет
+        trash = read_storage_raw(self.page, "blattam-trash")
+        trash_by_name = {t["name"]: t for t in trash}
+        assert "T1" in trash_by_name and "T2" not in trash_by_name
+        assert trash_by_name["T1"]["url"] == "https://t1.com" and trash_by_name["T1"].get("deletedAt", 0) > 0
 
     def test_move_tab_to_space_clears_group(self):
         sp1 = self._spaces()[0]
@@ -1631,6 +1710,10 @@ class TestViewSpaceModal:
         tabs = read_storage_raw(self.page, "blattam-tabs")
         assert [t["name"] for t in tabs] == ["W"]  # вкладка удалённого sp1 удалена
         assert read_storage_raw(self.page, "blattam-last-space") == "sp2"
+        # удалённая вкладка — в корзине
+        trash = read_storage_raw(self.page, "blattam-trash")
+        assert len(trash) == 1 and trash[0]["name"] == "M" and trash[0]["url"] == "https://m.com"
+        assert trash[0].get("deletedAt", 0) > 0
 
 
 # ==========================================
@@ -1671,6 +1754,10 @@ class TestSpaceMetaRow:
         tabs = read_storage_raw(self.page, "blattam-tabs")
         assert [t["name"] for t in tabs] == ["W"]
         assert self.page.evaluate("document.getElementById('meta-label').textContent") == "Work"
+        # удалённая вкладка — в корзине
+        trash = read_storage_raw(self.page, "blattam-trash")
+        assert len(trash) == 1 and trash[0]["name"] == "M" and trash[0]["url"] == "https://m.com"
+        assert trash[0].get("deletedAt", 0) > 0
 
     def test_meta_buttons_follow_active_space(self):
         # Кнопки статичны, но резолвят активное пространство в момент клика:
@@ -1790,9 +1877,14 @@ class TestViewGroups:
         assert msg["action"] == "delete-group" and msg["id"] == "g1"
         assert read_storage_raw(self.page, "blattam-groups") == []
         tabs = read_storage_raw(self.page, "blattam-tabs")
-        assert tabs == []  # вкладки удалённой группы удалены
+        assert tabs == []  # вкладки удалённой группы удалены в корзину
         assert self.page.evaluate("document.querySelectorAll('.gbar').length") == 0
         assert self.page.evaluate("document.querySelectorAll('.tab-card').length") == 0
+        # обе вкладки — в корзине
+        trash = read_storage_raw(self.page, "blattam-trash")
+        trash_names = sorted(t["name"] for t in trash)
+        assert trash_names == ["D1", "D2"]
+        assert all(t.get("deletedAt", 0) > 0 for t in trash)
 
     def test_meta_groups_plural(self):
         load_view(self.page, spaces=self.SP, groups=[
@@ -11999,7 +12091,7 @@ class TestRailLayout:
           });
         })()"""))
         assert d2["settingsOpen"], d2
-        assert d2["faqItems"] == 6, d2
+        assert d2["faqItems"] == 16, d2
 
     def test_account_card_pinned_bottom(self):
         # Аккаунт-карта закреплена внизу левой рейки (margin-top: auto)
@@ -13214,13 +13306,13 @@ class TestSettingsModal:
         assert self.page.evaluate("document.querySelector('#settings-modal .modal h3').textContent") == "Настройки"
         assert self.page.evaluate("document.querySelector('#settings-modal section:has(.faq-list) .settings-section-title').textContent") == "Частые вопросы"
 
-    def test_settings_faq_has_six_items_with_qa(self):
+    def test_settings_faq_has_sixteen_items_with_qa(self):
         load_view(self.page)
         self._open()
         qa = json.loads(self.page.evaluate(
             "JSON.stringify([...document.querySelectorAll('#settings-modal .faq-item')]"
             ".map(i => ({q: i.querySelector('.faq-q').textContent.trim(), a: i.querySelector('.faq-a').textContent.trim()})))"))
-        assert len(qa) == 6
+        assert len(qa) == 16
         assert all(len(x["q"]) > 0 and len(x["a"]) > 0 for x in qa)
 
     def test_settings_faq_content(self):
@@ -13345,8 +13437,8 @@ class TestFaqAboutI18n:
             " qs: [...document.querySelectorAll('#settings-pane-faq .faq-q')].map(e => e.textContent),"
             " as: [...document.querySelectorAll('#settings-pane-faq .faq-a')].map(e => e.textContent),"
             " ru_h4: I18N.ru.faq_title,"
-            " ru_qs: [I18N.ru.faq1_q, I18N.ru.faq2_q, I18N.ru.faq3_q, I18N.ru.faq4_q, I18N.ru.faq5_q, I18N.ru.faq6_q],"
-            " ru_as: [I18N.ru.faq1_a, I18N.ru.faq2_a, I18N.ru.faq3_a, I18N.ru.faq4_a, I18N.ru.faq5_a, I18N.ru.faq6_a]})"))
+            " ru_qs: [I18N.ru.faq1_q, I18N.ru.faq2_q, I18N.ru.faq3_q, I18N.ru.faq4_q, I18N.ru.faq5_q, I18N.ru.faq6_q, I18N.ru.faq7_q, I18N.ru.faq8_q, I18N.ru.faq9_q, I18N.ru.faq10_q, I18N.ru.faq11_q, I18N.ru.faq12_q, I18N.ru.faq13_q, I18N.ru.faq14_q, I18N.ru.faq15_q, I18N.ru.faq16_q],"
+            " ru_as: [I18N.ru.faq1_a, I18N.ru.faq2_a, I18N.ru.faq3_a, I18N.ru.faq4_a, I18N.ru.faq5_a, I18N.ru.faq6_a, I18N.ru.faq7_a, I18N.ru.faq8_a, I18N.ru.faq9_a, I18N.ru.faq10_a, I18N.ru.faq11_a, I18N.ru.faq12_a, I18N.ru.faq13_a, I18N.ru.faq14_a, I18N.ru.faq15_a, I18N.ru.faq16_a]})"))
         assert data["h4"] == data["ru_h4"] == "Частые вопросы"
         assert data["qs"] == data["ru_qs"]
         assert data["as"] == data["ru_as"]
@@ -13377,8 +13469,8 @@ class TestFaqAboutI18n:
             " qs: [...document.querySelectorAll('#settings-pane-faq .faq-q')].map(e => e.textContent),"
             " as: [...document.querySelectorAll('#settings-pane-faq .faq-a')].map(e => e.textContent),"
             " en_h4: I18N.en.faq_title,"
-            " en_qs: [I18N.en.faq1_q, I18N.en.faq2_q, I18N.en.faq3_q, I18N.en.faq4_q, I18N.en.faq5_q, I18N.en.faq6_q],"
-            " en_as: [I18N.en.faq1_a, I18N.en.faq2_a, I18N.en.faq3_a, I18N.en.faq4_a, I18N.en.faq5_a, I18N.en.faq6_a]})"))
+            " en_qs: [I18N.en.faq1_q, I18N.en.faq2_q, I18N.en.faq3_q, I18N.en.faq4_q, I18N.en.faq5_q, I18N.en.faq6_q, I18N.en.faq7_q, I18N.en.faq8_q, I18N.en.faq9_q, I18N.en.faq10_q, I18N.en.faq11_q, I18N.en.faq12_q, I18N.en.faq13_q, I18N.en.faq14_q, I18N.en.faq15_q, I18N.en.faq16_q],"
+            " en_as: [I18N.en.faq1_a, I18N.en.faq2_a, I18N.en.faq3_a, I18N.en.faq4_a, I18N.en.faq5_a, I18N.en.faq6_a, I18N.en.faq7_a, I18N.en.faq8_a, I18N.en.faq9_a, I18N.en.faq10_a, I18N.en.faq11_a, I18N.en.faq12_a, I18N.en.faq13_a, I18N.en.faq14_a, I18N.en.faq15_a, I18N.en.faq16_a]})"))
         assert data["h4"] == data["en_h4"] == "Frequently asked questions"
         assert data["qs"] == data["en_qs"]
         assert data["as"] == data["en_as"]
@@ -23157,7 +23249,7 @@ class TestSettingsNavRestructure:
         load_view(self.page)
         self._open()
         self._open_pane("faq")
-        assert self.page.evaluate("document.querySelectorAll('#settings-pane-faq .faq-item').length") == 6
+        assert self.page.evaluate("document.querySelectorAll('#settings-pane-faq .faq-item').length") == 16
         assert "Что такое BlatTabs?" in self.page.evaluate("document.querySelector('#settings-pane-faq .faq-list').textContent")
         self._open_pane("about")
         assert self.page.evaluate("document.getElementById('about-version').textContent") == "1.0.0"
@@ -25442,3 +25534,209 @@ class TestTombstonesDeletedKey:
         self.page.wait_for_timeout(150)
         assert read_storage_raw(self.page, "blattam-trash") != []
         assert not (read_local(self.page, "blattam-deleted") or [])
+
+
+# ==========================================
+#  UNITS: Удаление пространства/группы → вкладки в корзину + счётчик пространства
+#  при сворачивании группы
+# ==========================================
+
+class TestSpaceGroupDeleteToTrash:
+    """Каскадное удаление пространства/группы уходит вкладкам в корзину
+    (background.js removeTabsToTrash): запись = полный объект вкладки +
+    deletedAt (мс); дедупликация по url (существующая корзина / батч);
+    пустая группа — корзина не меняется; restore через модалку корзины;
+    i18n confirm-текстов с корзинной формулировкой (ru)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    def _load_bg(self):
+        self.page.goto("about:blank")
+        self.page.evaluate(MOCK_CHROME)
+        self.page.evaluate(load_file("background.js") + "; 'loaded'")
+
+    def test_delete_space_sends_grouped_and_loose_tabs_to_trash(self):
+        self._load_bg()
+        b = call_msg(self.page, "create-space", name="B")
+        g = call_msg(self.page, "create-group", spaceId=b["id"], name="GB")
+        send_msg(self.page, "add-tab", name="BLoose", url="https://bl.com", spaceId=b["id"])
+        send_msg(self.page, "add-tab", name="BG1", url="https://bg1.com", spaceId=b["id"])
+        idx = [i for i, t in enumerate(read_storage_raw(self.page, "blattam-tabs")) if t["name"] == "BG1"][0]
+        send_msg(self.page, "move-tab", index=idx, groupId=g["id"])
+
+        res = call_msg(self.page, "delete-space", id=b["id"])
+        assert res is True
+
+        trash = read_storage_raw(self.page, "blattam-trash")
+        by_url = {t["url"]: t for t in trash}
+        loose = by_url.get("https://bl.com")
+        grouped = by_url.get("https://bg1.com")
+        assert loose is not None and grouped is not None, trash
+        # запись = полный объект вкладки + deletedAt (мс > 0)
+        assert loose["name"] == "BLoose" and grouped["name"] == "BG1"
+        for rec, gid in ((loose, None), (grouped, g["id"])):
+            assert rec["spaceId"] == b["id"]
+            assert rec.get("groupId") == gid
+            assert rec.get("deletedAt", 0) > 0
+        assert read_storage_raw(self.page, "blattam-tabs") == []
+        assert [tg["id"] for tg in read_storage_raw(self.page, "blattam-groups")] == []
+
+    def test_delete_space_dedups_against_existing_trash(self):
+        self._load_bg()
+        b = call_msg(self.page, "create-space", name="B")
+        send_msg(self.page, "add-tab", name="InB", url="https://in.com", spaceId=b["id"])
+        # посеянная запись с тем же url — удаление не дублирует её
+        self.page.evaluate("""() => {
+          chrome.storage.local._data['blattam-trash'] = [
+            {name: 'Old', url: 'https://in.com', spaceId: 'sp-old', deletedAt: 1111}
+          ];
+        }""")
+        res = call_msg(self.page, "delete-space", id=b["id"])
+        assert res is True
+        trash = read_storage_raw(self.page, "blattam-trash")
+        assert len(trash) == 1, trash
+        assert trash[0]["url"] == "https://in.com" and trash[0]["name"] == "Old", trash
+        assert trash[0]["deletedAt"] == 1111, trash
+
+    def test_delete_group_with_no_tabs_leaves_trash_unchanged(self):
+        self._load_bg()
+        sp = self.page.evaluate("JSON.stringify(chrome.storage._data['blattam-spaces'])")
+        g = call_msg(self.page, "create-group", spaceId=json.loads(sp)[0]["id"], name="Empty")
+        self.page.evaluate("""() => {
+          chrome.storage.local._data['blattam-trash'] = [
+            {name: 'Keep', url: 'https://keep.com', spaceId: 'sp0', deletedAt: 2000}
+          ];
+        }""")
+        res = call_msg(self.page, "delete-group", id=g["id"])
+        assert res is True
+        trash = read_storage_raw(self.page, "blattam-trash")
+        assert len(trash) == 1 and trash[0]["url"] == "https://keep.com", trash
+        assert read_storage_raw(self.page, "blattam-groups") == []
+        # trash не потерял/не прибавил записей (старое содержимое цело)
+        assert trash[0]["deletedAt"] == 2000, trash
+
+    def test_delete_space_restores_through_trash_modal(self):
+        load_view(self.page, spaces=[
+            {"id": "sp1", "name": "Main"},
+            {"id": "sp2", "name": "Work"},
+        ], groups=[
+            {"id": "g1", "name": "Dev", "spaceId": "sp1", "collapsed": False},
+        ], tabs=[
+            {"name": "G1", "url": "https://g1.com", "spaceId": "sp1", "groupId": "g1"},
+            {"name": "Loose", "url": "https://loose.com", "spaceId": "sp1"},
+            {"name": "W", "url": "https://w.com", "spaceId": "sp2"},
+        ], last_space="sp1")
+        self.page.evaluate("""() => {
+          window.confirm = () => true;
+        }""")
+        self.page.evaluate("document.getElementById('meta-delete-btn').click()")
+        trash = read_storage_raw(self.page, "blattam-trash")
+        assert sorted(t["name"] for t in trash) == ["G1", "Loose"], trash
+
+        # модалка корзины → «Вернуть» первой строки (G1)
+        self.page.evaluate("document.getElementById('trash-btn').click()")
+        self.page.wait_for_timeout(150)
+        self.page.evaluate("document.querySelector('#trash-list .trash-row button').click()")
+        self.page.wait_for_timeout(150)
+        trash2 = read_storage_raw(self.page, "blattam-trash")
+        assert [t["name"] for t in trash2] == ["Loose"], trash2
+        tabs2 = read_storage_raw(self.page, "blattam-tabs")
+        restored = [t for t in tabs2 if t["url"] == "https://g1.com"]
+        assert len(restored) == 1, tabs2
+        # первое пространство после удаления — sp2; мёртвая группа не восстановлена
+        assert restored[0]["spaceId"] == "sp2"
+        assert not restored[0].get("groupId")
+        assert "deletedAt" not in restored[0]
+        assert [t["url"] for t in tabs2] == ["https://w.com", "https://g1.com"]
+
+    def test_delete_space_confirm_message_mentions_trash(self):
+        load_view(self.page, spaces=[
+            {"id": "sp1", "name": "Main"},
+            {"id": "sp2", "name": "Work"},
+        ], last_space="sp1")
+        self.page.evaluate("""() => {
+          window.__msgs = [];
+          window.confirm = (m) => { window.__msgs.push(m); return true; };
+        }""")
+        self.page.evaluate("document.getElementById('meta-delete-btn').click()")
+        msgs = json.loads(self.page.evaluate("JSON.stringify(window.__msgs)"))
+        assert len(msgs) == 1, msgs
+        expected = self.page.evaluate("I18N.ru['delete_space_confirm'].split('{name}').join('Main')")
+        assert msgs[0] == expected, msgs
+        assert "корзин" in msgs[0], msgs
+
+    def test_delete_group_confirm_message_mentions_trash(self):
+        load_view(self.page, spaces=[{"id": "sp1", "name": "Main"}], groups=[
+            {"id": "g1", "name": "Dev", "spaceId": "sp1", "collapsed": False},
+        ], tabs=[
+            {"name": "D1", "url": "https://d1.com", "spaceId": "sp1", "groupId": "g1"},
+        ])
+        self.page.evaluate("""() => {
+          window.__msgs = [];
+          window.confirm = (m) => { window.__msgs.push(m); return true; };
+        }""")
+        self.page.evaluate("document.querySelector('.gbar .gdel').click()")
+        msgs = json.loads(self.page.evaluate("JSON.stringify(window.__msgs)"))
+        assert len(msgs) == 1, msgs
+        expected = self.page.evaluate("I18N.ru['delete_group_confirm'].split('{name}').join('Dev')")
+        assert msgs[0] == expected, msgs
+        assert "корзин" in msgs[0], msgs
+
+
+class TestGroupCollapseMetaCount:
+    """Счётчик вкладок пространства (#meta-count) не падает при сворачивании
+    группы: без фильтра — общее число вкладок пространства (свёрнутые группы
+    тоже); с фильтром — число видимых карточек (по-прежнему)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, page):
+        self.page = page
+
+    SP = [{"id": "sp1", "name": "Main"}]
+
+    def _load_group_space(self, collapsed=False):
+        load_view(self.page, spaces=self.SP, groups=[
+            {"id": "g1", "name": "Dev", "spaceId": "sp1", "collapsed": collapsed},
+        ], tabs=[
+            {"name": "D1", "url": "https://d1.com", "spaceId": "sp1", "groupId": "g1"},
+            {"name": "D2", "url": "https://d2.com", "spaceId": "sp1", "groupId": "g1"},
+            {"name": "L", "url": "https://l.com", "spaceId": "sp1"},
+        ])
+
+    def _meta_count(self):
+        return self.page.evaluate("document.getElementById('meta-count').textContent")
+
+    def test_collapse_keeps_meta_count(self):
+        self._load_group_space()
+        assert self._meta_count() == "3"
+        self.page.evaluate("document.querySelector('.gbar').click()")
+        self.page.wait_for_timeout(150)
+        assert self._meta_count() == "3"
+
+    def test_expand_restores_meta_count(self):
+        self._load_group_space()
+        self.page.evaluate("document.querySelector('.gbar').click()")  # collapse
+        self.page.wait_for_timeout(100)
+        assert self._meta_count() == "3"
+        self.page.evaluate("document.querySelector('.gbar').click()")  # expand
+        self.page.wait_for_timeout(150)
+        assert self._meta_count() == "3"
+
+    def test_collapsed_only_group_meta_count_not_zero(self):
+        load_view(self.page, spaces=self.SP, groups=[
+            {"id": "g1", "name": "Dev", "spaceId": "sp1", "collapsed": True},
+        ], tabs=[
+            {"name": "D1", "url": "https://d1.com", "spaceId": "sp1", "groupId": "g1"},
+            {"name": "D2", "url": "https://d2.com", "spaceId": "sp1", "groupId": "g1"},
+        ])
+        assert self._meta_count() == "2"
+
+    def test_filter_active_counts_rendered_cards(self):
+        self._load_group_space()
+        self.page.locator("#search").fill("l.com")
+        self.page.wait_for_timeout(100)
+        assert self._meta_count() == "1"
+        # поиск — по полю имени/url; только L видима
+        assert self.page.evaluate("document.querySelectorAll('.tab-card').length") == 1
