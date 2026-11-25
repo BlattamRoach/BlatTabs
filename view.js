@@ -396,10 +396,16 @@ let browserWindowId = null; // id этого окна — рейка показ�
 let dragSourceBrowserTab = null; // вкладки рейки, которую тянут: {id,url,title,favIconUrl,windowId,index}
 let dragBrowserTabGhost = null;
 let armedGbar = null; // вооруженная шапка группы (drop-over) — снимается при выходе/дропе/отмене
-// Снимаем тёплую заглушку-арм со всех .gbar (и гасим трекер). Идемпотентно.
+// Снимаем тёплую заглушку-арм со всех .gbar и слотов пустой группы (и гасим трекер). Идемпотентно.
 function clearGbarArms() {
-  document.querySelectorAll('.gbar.drop-over').forEach(b => b.classList.remove('drop-over'));
+  if (armedGbar) armedGbar.classList.remove('drop-over');
+  document.querySelectorAll('.gbar.drop-over, .group-empty-slot.drop-over').forEach(b => b.classList.remove('drop-over'));
   armedGbar = null;
+}
+// Пометка драга вкладки рейки на body — подавление hover-подсветки шапки
+// группы (CSS). Карточный путь использует body.dragging-card — не смешивать.
+function setRailDragClass(on) {
+  document.body.classList.toggle('dragging-bt', !!on);
 }
 const browserTabsList = document.getElementById('browser-tabs-list'); // рейка: список открытых вкладок
 const railRight = document.getElementById('rail-right'); // правая рейка — цель дропа карточки (открыть сайт фоном)
@@ -2860,6 +2866,23 @@ function setGhostDisplay(v) {
   if (dragGhostSlot) dragGhostSlot.style.display = v;
 }
 
+// Снять FLIP-трансформы и транзишены карточек центра (идемпотентно).
+// Нужно, когда заглушка прячется (display:none) и список РЕФЛОУИТСЯ:
+// летящие трансформации (applyFlipFrom, ~200ms) от прежней раскладки
+// перебрасывают карточки поверх шапки/слота (курсор видит карточку вместо
+// шапки — дроп уходит не «в группу», а «в слот карточки»).
+function clearCardFlipTransforms() {
+  document.querySelectorAll('#tabs-list .tab-card').forEach(c => {
+    if (c.__flipClear) { c.removeEventListener('transitionend', c.__flipClear); delete c.__flipClear; }
+    // 'none' (а не '') — нотное свойство: снимает незавершённую FLIP-анимацию
+    // И снимает её «зависшую» текущую трансформу (без специфицированного
+    // значения карточка замирала на мид-флейте позиции — «накладывалась»
+    // на шапку группы, и дроп уходил не «в группу», а «в слот карточки»)
+    c.style.transition = 'none';
+    c.style.transform = 'none';
+  });
+}
+
 // Пустая полоса центр.сетки #tabs-list — НИЗОВАЯ ЗОНА:
 // пространство ниже последней видимой строки ПОСЛЕДНЕЙ
 // секции, до низа #tabs-list (строка #add-group-btn + отступ .tabs-list
@@ -4977,6 +5000,7 @@ function onBtDragStart(e, item, t) {
   // или чужой pointer-драг пересекает рейку (pdForeignActive). Синтетическая
   // цепочка харнесса (не-trusted) всегда проходит без изменений
   if (e.isTrusted && (railPointerPress || pdForeignActive())) { e.preventDefault(); return; }
+  setRailDragClass(true); // hover-подсветка шапки группы подавлена во время драга рейки
   dragSourceBrowserTab = { id: t.id, url: t.url || '', title: t.title || '',
                            favIconUrl: t.favIconUrl || '', windowId: t.windowId, index: t.index };
   btDragItem = item;
@@ -5011,6 +5035,7 @@ function onBtDragEnd() {
   const src = dragSourceBrowserTab;
   dragSourceBrowserTab = null;
   btDragItem = null;
+  setRailDragClass(false); // снять пометку драга рейки (CSS hover-подавление)
   clearGbarArms(); // снятие тёплой арма шапки группы — при любом завершении драга
   if (!btDropCommitted) pendingBtClickAfterDrag = false; // драг отменён — ложного клика не будет
   btDropCommitted = false;
@@ -5210,15 +5235,20 @@ document.addEventListener('dragover', (e) => {
   if (gbar || ges) {
     const el = gbar || ges;
     const gid = el.dataset.groupId;
+    // Заглушка прячется над ЛЮБОЙ шапкой группы (пустая/свёрнутая/с карточками)
+    // и над слотом пустой группы — как у карточного пути (trackCardDragAt)
+    clearCardFlipTransforms(); // FLIP от прежней раскладки — рефлоу после hide чист
+    if (dragGhostSlot) setGhostDisplay('none');
     if (gid && groupVisibleCardCount(gid)) {
       // Группа с видимыми карточками — не цель: без preventDefault
       // (browser no-drop) и без arm — курсор «запрещено»
+      restoreWrapHiddenCard(); // заглушка скрыта — новая строка не видна
       clearGbarArms();
       return;
     }
-    if (dragGhostSlot) setGhostDisplay('none');
     restoreWrapHiddenCard();
-    // Тёплый армед-подсвет (как у карточного пути — .gbar.drop-over)
+    // Тёплый армед-подсвет ШАПКИ группы (.gbar) СВЁРНУТОЙ/ПУСТОЙ группы И
+    // слота пустой группы (.group-empty-slot) — как у карточного пути
     if (armedGbar && armedGbar !== el) armedGbar.classList.remove('drop-over');
     el.classList.add('drop-over');
     armedGbar = el;
@@ -5320,6 +5350,7 @@ function btlTeardown() {
   window.removeEventListener('pointercancel', btlOnCancel);
   window.removeEventListener('keydown', btlOnKey);
   document.body.style.cursor = '';
+  setRailDragClass(false); // снять пометку драга рейки (CSS hover-подавление)
 }
 
 // После коммита: центральная заглушка снята самими save-функциями, рейку
@@ -5327,6 +5358,7 @@ function btlTeardown() {
 // по id, как в onBtDragEnd)
 function btlAfterCommit(p) {
   btDropCommitted = true;
+  setRailDragClass(false); // снять пометку драга рейки (идемпотентно — btlTeardown уже снимает)
   clearGbarArms(); // снятие тёплой арма шапки группы — при коммите
   // Центральная заглушка (рейка → центр) снимается явно: save-функции
   // центра/группы снимают сами, а коммит в рейку — нет, без неё заглушка
@@ -5349,6 +5381,7 @@ function btlAfterCommit(p) {
 function btlCancelState(p) {
   p = p || btl;
   btl = null;
+  setRailDragClass(false); // снять пометку драга рейки (идемпотентно)
   clearGbarArms(); // снятие тёплой арма шапки группы — при отмене
   railPointerPress = false;
   dragSourceBrowserTab = null;
@@ -5542,16 +5575,21 @@ function btlTrackAt(x, y) {
     if (gbar || ges) {
       const el = gbar || ges;
       const gid = el.dataset.groupId;
+      // Заглушка прячется над ЛЮБОЙ шапкой группы (пустая/свёрнутая/с карточками)
+      // и над слотом пустой группы — как у карточного пути (trackCardDragAt)
+      clearCardFlipTransforms(); // FLIP от прежней раскладки — рефлоу после hide чист
+      if (dragGhostSlot) setGhostDisplay('none');
       if (gid && groupVisibleCardCount(gid)) {
-        // Группа с видимыми карточками — не цель: без arm, без скрытия
-        // заглушки; дроп отменится (btlCommitAt вернёт null)
+        // Группа с видимыми карточками — не цель: без arm; дроп отменится
+        // (btlCommitAt вернёт null)
+        restoreWrapHiddenCard(); // заглушка скрыта — новая строка не видна
         clearGbarArms();
         btl.lastAnchor = null;
         return;
       }
-      if (dragGhostSlot) setGhostDisplay('none');
       restoreWrapHiddenCard();
-      // Тёплый армед-подсвет шапки (как у карточного пути)
+      // Тёплый армед-подсвет ШАПКИ группы (.gbar) СВЁРНУТОЙ/ПУСТОЙ группы И
+      // слота пустой группы (.group-empty-slot) — как у карточного пути
       if (armedGbar && armedGbar !== el) armedGbar.classList.remove('drop-over');
       el.classList.add('drop-over');
       armedGbar = el;
@@ -5620,6 +5658,7 @@ function btlOnMove(e) {
     btlCloneState = null; // размер-состояние — заново (первое движение применит текущее)
     btl.cloneNodes = Array.from(pdClone.childNodes); // SMALL: исходный контент элемента рейки
     btl.armed = true;
+    setRailDragClass(true); // CSS hover-подавление шапки группы во время драга рейки
     btl.lastAnchor = null;
     pdLastTouchCard = null;   // fresh drag — no card touched yet (territory freeze state)
     pdLastTouchAnchor = null;

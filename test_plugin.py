@@ -2218,10 +2218,11 @@ class TestCollapsedGroupDropExpand:
         nums = [x.strip() for x in v.split("(", 1)[1].strip().strip("()").split(",")]
         return "rgba({0}, {1}, {2}, {3})".format(nums[0], nums[1], nums[2], nums[3])
 
-    def test_rail_dragover_arms_ghost_on_collapsed_group(self):
-        # Драг вкладки рейки на СВЁРНУТУЮ группу: во время dragover шапка
-        # вооружается тёплым .drop-over (фон --ghost-bg из настроек «Цвета»),
-        # после dragend arm снимается
+    def test_rail_dragover_arms_collapsed_group(self):
+        # Драг вкладки рейки на СВЁРНУТУЮ группу: шапка ВООРУЖАЕТСЯ тёплым
+        # .drop-over — computed background == токену --ghost-bg (из настроек
+        # «Цвета»); центральная заглушка над ней скрыта; после dragend arm не
+        # остаётся; дроп по-прежнему срабатывает (saveBtToGroup)
         BT = [{"id": "bt3", "title": "News", "url": "https://news.example",
                "favIconUrl": "https://fav.example/3.ico", "windowId": 1, "index": 2}]
         load_view(self.page, spaces=self.SP, groups=[
@@ -2242,14 +2243,19 @@ class TestCollapsedGroupDropExpand:
         self.page.wait_for_timeout(150)  # transition .1s на фоне — вычислить computed-цвет с точностью
         armed = self.page.evaluate("window.__bar.classList.contains('drop-over')")
         bg = self.page.evaluate("getComputedStyle(window.__bar).backgroundColor")
+        slot_display = self.page.evaluate("""() => {
+          const s = document.querySelector('#tabs-list .tab-ghost-slot');
+          return s ? getComputedStyle(s).display : null;
+        }""")
         self.page.evaluate("""() => {
           window.__src.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
         }""")
         self.page.wait_for_timeout(50)
         armed_after = self.page.evaluate("window.__bar.classList.contains('drop-over')")
         assert armed is True, "шапка свёрнутой группы должна вооружиться при dragover рейки"
-        assert bg == self._ghost_bg_token(), (bg, self._ghost_bg_token())
-        assert armed_after is False, "arm должен сниматься по dragend"
+        assert bg == self._ghost_bg_token(), (bg,)
+        assert slot_display in (None, "none"), (slot_display,)
+        assert armed_after is False, "arm не должен остаться по dragend"
         assert self.page_errors == [], self.page_errors
 
     def test_rail_drag_on_expanded_group_not_armed_not_saved(self):
@@ -13277,6 +13283,123 @@ class TestRailCenterGhost:
         assert self.page.evaluate("document.querySelectorAll('.tab-ghost-slot').length") == 0
         assert self._center_names() == ["A", "B", "C"]
 
+    # --- новое: драга рейки по шапке группы (фикс «шапка не светлее + заглушка не висит в конце группы») ---
+
+    def _inject_real_styles(self):
+        theme = load_file("theme.css")
+        html = load_file("view.html")
+        style = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate(
+            "(styles) => { var st = document.createElement('style'); st.textContent = styles; document.head.appendChild(st); }",
+            [theme + "\n" + style])
+
+    def _gbar_over(self, gid):
+        self.page.evaluate("""(gid) => {
+          const bar = document.querySelector('.gbar[data-group-id="' + gid + '"]');
+          const r = bar.getBoundingClientRect();
+          bar.dispatchEvent(new DragEvent('dragover', {dataTransfer: window.__btDt, bubbles: true, cancelable: true,
+                                                      clientX: r.left + 10, clientY: r.top + 5}));
+        }""", gid)
+
+    def _ghost_state(self):
+        # display заглушки в центре / число armed-шапок / класс драга рейки
+        return json.loads(self.page.evaluate("""(() => {
+          const s = document.querySelector('#tabs-list .tab-ghost-slot');
+          return JSON.stringify({
+            display: s ? getComputedStyle(s).display : null,
+            armed: document.querySelectorAll('.gbar.drop-over').length,
+            draggingBt: document.body.classList.contains('dragging-bt')
+          });
+        })()"""))
+
+    def _ghost_bg_token(self):
+        css = load_file("theme.css")
+        dark_at = css.index('[data-theme="dark"] {')
+        m = re.search(r"--ghost-bg:\s*(#[0-9a-fA-F]{3,8}|rgba?\([^)]*\))", css[:dark_at])
+        assert m
+        v = m.group(1)
+        if v.startswith("#"):
+            h = v[1:]
+            if len(h) == 3:
+                h = "".join(c2 * 2 for c2 in h)
+            return "rgb({0}, {1}, {2})".format(int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+        nums = [x.strip() for x in v.split("(", 1)[1].strip().strip("()").split(",")]
+        return "rgba({0}, {1}, {2}, {3})".format(nums[0], nums[1], nums[2], nums[3])
+
+    def _gbar_bg(self, gid):
+        return self.page.evaluate(
+            """(gid) => getComputedStyle(document.querySelector('.gbar[data-group-id="' + gid + '"]')).backgroundColor""",
+            gid)
+
+    def test_rail_ghost_hidden_and_armed_only_on_collapsed_group(self):
+        # Рейка → центр: над карточкой заглушка видима; над ШАПКОЙ ЛЮБОЙ группы
+        # заглушка прячется целиком (display:none). Шапка НЕпустой группы
+        # (развёрнутая) — без arm и transparent (не светлее по тону); шапка
+        # СВЁРНУТОЙ (пустой) группы — тёплый arm (.drop-over, фон == --ghost-bg)
+        load_view(self.page, spaces=[{"id": "sp1", "name": "Main"}], groups=[
+            {"id": "g1", "name": "Empty", "spaceId": "sp1", "collapsed": True},
+            {"id": "g2", "name": "Full", "spaceId": "sp1", "collapsed": False},
+        ], tabs=[
+            {"name": "M", "url": "https://m.com", "spaceId": "sp1", "groupId": "g2"},
+            {"name": "T", "url": "https://t.com", "spaceId": "sp1"},
+        ], browser_tabs=self.BT)
+        self._inject_real_styles()
+        self.page.wait_for_timeout(80)
+        self._rail_drag_start("bt1")
+        self._rail_over(0, 'before')  # над карточкой M в центре — заглушка видима
+        s = self._ghost_state()
+        assert s["display"] != "none", s
+        assert s["draggingBt"] is True, s
+        # над шапкой РАЗВЁРНУТОЙ группы с видимыми карточками — без arm
+        self._gbar_over("g2")
+        s = self._ghost_state()
+        assert s["display"] == "none", s
+        assert s["armed"] == 0, s
+        assert self._gbar_bg("g2") == "rgba(0, 0, 0, 0)", s
+        # над шапкой СВЁРНУТОЙ (пустой) группы — тёплый arm
+        self._gbar_over("g1")
+        self.page.wait_for_timeout(150)  # transition .1s — вычислить computed-цвет
+        s = self._ghost_state()
+        assert s["display"] == "none", s
+        assert s["armed"] == 1, s
+        assert self._gbar_bg("g1") == self._ghost_bg_token(), s
+        # заглушка физически не осталась в конце группы — спрятана целиком
+        assert self.page.evaluate("document.querySelector('#tabs-list .tab-ghost-slot').getBoundingClientRect().width") == 0
+        self.page.wait_for_timeout(30)
+
+    def test_rail_ghost_not_left_at_end_of_group(self):
+        # Заглушка появляется ТОЛЬКО в центре: дроп рейки по карточке/списку,
+        # затем в шапку — заглушка скрывается (display:none), не остаётся видимой
+        # после последней карточки группы (регрессия: заглушка «висела» в конце группы)
+        load_view(self.page, spaces=[{"id": "sp1", "name": "Main"}], groups=[
+            {"id": "g1", "name": "Full", "spaceId": "sp1", "collapsed": False},
+            {"id": "g2", "name": "Empty", "spaceId": "sp1", "collapsed": True},
+        ], tabs=[
+            {"name": "M", "url": "https://m.com", "spaceId": "sp1", "groupId": "g1"},
+            {"name": "T", "url": "https://t.com", "spaceId": "sp1"},
+        ], browser_tabs=self.BT)
+        self._inject_real_styles()
+        self.page.wait_for_timeout(80)
+        self._rail_drag_start("bt1")
+        self._rail_over(0, 'after')  # заглушка в секции группы (за карточкой M)
+        s = self._ghost_state()
+        assert s["display"] != "none", s
+        assert self.page.evaluate("document.querySelector('#tabs-list .tab-ghost-slot').closest('.gbar')") is None
+        # курсор на шапке РАЗВЁРНУТОЙ (непустой) группы — заглушка спрятана, без arm
+        self._gbar_over("g1")
+        s = self._ghost_state()
+        assert s["display"] == "none", s
+        assert s["armed"] == 0, s
+        assert self._gbar_bg("g1") == "rgba(0, 0, 0, 0)", s
+        # курсор на шапке СВЁРНУТОЙ (пустой) группы — заглушка спрятана, тёплый arm
+        self._gbar_over("g2")
+        self.page.wait_for_timeout(150)  # transition .1s — вычислить computed-цвет
+        s = self._ghost_state()
+        assert s["display"] == "none", s
+        assert s["armed"] == 1, s
+        assert self._gbar_bg("g2") == self._ghost_bg_token(), s
+        assert self.page.evaluate("document.querySelectorAll('#tabs-list .tab-ghost-slot').length") == 1  # элемент жив, только спрятан
+
 
 # ==========================================
 #  VIEW.JS: НАСТРОЙКИ (модалка + FAQ)
@@ -14301,6 +14424,133 @@ class TestRailPointerDrag:
         assert armed == 0, armed
         assert after == before, (before, after)
         assert self.page.evaluate("chrome.storage._data['blattam-groups'][0].collapsed") is False
+        assert self._tabs_order() == ["bt1", "bt2", "bt3"]
+        self.page.wait_for_timeout(400)
+        assert self._clone_state() is None
+
+    def _inject_real_styles_rail(self):
+        theme = load_file("theme.css")
+        html = load_file("view.html")
+        style = html.split("<style>", 1)[1].rsplit("</style>", 1)[0]
+        self.page.evaluate(
+            "(styles) => { var st = document.createElement('style'); st.textContent = styles; document.head.appendChild(st); }",
+            [theme + "\n" + style])
+
+    def _gbar_box_by_id(self, gid):
+        return self.page.evaluate("""(gid) => {
+            const g = document.querySelector('.gbar[data-group-id="' + gid + '"]');
+            const r = g.getBoundingClientRect();
+            return {x: r.left + r.width / 2, y: r.top + r.height / 2};
+        }""", gid)
+
+    def _card_box_by_name(self, name):
+        return self.page.evaluate("""(name) => {
+            for (const c of document.querySelectorAll('#tabs-list .tab-card')) {
+                if (c.querySelector('.tab-name') && c.querySelector('.tab-name').textContent.trim() === name) {
+                    const r = c.getBoundingClientRect();
+                    return {x: r.left + r.width / 2, y: r.top + r.height / 2};
+                }
+            }
+            return null;
+        }""", name)
+
+    def _ghost_bg_token(self):
+        css = load_file("theme.css")
+        dark_at = css.index('[data-theme="dark"] {')
+        m = re.search(r"--ghost-bg:\s*(#[0-9a-fA-F]{3,8}|rgba?\([^)]*\))", css[:dark_at])
+        assert m
+        v = m.group(1)
+        if v.startswith("#"):
+            h = v[1:]
+            if len(h) == 3:
+                h = "".join(c2 * 2 for c2 in h)
+            return "rgb({0}, {1}, {2})".format(int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+        nums = [x.strip() for x in v.split("(", 1)[1].strip().strip("()").split(",")]
+        return "rgba({0}, {1}, {2}, {3})".format(nums[0], nums[1], nums[2], nums[3])
+
+    def _gbar_bg(self, gid):
+        return self.page.evaluate(
+            """(gid) => getComputedStyle(document.querySelector('.gbar[data-group-id="' + gid + '"]')).backgroundColor""",
+            gid)
+
+    def test_pointer_hover_over_gbar_arms_only_collapsed_group(self):
+        # Pointer-драг рейки по шапке группы: РАЗВЁРНУТАЯ группа с видимыми
+        # карточками — .gbar без .drop-over и прозрачная (hover подавлен
+        # body.dragging-bt); СВЁРНУТАЯ (пустая) группа — .gbar вооружена тёплым
+        # .drop-over (computed == --ghost-bg). Заглушка .tab-ghost-slot скрыта
+        # над шапкой (display:none), не остаётся в конце группы
+        load_view(self.page, spaces=self.SPACES,
+                  groups=[{"id": "g1", "name": "Empty", "spaceId": "sp1", "collapsed": True},
+                          {"id": "g2", "name": "Full", "spaceId": "sp1", "collapsed": False}],
+                  tabs=[{"name": "M", "url": "https://m.example", "spaceId": "sp1", "groupId": "g2"},
+                        {"name": "T", "url": "https://t.example", "spaceId": "sp1"}],
+                  browser_tabs=self.BT)
+        self._inject_real_styles_rail()
+        self.page.set_viewport_size({"width": 1280, "height": 900})
+        self.page.wait_for_timeout(300)  # конец транзишенов
+        b1 = self._item_box('bt1')
+        cardT = self._card_box_by_name('T')
+        assert cardT is not None
+        self._pd_move(b1, cardT, steps=14)
+        # курсор над карточкой в центре — заглушка видима, драг вооружен
+        assert self.page.evaluate("document.querySelectorAll('#tabs-list .tab-ghost-slot').length") == 1
+        assert self._central_ghost_display() != "none"
+        assert self.page.evaluate("document.body.classList.contains('dragging-bt')") is True
+        # шапка РАЗВЁРНУТОЙ группы с видимыми карточками (real mouse :hover)
+        g2 = self._gbar_box_by_id('g2')
+        self.page.mouse.move(g2["x"], g2["y"])
+        self.page.wait_for_timeout(300)  # конец транзишена hover .1s
+        assert self.page.evaluate("document.querySelectorAll('.gbar.drop-over').length") == 0
+        assert self._central_ghost_display() == "none"
+        assert self._gbar_bg("g2") == "rgba(0, 0, 0, 0)"
+        # шапка СВЁРНУТОЙ (пустой) группы — тёплый arm (computed == --ghost-bg)
+        g1 = self._gbar_box_by_id('g1')
+        self.page.mouse.move(g1["x"], g1["y"])
+        self.page.wait_for_timeout(300)
+        assert self.page.evaluate("document.querySelectorAll('.gbar.drop-over').length") == 1
+        assert self._central_ghost_display() == "none"
+        assert self._gbar_bg("g1") == self._ghost_bg_token()
+        # отмена драга — заглушки нет, группы не тронуты
+        self.page.keyboard.press("Escape")
+        self.page.wait_for_timeout(100)
+        assert self.page.evaluate("document.querySelectorAll('.tab-ghost-slot').length") == 0
+        assert self._tabs_order() == ["bt1", "bt2", "bt3"]
+
+    def _central_ghost_display(self):
+        return self.page.evaluate("""(() => {
+            const s = document.querySelector('#tabs-list .tab-ghost-slot');
+            return s ? getComputedStyle(s).display : null;
+        })()""")
+
+    def test_pointer_release_on_collapsed_gbar_saves_into_group(self):
+        # Pointer-драг рейки: заглушка в центре, релиз на шапку свёрнутой (пустой)
+        # группы — дроп срабатывает (saveBtToGroup), шапка вооружена тёплым
+        # --ghost-bg во время драга, заглушка умирает при коммите
+        load_view(self.page, spaces=self.SPACES,
+                  groups=[{"id": "g1", "name": "Empty", "spaceId": "sp1", "collapsed": True}],
+                  tabs=[{"name": "T", "url": "https://t.example", "spaceId": "sp1"}],
+                  browser_tabs=self.BT)
+        self._inject_real_styles_rail()
+        self.page.set_viewport_size({"width": 1280, "height": 900})
+        self.page.wait_for_timeout(300)
+        b1 = self._item_box('bt1')
+        cardT = self._card_box_by_name('T')
+        assert cardT is not None
+        self._pd_move(b1, cardT, steps=12)
+        assert self._central_ghost_display() != "none"
+        # курсор на шапке (real :hover, не пустая группа — дроп РАЗВЁРТЫВАЕТ её)
+        g1 = self._gbar_box_by_id('g1')
+        self.page.mouse.move(g1["x"], g1["y"])
+        self.page.wait_for_timeout(200)
+        assert self.page.evaluate("document.querySelectorAll('.gbar.drop-over').length") == 1
+        assert self._gbar_bg("g1") == self._ghost_bg_token()
+        assert self._central_ghost_display() == "none"
+        self.page.mouse.up()
+        self.page.wait_for_timeout(150)
+        # дроп в свёрнутую группу срабатывает (вкладка сохраняется, группа раскрывается)
+        tabs = read_local(self.page, 'blattam-tabs')
+        assert len(tabs) == 2 and tabs[-1]["url"] == "https://wiki.example" and tabs[-1]["groupId"] == "g1"
+        assert self.page.evaluate("document.querySelectorAll('.tab-ghost-slot').length") == 0
         assert self._tabs_order() == ["bt1", "bt2", "bt3"]
         self.page.wait_for_timeout(400)
         assert self._clone_state() is None
@@ -20167,9 +20417,9 @@ class TestRailCenterTerritories:
 
     def test_pointer_gbar_hover_expanded_group_no_save(self):
         # Crossing the header of an EXPANDED group (with visible cards): the
-        # header is NOT a drop target — no arm, no ghost-hiding (layout
-        # stable); release cancels — nothing is saved, the group is not
-        # toggled, the ghost is removed
+        # header is NOT a drop target — no arm; the ghost is hidden WHOLLY
+        # (display:none), like over any group header; release cancels —
+        # nothing is saved, the group is not toggled, the ghost is removed
         tabs = [dict(t, groupId="g1") for t in self.TABS3]
         self._load(tabs=tabs, groups=self.GROUPS)
         self._touch_b()
@@ -20183,7 +20433,7 @@ class TestRailCenterTerritories:
         armed = self.page.evaluate("document.querySelectorAll('.gbar.drop-over').length")
         assert armed == 0, armed
         s = self._slot()
-        assert s is not None and s["display"] != "none"
+        assert s is None or s["display"] == "none"
         self.page.mouse.up()
         self.page.wait_for_timeout(150)
         wiki = [t for t in self._stored() if t["url"] == "https://wiki.example"]
