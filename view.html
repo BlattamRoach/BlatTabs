@@ -174,6 +174,12 @@
        прозрачная), чтобы не подмигивала во время драга */
     body.dragging-card .gbar:hover { background: transparent; }
     body.dragging-card .gbar.gbar-collapsed:hover { background: var(--ghost-bg); }
+    /* Перетаскивание вкладки рейки: hover шапки группы — НИКОГДА не
+       подсвечивается (не светлее по тону — ни --gbar-hover, ни тёплый
+       --ghost-bg), кроме АРМЕНОЙ шапки цели дропа (.drop-over) — у свёрнутой
+       (пустой) группы шапка во время драга вооружается тёплым --ghost-bg
+       (как у карточного пути) */
+    body.dragging-bt .gbar:not(.drop-over):hover { background: transparent; }
     /* Свёрнутая группа — шапка во всю ширину строки, как раньше:
        hover-подсветка и клик-сворачивание по любой точке строки */
     .gbar.gbar-collapsed { width: auto; padding: 0 2px; margin-left: 0; border-radius: 0; }
