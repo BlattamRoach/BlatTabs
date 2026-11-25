@@ -286,6 +286,29 @@ async function saveTabs(tabs) {
   await chrome.storage.local.set({ [STORAGE_KEY]: tabs });
 }
 
+// Отправить вкладки в корзину: как sendTabsToTrash в view.js — полный объект
+// вкладки + deletedAt (мс), дедупликация по url (уже в корзине или виден в
+// батче — пропускаем), ОДНОЙ записью в local оба ключа (лист-сетка и бейдж
+// корзины обновятся через onChanged). Вызывается из deleteSpace/deleteGroup
+// (каскадное удаление уходит в корзину, а не навсегда).
+async function removeTabsToTrash(removedTabs, keptTabs) {
+  const data = await chrome.storage.local.get(['blattam-trash']);
+  const trash = Array.isArray(data['blattam-trash']) ? data['blattam-trash'] : [];
+  const inTrash = new Set(trash.map(x => x && x.url).filter(Boolean));
+  const seen = new Set();
+  const now = Date.now();
+  for (const t of removedTabs) {
+    if (!t || !t.url) continue;
+    if (inTrash.has(t.url) || seen.has(t.url)) continue;
+    seen.add(t.url);
+    const rec = Object.assign({}, t);
+    delete rec.deletedAt;
+    rec.deletedAt = now;
+    trash.push(rec);
+  }
+  await chrome.storage.local.set({ [STORAGE_KEY]: keptTabs, 'blattam-trash': trash });
+}
+
 async function loadSpaces() {
   const data = await chrome.storage.sync.get(SPACES_KEY);
   return data[SPACES_KEY] || [];
@@ -408,14 +431,15 @@ async function deleteSpace(spaceId) {
     target = { id: genId('sp'), name: defaultSpaceName(lang) };
     remaining = [target];
   }
-  // Вкладки удалённого пространства УДАЛЯЮТСЯ (каскодно); его группы тоже удаляются
+  // Вкладки удалённого пространства уходят в корзину (каскодно); его группы тоже удаляются
   const groups = await loadGroups();
   const keptGroups = groups.filter(g => g.spaceId !== spaceId);
   const tabs = await loadTabs();
+  const removedTabs = tabs.filter(t => t.spaceId === spaceId);
   const keptTabs = tabs.filter(t => t.spaceId !== spaceId);
 
   await saveSpaces(remaining);
-  await saveTabs(keptTabs);
+  if (removedTabs.length > 0) await removeTabsToTrash(removedTabs, keptTabs);
   await saveGroups(keptGroups);
 
   // blattam-last-space на удалённом пространстве — переключить на цель
@@ -664,15 +688,16 @@ async function createGroup(spaceId, name) {
   return g;
 }
 
-// Удалить группу: её вкладки УДАЛЯЮТСЯ (каскодно)
+// Удалить группу: её вкладки уходят в корзину (каскодно)
 async function deleteGroup(groupId) {
   const groups = await loadGroups();
   if (!groups.some(g => g.id === groupId)) return;
   await saveGroups(groups.filter(g => g.id !== groupId));
 
   const tabs = await loadTabs();
+  const removed = tabs.filter(t => t.groupId === groupId);
   const kept = tabs.filter(t => t.groupId !== groupId);
-  if (kept.length !== tabs.length) await saveTabs(kept);
+  if (removed.length > 0) await removeTabsToTrash(removed, kept);
 }
 
 // === Вкладки ===
